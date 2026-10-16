@@ -1,3 +1,4 @@
+import type { BunFile } from 'bun'
 import type { Release } from '../../lib/release'
 import type { ArrServerConnector } from '../../lib/servers/arr/base'
 import { setSpanAttribute, setSpanAttributes } from '../../lib/span-attributes'
@@ -35,8 +36,8 @@ export function parseRangeHeader(value: string | undefined | null): { start?: nu
 // reading from disk instead of buffering the whole file into RAM. Pumping `.stream()`
 // ourselves does NOT backpressure and lets one stalled peer OOM the process.
 export type StreamFileResult
-  = | { type: 'full', body: Blob, size: number, filename: string }
-    | { type: 'partial', body: Blob, size: number, totalSize: number, start: number, end: number, filename: string }
+  = | { type: 'full', body: BunFile, size: number, filename: string }
+    | { type: 'partial', body: BunFile, size: number, totalSize: number, start: number, end: number, filename: string }
     | { type: 'unsatisfiable', totalSize: number }
 
 /**

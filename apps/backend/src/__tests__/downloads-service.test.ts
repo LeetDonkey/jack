@@ -9,6 +9,7 @@ import { DownloadOperationCoordinator } from '../modules/downloads/download-oper
 import { DownloadsRepository } from '../modules/downloads/downloads.repository'
 import { DownloadsService } from '../modules/downloads/downloads.service'
 import { ImportWatcher } from '../modules/downloads/import-watcher'
+import { TransferMonitor } from '../modules/transfers/transfer-monitor'
 
 const release: Release = {
   id: 'remote:movie:1',
@@ -515,6 +516,62 @@ describe('DownloadsService download progress persistence', () => {
 
     expect(calls).toBe(3)
     expect(repository.list()[0]?.status).toBe('failed')
+    handle.close()
+  })
+
+  test('tracks the transfer live and paces every chunk through the download limiter', async () => {
+    const handle = await openDatabase({ appConfigPath: join(tempDir, 'config.jsonc') })
+    const repository = new DownloadsRepository(handle.db)
+    const monitor = new TransferMonitor({ setInterval: () => 0 as any, clearInterval: () => {} })
+    const taken: number[] = []
+    let seenDuringTransfer: unknown[] = []
+    const peer = fakePeer({
+      downloadFile: async (_itemId: string, _destPath: string, options: any) => {
+        await options.onProgress({ type: 'headers', expectedBytes: 10, expectedBytesSource: 'content_length', expectedBytesMismatch: false })
+        await options.onChunk(4)
+        await options.onChunk(6)
+        seenDuringTransfer = monitor.list()
+        await options.onProgress({ type: 'completed', downloadedBytes: 10, expectedBytes: 10 })
+      },
+    })
+    const transfers = { monitor, downloadLimiter: { take: async (bytes: number) => void taken.push(bytes) } as any }
+    const service = new DownloadsService(downloadsConfig(), { peers: [peer as any] }, repository, undefined, transfers)
+
+    await service.startQbDownload({ peerId: 'peer-1', itemId: 'movie:1', qbCategory: 'jack-x', qbSourceServer: 'My Radarr', sourceServerId: 'radarr-1' })
+    await waitForStatus(repository, 'import_queued')
+
+    expect(taken).toEqual([4, 6])
+    expect(seenDuringTransfer).toMatchObject([{ direction: 'download', peer: 'Friend Jack', filename: release.filename, totalBytes: 10, transferredBytes: 10 }])
+    expect(monitor.list()).toEqual([])
+    handle.close()
+  })
+
+  test('raising maxConcurrentDownloads at runtime starts queued downloads', async () => {
+    const handle = await openDatabase({ appConfigPath: join(tempDir, 'config.jsonc') })
+    const repository = new DownloadsRepository(handle.db)
+    const gate = Promise.withResolvers<void>()
+    let running = 0
+    const peer = {
+      ...fakePeer(),
+      getRelease: async (itemId: string) => ({ ...release, filename: `${itemId}.mkv` }),
+      downloadFile: async (_itemId: string, _destPath: string, options: any) => {
+        running++
+        await gate.promise
+        await options.onProgress({ type: 'completed', downloadedBytes: 10, expectedBytes: 10 })
+      },
+    }
+    const service = new DownloadsService(downloadsConfig({ maxConcurrentDownloads: 1 }), { peers: [peer as any] }, repository)
+
+    for (const itemId of ['a', 'b', 'c'])
+      await service.startQbDownload({ peerId: 'peer-1', itemId, qbCategory: 'jack-x', qbSourceServer: 'My Radarr', sourceServerId: 'radarr-1' })
+    await Bun.sleep(20)
+    expect(running).toBe(1)
+
+    service.setMaxConcurrentDownloads(3)
+    await Bun.sleep(20)
+    expect(running).toBe(3)
+    expect(service.maxConcurrentDownloads).toBe(3)
+    gate.resolve()
     handle.close()
   })
 

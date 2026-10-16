@@ -2,6 +2,7 @@ import type { AppConfig } from '../../lib/config'
 import type { ConnectorManager } from '../../lib/servers'
 import type { ManualImportTarget } from '../../lib/servers/arr/base'
 import type { PeerDownloadProgressEvent } from '../../lib/servers/peer'
+import type { TransfersService } from '../transfers/transfers.service'
 import type { DownloadOperationCoordinator } from './download-operation-coordinator'
 import type { DownloadRecord, DownloadsRepository } from './downloads.repository'
 import { basename, join, resolve } from 'node:path'
@@ -36,6 +37,7 @@ type CreateDownloadOutcome
 
 export class DownloadsService {
   private readonly semaphore: Semaphore
+  private maxConcurrent: number
   // Dest paths with a download in flight — guards two concurrent live drops that
   // resolve to the same destination (no duplicate rows / writers).
   private readonly active = new Set<string>()
@@ -49,9 +51,25 @@ export class DownloadsService {
     private readonly connectorManager: { peers: ConnectorManager['peers'] },
     private readonly downloadsRepository?: DownloadsRepository,
     coordinator?: DownloadOperationCoordinator,
+    // Live speed tracking and the shared download rate limit. Optional so the
+    // service still works standalone (tests, no management API).
+    private readonly transfersService?: Pick<TransfersService, 'monitor' | 'downloadLimiter'>,
   ) {
     this.semaphore = new Semaphore(config.maxConcurrentDownloads)
+    this.maxConcurrent = config.maxConcurrentDownloads
     this.coordinator = coordinator ?? (downloadsRepository ? coordinatorFor(downloadsRepository) : undefined)
+  }
+
+  get maxConcurrentDownloads(): number {
+    return this.maxConcurrent
+  }
+
+  /** Change the concurrency limit without a restart. Running transfers are never interrupted. */
+  setMaxConcurrentDownloads(max: number): void {
+    if (max === this.maxConcurrent)
+      return
+    this.semaphore.setPermits(max)
+    this.maxConcurrent = max
   }
 
   private get peers() {
@@ -396,13 +414,30 @@ export class DownloadsService {
           signal.throwIfAborted()
           repo?.incrementAttempts(record.id)
           const bytesBefore = await partBytes()
+          const transfer = this.transfersService?.monitor.start({
+            direction: 'download',
+            peer: peer.name ?? peer.url,
+            filename: record.filename,
+            totalBytes: record.releaseSize ?? null,
+            offsetBytes: bytesBefore,
+          })
           try {
             await peer.downloadFile(record.itemId, record.destPath, {
               torrentFilename: record.torrentFilename,
               partPath: record.partPath,
               releaseSize: record.releaseSize,
               idleTimeoutMs: this.config.idleTimeoutMs,
-              onProgress,
+              onProgress: async (event) => {
+                if (event.type === 'headers')
+                  transfer?.setTotalBytes(event.expectedBytes)
+                else if (event.type === 'restart')
+                  transfer?.add(-event.discardedBytes)
+                await onProgress(event)
+              },
+              onChunk: async (bytes) => {
+                transfer?.add(bytes)
+                await this.transfersService?.downloadLimiter.take(bytes, signal)
+              },
               signal,
             })
             return
@@ -412,6 +447,9 @@ export class DownloadsService {
               throw err
             const message = err instanceof Error ? err.message : String(err)
             logger.warn({ torrentFilename: record.torrentFilename, error: message }, 'Peer download interrupted after progress; resuming')
+          }
+          finally {
+            transfer?.end()
           }
         }
       }, {

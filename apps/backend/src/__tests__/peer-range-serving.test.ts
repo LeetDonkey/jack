@@ -1,10 +1,14 @@
+import type { AddressInfo } from 'node:net'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
+import { createFileStream } from '../modules/peer/file-stream'
 import { parseRangeHeader, PeerController } from '../modules/peer/peer.controller'
 import { getPeerRouter } from '../modules/peer/peer.router'
+import { TransferMonitor } from '../modules/transfers/transfer-monitor'
 
 describe('parseRangeHeader', () => {
   test('returns null for absent or malformed headers', () => {
@@ -129,23 +133,97 @@ describe('GET /peer/items/:id/file range responses', () => {
     expect(res.status).toBe(404)
   })
 
-  test('disables the server idle timeout for full and partial file responses', async () => {
-    const calls: Array<[Request, number]> = []
-    const server = { timeout: (request: Request, seconds: number) => calls.push([request, seconds]) }
+  test('serves the full file body byte for byte', async () => {
+    const res = await appForFile().request('/peer/items/remote1:movie:1/file')
+    expect([...new Uint8Array(await res.arrayBuffer())]).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+  })
+})
 
-    await appForFile().request('/peer/items/remote1:movie:1/file', {}, server)
-    await appForFile().request('/peer/items/remote1:movie:1/file', { headers: { Range: 'bytes=2-4' } }, server)
+describe('GET /peer/items/:id/file upload tracking and limits', () => {
+  function appWithTransfers(options: { canStart?: boolean } = {}) {
+    const monitor = new TransferMonitor({ setInterval: () => 0 as any, clearInterval: () => {} })
+    const taken: number[] = []
+    const transfers = {
+      monitor,
+      uploadLimiter: { take: async (bytes: number) => {
+        taken.push(bytes)
+      } } as any,
+      canStartUpload: () => options.canStart ?? true,
+    }
+    const app = new Hono<{ Variables: { apiKeyName?: string } }>()
+    app.use('*', async (c, next) => {
+      c.set('apiKeyName', 'Nicklas')
+      await next()
+    })
+    app.route('/peer', getPeerRouter(controllerForFile(), transfers))
+    return { app, monitor, taken }
+  }
 
-    expect(calls.map(([, seconds]) => seconds)).toEqual([0, 0])
+  test('answers 503 with Retry-After when every upload slot is taken', async () => {
+    const { app } = appWithTransfers({ canStart: false })
+    const res = await app.request('/peer/items/remote1:movie:1/file')
+    expect(res.status).toBe(503)
+    expect(res.headers.get('Retry-After')).toBe('60')
   })
 
-  test('keeps the idle timeout for responses without a file body', async () => {
-    const calls: number[] = []
-    const server = { timeout: (_request: Request, seconds: number) => calls.push(seconds) }
+  test('registers the upload under the peer key name and ends it when the body is consumed', async () => {
+    const { app, monitor, taken } = appWithTransfers()
+    const res = await app.request('/peer/items/remote1:movie:1/file', { headers: { Range: 'bytes=4-' } })
 
-    await appForFile().request('/peer/items/unknown:movie:1/file', {}, server)
-    await appForFile().request('/peer/items/remote1:movie:1/file', { headers: { Range: 'bytes=50-60' } }, server)
+    expect(monitor.list()).toMatchObject([{ direction: 'upload', peer: 'Nicklas', filename: 'Movie.mkv', totalBytes: 10, transferredBytes: 4 }])
+    await res.arrayBuffer()
+    expect(monitor.list()).toEqual([])
+    expect(taken.reduce((sum, n) => sum + n, 0)).toBe(6)
+  })
+})
 
-    expect(calls).toEqual([])
+describe('createFileStream', () => {
+  test('reads a large file in chunks and calls onEnd once on completion', async () => {
+    const big = new Uint8Array(600 * 1024).map((_, i) => i % 251)
+    await Bun.write(filePath, big)
+    const chunks: number[] = []
+    let ends = 0
+    const stream = createFileStream(Bun.file(filePath), { onChunk: n => void chunks.push(n), onEnd: () => ends++ })
+
+    const received = new Uint8Array(await new Response(stream).arrayBuffer())
+    expect(received).toEqual(big)
+    expect(chunks).toEqual([256 * 1024, 256 * 1024, 88 * 1024])
+    expect(ends).toBe(1)
+  })
+
+  test('calls onEnd when the consumer cancels', async () => {
+    let ends = 0
+    const stream = createFileStream(Bun.file(filePath), { onEnd: () => ends++ })
+    await stream.cancel()
+    expect(ends).toBe(1)
+  })
+})
+
+describe('file route through the node:http server', () => {
+  test('streams a ranged file and ends the upload when the response completes', async () => {
+    const big = new Uint8Array(700 * 1024).map((_, i) => i % 253)
+    await Bun.write(filePath, big)
+    const monitor = new TransferMonitor({ setInterval: () => 0 as any, clearInterval: () => {} })
+    const app = new Hono()
+    app.route('/peer', getPeerRouter(controllerForFile(), {
+      monitor,
+      uploadLimiter: { take: async () => {} } as any,
+      canStartUpload: () => true,
+    }))
+    const server = serve({ fetch: app.fetch, port: 0 })
+    await new Promise<void>(resolve => server.once('listening', () => resolve()))
+    const { port } = server.address() as AddressInfo
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/peer/items/remote1:movie:1/file`, { headers: { Range: 'bytes=100-' } })
+      expect(res.status).toBe(206)
+      expect(res.headers.get('Content-Range')).toBe(`bytes 100-${big.length - 1}/${big.length}`)
+      expect(new Uint8Array(await res.arrayBuffer())).toEqual(big.slice(100))
+      await Bun.sleep(10)
+      expect(monitor.list()).toEqual([])
+    }
+    finally {
+      server.close()
+    }
   })
 })

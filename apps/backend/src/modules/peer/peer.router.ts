@@ -1,8 +1,10 @@
-import type { Context } from 'hono'
+import type { AuthVariables } from '../../middleware/require-auth'
+import type { TransfersService } from '../transfers/transfers.service'
 import type { PeerController } from './peer.controller'
 import { Hono } from 'hono'
 import { describeRoute, resolver, validator as zValidator } from 'hono-openapi'
 import z from 'zod'
+import { createFileStream } from './file-stream'
 
 // Strip characters that could break out of the quoted filename or inject extra
 // response headers (CR/LF/quote). The name comes from a trusted *arr basename, so
@@ -12,19 +14,14 @@ function safeFilename(name: string): string {
   return name.replace(UNSAFE_FILENAME_CHARS, '')
 }
 
-// Bun.serve drops a connection after 10s without traffic. A reverse proxy in
-// front of jack buffers the file (nginx: up to 1 GiB by default) and stops
-// reading while the downstream client drains that buffer, which Bun counts as
-// idle, so transfers were cut roughly every GiB. Disable the idle timeout for
-// file responses only. `c.env` is the Bun server under Bun.serve; it's absent
-// under app.request() in tests.
-function disableIdleTimeout(c: Context) {
-  const server = c.env as { timeout?: (request: Request, seconds: number) => void } | undefined
-  server?.timeout?.(c.req.raw, 0)
-}
+// Seconds a peer is told to wait when every upload slot is taken.
+const UPLOAD_BUSY_RETRY_AFTER_S = 60
 
-export function getPeerRouter(controller: PeerController) {
-  const app = new Hono()
+export function getPeerRouter(
+  controller: PeerController,
+  transfers?: Pick<TransfersService, 'monitor' | 'uploadLimiter' | 'canStartUpload'>,
+) {
+  const app = new Hono<{ Variables: AuthVariables }>()
 
   app.get(
     '/search',
@@ -81,8 +78,15 @@ export function getPeerRouter(controller: PeerController) {
       206: { description: 'Partial content for a satisfiable Range request', content: { 'application/octet-stream': {} } },
       404: { description: 'No item with this id, or its file is missing on disk' },
       416: { description: 'Unsatisfiable Range request' },
+      503: { description: 'Every upload slot is in use; retry after the Retry-After delay' },
     },
   }), async (c) => {
+    if (transfers && !transfers.canStartUpload()) {
+      return c.json({ error: 'Too many concurrent uploads' }, 503, {
+        'Retry-After': String(UPLOAD_BUSY_RETRY_AFTER_S),
+      })
+    }
+
     const { itemId } = c.req.param()
     const result = await controller.streamFile(itemId, c.req.header('Range'))
 
@@ -100,10 +104,27 @@ export function getPeerRouter(controller: PeerController) {
       })
     }
 
-    disableIdleTimeout(c)
+    // Track the upload and pace it through the shared upload limit. The transfer
+    // ends when the stream completes, errors, or the peer disconnects.
+    const signal = c.req.raw.signal
+    const upload = transfers?.monitor.start({
+      direction: 'upload',
+      peer: c.get('apiKeyName') ?? 'unknown peer',
+      filename: result.filename,
+      totalBytes: result.type === 'partial' ? result.totalSize : result.size,
+      offsetBytes: result.type === 'partial' ? result.start : 0,
+    })
+    const body = createFileStream(result.body, {
+      onChunk: async (bytes) => {
+        await transfers?.uploadLimiter.take(bytes, signal)
+        upload?.add(bytes)
+      },
+      onEnd: () => upload?.end(),
+      signal,
+    })
 
     if (result.type === 'partial') {
-      return new Response(result.body, {
+      return new Response(body, {
         status: 206,
         headers: {
           'Content-Type': 'application/octet-stream',
@@ -115,7 +136,7 @@ export function getPeerRouter(controller: PeerController) {
       })
     }
 
-    return new Response(result.body, {
+    return new Response(body, {
       headers: {
         'Content-Type': 'application/octet-stream',
         'Content-Length': String(result.size),

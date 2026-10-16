@@ -4,6 +4,7 @@ import type { ConfigService } from './modules/config/config.service'
 import type { DownloadsRepository } from './modules/downloads/downloads.repository'
 import type { DownloadsService } from './modules/downloads/downloads.service'
 import type { ImportWatcher } from './modules/downloads/import-watcher'
+import type { TransfersService } from './modules/transfers/transfers.service'
 import { Hono } from 'hono'
 import { describeRoute, openAPIRouteHandler, resolver } from 'hono-openapi'
 import { secureHeaders } from 'hono/secure-headers'
@@ -27,6 +28,7 @@ import { QuickLinksController } from './modules/quick-links/quick-links.controll
 import { getQuickLinksRouter } from './modules/quick-links/quick-links.router'
 import { StatusController } from './modules/status/status.controller'
 import { getStatusRouter } from './modules/status/status.router'
+import { getTransfersRouter } from './modules/transfers/transfers.router'
 
 export function getManagementApp(params: {
   environment: string
@@ -37,6 +39,7 @@ export function getManagementApp(params: {
   downloadsRepository?: DownloadsRepository
   downloadsService?: DownloadsService
   importWatcher?: ImportWatcher
+  transfersService?: TransfersService
   apiKeysRepository?: ApiKeysRepository
   tmdbApiKey?: string
 }) {
@@ -79,6 +82,9 @@ export function getManagementApp(params: {
   // Logs read from the shared LogHub singleton the logger writes to (same module
   // instance), so this exposes the running process's own logs.
   app.route('/logs', getLogsRouter(new LogsController(logHub)))
+
+  if (params.transfersService)
+    app.route('/transfers', getTransfersRouter(params.transfersService))
 
   const tmdbClient = params.tmdbApiKey ? new TmdbClient(params.tmdbApiKey) : undefined
   const catalogController = new CatalogController(params.connectors, tmdbClient, params.downloadsService)

@@ -1,9 +1,10 @@
 import process from 'node:process'
+import { serve } from '@hono/node-server'
 import { getApp } from './app'
 import { openDatabase } from './database/connection'
 import { shutdownTelemetry } from './instrumentation'
 import { registerManagedForDestination } from './lib/autoregister'
-import { getAppConfig } from './lib/config'
+import { DownloadsConfig, getAppConfig } from './lib/config'
 import { getAppEnvs } from './lib/envs'
 import { FetchError } from './lib/errors/FetchError'
 import { ConnectorManager } from './lib/servers'
@@ -18,6 +19,7 @@ import { ImportWatcher } from './modules/downloads/import-watcher'
 import { ManagedKeysRepository } from './modules/managed-keys/managed-keys.repository'
 import { ManagedApiKeys } from './modules/managed-keys/managed-keys.service'
 import { qbCategoryForServer } from './modules/qbittorrent/qbittorrent.mapper'
+import { TransfersService } from './modules/transfers/transfers.service'
 
 function logRegistrationFailure(what: string, destName: string | undefined, err: unknown) {
   if (err instanceof FetchError) {
@@ -48,18 +50,42 @@ const configService = envs.MANAGEMENT_KEY
   ? new ConfigService({ path: envs.APP_CONFIG_PATH, raw: rawConfig, connectorManager, downloadsRepository })
   : undefined
 
+// Live-editable settings are read from the file when the management API can
+// rewrite it, so edits apply without a restart; otherwise from the boot config.
+function currentMaxConcurrentDownloads(): number | null {
+  const raw = configService?.getRawDownloads()
+  const parsed = raw ? DownloadsConfig.safeParse(raw) : undefined
+  return parsed?.success ? parsed.data.maxConcurrentDownloads : config.downloads?.maxConcurrentDownloads ?? null
+}
+
+// Shared rate limits + live transfer registry.
+const transfersService = new TransfersService(
+  () => configService?.getBandwidth() ?? config.bandwidth,
+  currentMaxConcurrentDownloads,
+)
+transfersService.start()
+
 const downloadsService = config.downloads
-  ? new DownloadsService(config.downloads, connectorManager, downloadsRepository)
+  ? new DownloadsService(config.downloads, connectorManager, downloadsRepository, undefined, transfersService)
   : undefined
 
-const app = getApp(envs, config, connectorManager, { downloadsRepository, downloadsService, apiKeysRepository, managedKeysRepository })
-const server = Bun.serve({
-  fetch: app.fetch,
+// Apply live-editable settings after every config write.
+configService?.subscribe(() => {
+  transfersService.refresh()
+  const max = currentMaxConcurrentDownloads()
+  if (downloadsService && max != null)
+    downloadsService.setMaxConcurrentDownloads(max)
 })
+
+const app = getApp(envs, config, connectorManager, { downloadsRepository, downloadsService, apiKeysRepository, managedKeysRepository, transfersService })
+// The public server runs on node:http rather than Bun.serve. Bun.serve drains a
+// streamed response body without backpressure, so pacing or metering an upload
+// means buffering the whole file in memory; node:http writes wait for the socket.
+const server = serve({ fetch: app.fetch, port: envs.PORT })
 
 logger.info({
   version: PROTOCOL_VERSION,
-  port: server.port,
+  port: envs.PORT,
   configPath: envs.APP_CONFIG_PATH,
   databasePath: database.path,
   sources: connectorManager.sources.length,
@@ -88,7 +114,7 @@ function startManagementServer() {
   if (!envs.MANAGEMENT_KEY)
     return undefined
 
-  if (envs.MANAGEMENT_PORT === server.port) {
+  if (envs.MANAGEMENT_PORT === envs.PORT) {
     logger.error({ port: envs.MANAGEMENT_PORT }, 'MANAGEMENT_PORT collides with the public port; not starting the management API')
     return undefined
   }
@@ -101,6 +127,7 @@ function startManagementServer() {
     downloadsRepository,
     downloadsService,
     importWatcher,
+    transfersService,
     apiKeysRepository,
     tmdbApiKey: config.jack.tmdbApiKey,
   })
@@ -166,7 +193,8 @@ process.on('SIGINT', async () => {
   logger.info('SIGINT received, exiting')
   importWatcher?.stop()
   database.close()
-  server.stop()
+  server.close()
+  transfersService.stop()
   managementServer?.stop()
   await shutdownTelemetry()
   process.exit(0)
@@ -176,7 +204,8 @@ process.on('SIGTERM', async () => {
   logger.info('SIGTERM received, exiting')
   importWatcher?.stop()
   database.close()
-  server.stop()
+  server.close()
+  transfersService.stop()
   managementServer?.stop()
   await shutdownTelemetry()
   process.exit(0)

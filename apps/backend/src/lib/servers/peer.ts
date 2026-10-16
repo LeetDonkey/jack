@@ -33,6 +33,12 @@ export interface PeerDownloadOptions {
   partPath?: string
   releaseSize?: number
   onProgress?: (event: PeerDownloadProgressEvent) => void | Promise<void>
+  /**
+   * Called with the size of every chunk after it is written to the .part file.
+   * The read loop awaits it, so a rate limiter here paces the transfer (TCP
+   * backpressure slows the peer). It runs outside the idle timer.
+   */
+  onChunk?: (bytes: number) => void | Promise<void>
 }
 
 function parseContentLength(headers: Headers): number | null {
@@ -440,6 +446,7 @@ export class PeerConnector extends ServerConnector {
             throw new Error(`File too large: downloaded ${downloadedBytes} bytes exceeds ${MAX_DOWNLOAD_BYTES} byte limit`)
 
           await handle.write(value)
+          await options.onChunk?.(value.byteLength)
 
           const now = Date.now()
           const shouldLogProgress = downloadedBytes - lastLoggedBytes >= DOWNLOAD_PROGRESS_BYTES || now - lastLoggedAt >= DOWNLOAD_PROGRESS_INTERVAL_MS
