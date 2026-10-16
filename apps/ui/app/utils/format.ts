@@ -65,3 +65,25 @@ export function formatDate(iso: string | null | undefined): string {
     return iso
   return date.toLocaleString()
 }
+
+// Transfer speed from bytes/second, in the same 1024-based units as formatBytes.
+export function formatRate(bytesPerSecond: number | null | undefined): string {
+  if (bytesPerSecond == null || Number.isNaN(bytesPerSecond))
+    return '—'
+  return `${formatBytes(bytesPerSecond)}/s`
+}
+
+// Time left on a transfer, coarse enough to stay readable while it ticks:
+// "45s", "12m 30s", "2h 05m". Unknown (no size or no speed yet) reads "—".
+export function formatEta(seconds: number | null | undefined): string {
+  if (seconds == null || Number.isNaN(seconds) || seconds < 0)
+    return '—'
+  const s = Math.round(seconds)
+  if (s < 60)
+    return `${s}s`
+  const minutes = Math.floor(s / 60)
+  if (minutes < 60)
+    return `${minutes}m ${String(s % 60).padStart(2, '0')}s`
+  const hours = Math.floor(minutes / 60)
+  return `${hours}h ${String(minutes % 60).padStart(2, '0')}m`
+}

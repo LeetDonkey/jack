@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { formatDurationMs } from './format'
+import { formatDurationMs, formatEta, formatRate } from './format'
 
 // Settings shows raw milliseconds (that's what the config file holds) next to this
 // reading of them, so the numbers stay editable without being unreadable.
@@ -36,5 +36,27 @@ describe('formatDurationMs', () => {
     expect(formatDurationMs(null)).toBe('')
     expect(formatDurationMs(undefined)).toBe('')
     expect(formatDurationMs(Number.NaN)).toBe('')
+  })
+})
+
+describe('formatRate', () => {
+  test('appends /s to the byte formatting', () => {
+    expect(formatRate(0)).toBe('0 B/s')
+    expect(formatRate(1536)).toBe('1.5 KB/s')
+    expect(formatRate(20 * 1024 * 1024)).toBe('20.0 MB/s')
+    expect(formatRate(null)).toBe('—')
+  })
+})
+
+describe('formatEta', () => {
+  test('reads seconds, minutes and hours', () => {
+    expect(formatEta(45)).toBe('45s')
+    expect(formatEta(750)).toBe('12m 30s')
+    expect(formatEta(7500)).toBe('2h 05m')
+  })
+
+  test('shows a dash when the time left is unknown', () => {
+    expect(formatEta(null)).toBe('—')
+    expect(formatEta(-1)).toBe('—')
   })
 })

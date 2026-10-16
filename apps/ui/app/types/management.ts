@@ -227,3 +227,52 @@ export interface LogRecord {
   trace_id?: string
   [key: string]: unknown
 }
+
+// ── Transfers & bandwidth ───────────────────────────────────────────────────
+
+export type TransferDirection = 'download' | 'upload'
+
+export interface TransferInfo {
+  id: string
+  direction: TransferDirection
+  peer: string
+  filename: string
+  totalBytes: number | null
+  transferredBytes: number
+  bytesPerSecond: number
+  etaSeconds: number | null
+  startedAt: string
+}
+
+export interface TransferDirectionSummary {
+  active: number
+  maxConcurrent: number | null
+  bytesPerSecond: number
+  limitBytesPerSecond: number | null
+}
+
+export interface TransfersSnapshot {
+  download: TransferDirectionSummary
+  upload: TransferDirectionSummary
+  schedulePeriod: number | null
+  transfers: TransferInfo[]
+}
+
+export type Weekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'
+
+export interface BandwidthPeriod {
+  days: Weekday[]
+  start: string
+  end: string
+  downloadLimitKiBps?: number | null
+  uploadLimitKiBps?: number | null
+}
+
+export interface BandwidthConfig {
+  downloadLimitKiBps?: number | null
+  uploadLimitKiBps?: number | null
+  maxConcurrentUploads?: number | null
+  schedule: BandwidthPeriod[]
+}
+
+export type BandwidthConfigPatch = Partial<Omit<BandwidthConfig, 'schedule'>> & { schedule?: BandwidthPeriod[] | null }

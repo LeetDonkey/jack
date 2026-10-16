@@ -191,7 +191,7 @@ const importOpen = ref(false)
           :disabled="saving"
           name="maxConcurrentDownloads"
           label="Simultaneous transfers"
-          description="How many peer downloads run at once."
+          description="How many peer downloads run at once. Applies right away; running transfers are never interrupted."
           :default-value="DEFAULTS.maxConcurrentDownloads!"
           :min="1"
         />
@@ -340,7 +340,7 @@ const importOpen = ref(false)
         title="Saved."
         :description="justAdded
           ? 'Restart the server to start downloading from peers with these settings.'
-          : 'Unlinking applies right away. The other settings are read at startup, so restart the server for them to take effect.'"
+          : 'Unlinking and simultaneous transfers apply right away. The other settings are read at startup, so restart the server for them to take effect.'"
       />
 
       <div class="flex flex-wrap items-center justify-end gap-2 pt-1">

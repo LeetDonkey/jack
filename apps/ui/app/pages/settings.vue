@@ -291,6 +291,10 @@ async function confirmRevoke() {
 
         <USeparator />
 
+        <BandwidthSection />
+
+        <USeparator />
+
         <PeersSection ref="peersSection" />
 
         <USeparator />
