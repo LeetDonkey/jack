@@ -128,4 +128,24 @@ describe('GET /peer/items/:id/file range responses', () => {
     const res = await appForFile().request('/peer/items/unknown:movie:1/file', { headers: { Range: 'bytes=0-1' } })
     expect(res.status).toBe(404)
   })
+
+  test('disables the server idle timeout for full and partial file responses', async () => {
+    const calls: Array<[Request, number]> = []
+    const server = { timeout: (request: Request, seconds: number) => calls.push([request, seconds]) }
+
+    await appForFile().request('/peer/items/remote1:movie:1/file', {}, server)
+    await appForFile().request('/peer/items/remote1:movie:1/file', { headers: { Range: 'bytes=2-4' } }, server)
+
+    expect(calls.map(([, seconds]) => seconds)).toEqual([0, 0])
+  })
+
+  test('keeps the idle timeout for responses without a file body', async () => {
+    const calls: number[] = []
+    const server = { timeout: (_request: Request, seconds: number) => calls.push(seconds) }
+
+    await appForFile().request('/peer/items/unknown:movie:1/file', {}, server)
+    await appForFile().request('/peer/items/remote1:movie:1/file', { headers: { Range: 'bytes=50-60' } }, server)
+
+    expect(calls).toEqual([])
+  })
 })

@@ -1,3 +1,4 @@
+import type { Context } from 'hono'
 import type { PeerController } from './peer.controller'
 import { Hono } from 'hono'
 import { describeRoute, resolver, validator as zValidator } from 'hono-openapi'
@@ -9,6 +10,17 @@ import z from 'zod'
 const UNSAFE_FILENAME_CHARS = /["\r\n]/g
 function safeFilename(name: string): string {
   return name.replace(UNSAFE_FILENAME_CHARS, '')
+}
+
+// Bun.serve drops a connection after 10s without traffic. A reverse proxy in
+// front of jack buffers the file (nginx: up to 1 GiB by default) and stops
+// reading while the downstream client drains that buffer, which Bun counts as
+// idle, so transfers were cut roughly every GiB. Disable the idle timeout for
+// file responses only. `c.env` is the Bun server under Bun.serve; it's absent
+// under app.request() in tests.
+function disableIdleTimeout(c: Context) {
+  const server = c.env as { timeout?: (request: Request, seconds: number) => void } | undefined
+  server?.timeout?.(c.req.raw, 0)
 }
 
 export function getPeerRouter(controller: PeerController) {
@@ -88,6 +100,8 @@ export function getPeerRouter(controller: PeerController) {
       })
     }
 
+    disableIdleTimeout(c)
+
     if (result.type === 'partial') {
       return new Response(result.body, {
         status: 206,
@@ -106,7 +120,7 @@ export function getPeerRouter(controller: PeerController) {
         'Content-Type': 'application/octet-stream',
         'Content-Length': String(result.size),
         'Accept-Ranges': 'bytes',
-        'Content-Disposition': `attachment; filename="${result.filename}"`,
+        'Content-Disposition': `attachment; filename="${safeFilename(result.filename)}"`,
       },
     })
   })
