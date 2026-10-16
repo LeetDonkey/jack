@@ -2,6 +2,23 @@ import { FetchError } from '../../lib/errors/FetchError'
 import { IdleTimeoutError } from '../../lib/errors/IdleTimeoutError'
 import { IncompleteDownloadError } from '../../lib/errors/IncompleteDownloadError'
 
+// Socket-level failures. Bun rejects a body read whose connection drops
+// mid-stream with a plain Error carrying `code: 'ECONNRESET'` ("The socket
+// connection was closed unexpectedly"), not a TypeError. Bun's own fetch codes
+// (ConnectionClosed, ConnectionRefused) are listed alongside the errno names.
+const TRANSIENT_NETWORK_CODES = new Set([
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ECONNABORTED',
+  'EPIPE',
+  'ETIMEDOUT',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'EAI_AGAIN',
+  'ConnectionClosed',
+  'ConnectionRefused',
+])
+
 /**
  * Transient = worth retrying: network failures, timeouts, HTTP 5xx, 429, and a
  * truncated stream (the .part is preserved, so a retry resumes). Non-429 4xx and
@@ -26,6 +43,9 @@ export function isTransientDownloadError(error: unknown): boolean {
       return true
     // A failed fetch (DNS, connection refused, reset) rejects with a TypeError.
     if (error instanceof TypeError)
+      return true
+    const code = (error as Error & { code?: unknown }).code
+    if (typeof code === 'string' && TRANSIENT_NETWORK_CODES.has(code))
       return true
   }
   return false

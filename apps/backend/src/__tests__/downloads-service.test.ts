@@ -472,6 +472,52 @@ describe('DownloadsService download progress persistence', () => {
     handle.close()
   })
 
+  test('interruptions that grow the partial file do not use up retry attempts', async () => {
+    const handle = await openDatabase({ appConfigPath: join(tempDir, 'config.jsonc') })
+    const repository = new DownloadsRepository(handle.db)
+    let calls = 0
+    const peer = fakePeer({
+      downloadFile: async (_itemId: string, _destPath: string, options: any) => {
+        calls++
+        // Five drops in a row, each after writing more bytes, like a proxy that
+        // cuts the stream every GiB. More drops than maxDownloadAttempts allows.
+        if (calls <= 5) {
+          await Bun.write(options.partPath, new Uint8Array(calls))
+          throw Object.assign(new Error('The socket connection was closed unexpectedly.'), { code: 'ECONNRESET' })
+        }
+        await options.onProgress({ type: 'completed', downloadedBytes: 10, expectedBytes: 10 })
+      },
+    })
+    const service = new DownloadsService(downloadsConfig({ maxDownloadAttempts: 2 }), { peers: [peer as any] }, repository)
+
+    await service.startQbDownload({ peerId: 'peer-1', itemId: 'movie:1', qbCategory: 'jack-x', qbSourceServer: 'My Radarr', sourceServerId: 'radarr-1' })
+    await waitForStatus(repository, 'import_queued')
+
+    expect(calls).toBe(6)
+    expect(repository.list()[0]?.status).toBe('import_queued')
+    handle.close()
+  })
+
+  test('interruptions without progress still exhaust retry attempts', async () => {
+    const handle = await openDatabase({ appConfigPath: join(tempDir, 'config.jsonc') })
+    const repository = new DownloadsRepository(handle.db)
+    let calls = 0
+    const peer = fakePeer({
+      downloadFile: async () => {
+        calls++
+        throw Object.assign(new Error('The socket connection was closed unexpectedly.'), { code: 'ECONNRESET' })
+      },
+    })
+    const service = new DownloadsService(downloadsConfig({ maxDownloadAttempts: 3 }), { peers: [peer as any] }, repository)
+
+    await service.startQbDownload({ peerId: 'peer-1', itemId: 'movie:1', qbCategory: 'jack-x', qbSourceServer: 'My Radarr', sourceServerId: 'radarr-1' })
+    await waitForStatus(repository, 'failed')
+
+    expect(calls).toBe(3)
+    expect(repository.list()[0]?.status).toBe('failed')
+    handle.close()
+  })
+
   test('persists a resume reset from a restart event', async () => {
     const handle = await openDatabase({ appConfigPath: join(tempDir, 'config.jsonc') })
     const repository = new DownloadsRepository(handle.db)

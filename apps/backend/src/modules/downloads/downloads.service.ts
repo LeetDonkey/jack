@@ -381,18 +381,39 @@ export class DownloadsService {
       repo?.updateProgress(record.id, event.downloadedBytes)
     }
 
+    const partBytes = async () => {
+      const part = Bun.file(record.partPath)
+      return await part.exists() ? part.size : 0
+    }
+
     try {
       await retry(async () => {
-        signal.throwIfAborted()
-        repo?.incrementAttempts(record.id)
-        await peer.downloadFile(record.itemId, record.destPath, {
-          torrentFilename: record.torrentFilename,
-          partPath: record.partPath,
-          releaseSize: record.releaseSize,
-          idleTimeoutMs: this.config.idleTimeoutMs,
-          onProgress,
-          signal,
-        })
+        // A transient failure that still grew the .part resumes right away and
+        // doesn't use up a retry attempt. Otherwise a link that drops every GiB
+        // could never finish a file larger than maxDownloadAttempts GiB. Only
+        // attempts that make no progress count toward the limit.
+        while (true) {
+          signal.throwIfAborted()
+          repo?.incrementAttempts(record.id)
+          const bytesBefore = await partBytes()
+          try {
+            await peer.downloadFile(record.itemId, record.destPath, {
+              torrentFilename: record.torrentFilename,
+              partPath: record.partPath,
+              releaseSize: record.releaseSize,
+              idleTimeoutMs: this.config.idleTimeoutMs,
+              onProgress,
+              signal,
+            })
+            return
+          }
+          catch (err) {
+            if (signal.aborted || !isTransientDownloadError(err) || await partBytes() <= bytesBefore)
+              throw err
+            const message = err instanceof Error ? err.message : String(err)
+            logger.warn({ torrentFilename: record.torrentFilename, error: message }, 'Peer download interrupted after progress; resuming')
+          }
+        }
       }, {
         maxAttempts: this.config.maxDownloadAttempts,
         baseDelayMs: this.config.retryBaseDelayMs,
