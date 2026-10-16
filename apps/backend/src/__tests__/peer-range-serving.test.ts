@@ -3,8 +3,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
+import { startPublicServer } from '../lib/public-server'
 import { createFileStream } from '../modules/peer/file-stream'
 import { parseRangeHeader, PeerController } from '../modules/peer/peer.controller'
 import { getPeerRouter } from '../modules/peer/peer.router'
@@ -210,7 +210,7 @@ describe('file route through the node:http server', () => {
       uploadLimiter: { take: async () => {} } as any,
       canStartUpload: () => true,
     }))
-    const server = serve({ fetch: app.fetch, port: 0 })
+    const server = startPublicServer(app.fetch, 0)
     await new Promise<void>(resolve => server.once('listening', () => resolve()))
     const { port } = server.address() as AddressInfo
 

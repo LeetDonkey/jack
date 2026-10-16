@@ -1,5 +1,4 @@
 import process from 'node:process'
-import { serve } from '@hono/node-server'
 import { getApp } from './app'
 import { openDatabase } from './database/connection'
 import { shutdownTelemetry } from './instrumentation'
@@ -7,6 +6,7 @@ import { registerManagedForDestination } from './lib/autoregister'
 import { DownloadsConfig, getAppConfig } from './lib/config'
 import { getAppEnvs } from './lib/envs'
 import { FetchError } from './lib/errors/FetchError'
+import { startPublicServer } from './lib/public-server'
 import { ConnectorManager } from './lib/servers'
 import { PROTOCOL_VERSION } from './lib/version'
 import { logger } from './logger'
@@ -78,10 +78,8 @@ configService?.subscribe(() => {
 })
 
 const app = getApp(envs, config, connectorManager, { downloadsRepository, downloadsService, apiKeysRepository, managedKeysRepository, transfersService })
-// The public server runs on node:http rather than Bun.serve. Bun.serve drains a
-// streamed response body without backpressure, so pacing or metering an upload
-// means buffering the whole file in memory; node:http writes wait for the socket.
-const server = serve({ fetch: app.fetch, port: envs.PORT })
+// Public server on node:http (see startPublicServer for why).
+const server = startPublicServer(app.fetch, envs.PORT)
 
 logger.info({
   version: PROTOCOL_VERSION,
