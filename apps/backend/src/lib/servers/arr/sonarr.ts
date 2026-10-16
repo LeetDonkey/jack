@@ -5,6 +5,7 @@ import type { AddParams, ManualImportParams } from './base'
 import { z } from 'zod'
 import { BadRequestError } from '../../errors/BadRequestError'
 import { ReleaseCategory } from '../../release'
+import { Semaphore } from '../../semaphore'
 import { setSpanAttributes } from '../../span-attributes'
 import { withSpan } from '../../tracing'
 import { ArrServerConnector, basename, PermanentManualImportError, stripExtension } from './base'
@@ -12,6 +13,11 @@ import { ArrServerConnector, basename, PermanentManualImportError, stripExtensio
 type SeriesWithId = SeriesResource & { id: number }
 
 const CreatedId = z.object({ id: z.number().int() })
+
+// Sonarr has no bulk episode endpoint, so library-wide listings cost one
+// /api/v3/episode request per series. Unbounded, a large library fires them
+// all at once and Sonarr stalls past the request timeout.
+const EPISODE_FETCH_CONCURRENCY = 4
 
 interface SonarrManualImportCandidate {
   path?: string
@@ -108,6 +114,15 @@ export class SonarrServerConnector extends ArrServerConnector {
       .filter((r): r is Release => r != null)
   }
 
+  private async releasesForManySeries(series: SeriesWithId[]): Promise<Release[]> {
+    // Series whose statistics report no files can't yield releases; skip the
+    // episode request. Missing statistics fall through to a real lookup.
+    const withFiles = series.filter(s => s.statistics?.episodeFileCount !== 0)
+    const limit = new Semaphore(EPISODE_FETCH_CONCURRENCY)
+    const perSeries = await Promise.all(withFiles.map(s => limit.run(() => this.releasesForSeries(s))))
+    return perSeries.flat()
+  }
+
   protected override async doSearchItems(term: string): Promise<Release[]> {
     return withSpan('sonarr.search_items', {
       'source.name': this.name,
@@ -116,8 +131,7 @@ export class SonarrServerConnector extends ArrServerConnector {
       const needle = term.trim().toLowerCase()
       const series = await this.listSeries()
       const matching = series.filter(s => !needle || (s.title ?? '').toLowerCase().includes(needle))
-      const perSeries = await Promise.all(matching.map(s => this.releasesForSeries(s)))
-      const releases = perSeries.flat()
+      const releases = await this.releasesForManySeries(matching)
       setSpanAttributes(span, { 'series.count': series.length, 'series.matched_count': matching.length, 'release.count': releases.length })
       return releases
     })
@@ -134,9 +148,7 @@ export class SonarrServerConnector extends ArrServerConnector {
   }
 
   protected override async doListReleases(): Promise<Release[]> {
-    const series = await this.listSeries()
-    const perSeries = await Promise.all(series.map(s => this.releasesForSeries(s)))
-    return perSeries.flat()
+    return this.releasesForManySeries(await this.listSeries())
   }
 
   protected override async doSearchByTvdbId(tvdbId: string, season?: number, episode?: number): Promise<Release[]> {
