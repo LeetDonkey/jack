@@ -141,4 +141,13 @@ export class ConfigController {
   updateDownloads(input: unknown) {
     return this.mutate(s => s.updateDownloads(input))
   }
+
+  /** Bandwidth block with defaults applied, or null when unset / read-only. */
+  getBandwidth() {
+    return this.configService?.getBandwidth() ?? null
+  }
+
+  updateBandwidth(input: unknown) {
+    return this.mutate(s => s.updateBandwidth(input))
+  }
 }

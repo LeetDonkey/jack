@@ -915,3 +915,37 @@ describe('Management API downloads config', () => {
     expect(res.status).toBe(404)
   })
 })
+
+describe('Management API bandwidth config', () => {
+  const patch = (app: ReturnType<typeof mgmtApp>, body: unknown) => app.request('/config/bandwidth', {
+    method: 'PATCH',
+    headers: { ...KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+
+  test('GET /config/bandwidth returns null when no bandwidth block is configured', async () => {
+    const { app } = await makeMutableApp()
+    const res = await app.request('/config/bandwidth', { headers: KEY })
+    expect(await res.json()).toBeNull()
+  })
+
+  test('PATCH stores limits and a schedule, merges later patches and drops nulls', async () => {
+    const { app, path } = await makeMutableApp()
+    const schedule = [{ days: ['mon', 'fri'], start: '07:00', end: '23:00', downloadLimitKiBps: 20480 }]
+
+    expect((await patch(app, { uploadLimitKiBps: 5120, maxConcurrentUploads: 2, schedule })).status).toBe(200)
+    expect((await patch(app, { maxConcurrentUploads: null })).status).toBe(200)
+
+    const onDisk = jsonc.parse(await Bun.file(path).text()) as { bandwidth: Record<string, unknown> }
+    expect(onDisk.bandwidth).toEqual({ uploadLimitKiBps: 5120, schedule })
+
+    const get = await app.request('/config/bandwidth', { headers: KEY })
+    expect(await get.json()).toEqual({ uploadLimitKiBps: 5120, schedule })
+  })
+
+  test('PATCH rejects a malformed schedule period', async () => {
+    const { app } = await makeMutableApp()
+    const res = await patch(app, { schedule: [{ days: ['someday'], start: '7', end: '23:00' }] })
+    expect(res.status).toBe(400)
+  })
+})

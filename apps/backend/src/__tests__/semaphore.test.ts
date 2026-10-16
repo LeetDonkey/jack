@@ -70,4 +70,38 @@ describe('Semaphore', () => {
   test('rejects a non-positive permit count', () => {
     expect(() => new Semaphore(0)).toThrow()
   })
+
+  test('raising the limit admits queued waiters right away', async () => {
+    const sem = new Semaphore(1)
+    await sem.acquire()
+    let admitted = 0
+    const waiters = [sem.acquire(), sem.acquire()].map(p => p.then(() => admitted++))
+
+    sem.setPermits(3)
+    await Promise.all(waiters)
+    expect(admitted).toBe(2)
+  })
+
+  test('lowering the limit lets holders finish and delays new admissions', async () => {
+    const sem = new Semaphore(3)
+    await Promise.all([sem.acquire(), sem.acquire(), sem.acquire()])
+    sem.setPermits(1)
+
+    let admitted = false
+    const waiter = sem.acquire().then(() => {
+      admitted = true
+    })
+    sem.release()
+    sem.release()
+    await Bun.sleep(0)
+    expect(admitted).toBe(false) // two releases only paid back the lowered limit
+
+    sem.release()
+    await waiter
+    expect(admitted).toBe(true)
+  })
+
+  test('setPermits rejects a non-positive permit count', () => {
+    expect(() => new Semaphore(1).setPermits(0)).toThrow()
+  })
 })

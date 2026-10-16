@@ -4,7 +4,7 @@ import type { ConnectorManager } from '../../lib/servers'
 import type { DownloadsRepository } from '../downloads/downloads.repository'
 import { jsonc } from 'jsonc'
 import { atomicWriteFile } from '../../lib/atomic-write'
-import { DownloadsConfig, ExternalJackConfig, JackConfig, PeerConfig, RawDownloadsConfig, RawExternalJackConfig, RawJackConfig, RawPeerConfig, RawServerConfig, ServerConfig } from '../../lib/config'
+import { BandwidthConfig, DownloadsConfig, ExternalJackConfig, JackConfig, PeerConfig, RawBandwidthConfig, RawDownloadsConfig, RawExternalJackConfig, RawJackConfig, RawPeerConfig, RawServerConfig, ServerConfig } from '../../lib/config'
 import { BadRequestError } from '../../lib/errors/BadRequestError'
 import { ConflictError } from '../../lib/errors/ConflictError'
 import { NotFoundError } from '../../lib/errors/NotFoundError'
@@ -128,6 +128,12 @@ export class ConfigService {
     if (!downloads)
       return null
     return RawDownloadsConfig.parse(downloads)
+  }
+
+  /** Parsed bandwidth block (defaults applied), or undefined when unset. */
+  getBandwidth(): BandwidthConfig | undefined {
+    const bandwidth = this.raw.bandwidth
+    return bandwidth ? BandwidthConfig.parse(bandwidth) : undefined
   }
 
   private indexById(entries: RawEntry[], id: string): number {
@@ -360,6 +366,27 @@ export class ConfigService {
       // would bake every default into the file.
       DownloadsConfig.parse(merged)
       const next = { ...this.raw, downloads: merged } as RawConfig
+      await this.persist(next)
+      this.raw = next
+    })
+  }
+
+  // ── Bandwidth ──────────────────────────────────────────────────────────────
+  /**
+   * Patch the `bandwidth` block with the same merge rules as `updateDownloads`:
+   * absent leaves a key alone, `null` drops it, and `schedule` is replaced whole.
+   * Every key applies immediately; subscribers re-read via getBandwidth().
+   */
+  async updateBandwidth(input: unknown): Promise<void> {
+    const patch = RawBandwidthConfig.parse(input)
+    return this.enqueue(async () => {
+      const merged: Record<string, unknown> = { ...(this.raw.bandwidth ?? {}), ...patch }
+      for (const [key, value] of Object.entries(merged)) {
+        if (value === null)
+          delete merged[key]
+      }
+      BandwidthConfig.parse(merged)
+      const next = { ...this.raw, bandwidth: merged } as RawConfig
       await this.persist(next)
       this.raw = next
     })

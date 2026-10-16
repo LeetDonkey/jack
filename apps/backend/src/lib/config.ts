@@ -293,10 +293,53 @@ export const RawDownloadsConfig = z.object({
 
 export type RawDownloadsConfig = z.infer<typeof RawDownloadsConfig>
 
+const TimeOfDay = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/, 'Expected a 24-hour HH:MM time')
+const Weekday = z.enum(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'])
+// KiB/s; absent or null means unlimited.
+const RateLimitKiBps = z.number().int().min(1).nullish()
+
+// One entry of the weekly bandwidth schedule. Local time (the container's TZ);
+// `start` is inclusive, `end` exclusive, and an `end` at or before `start` runs
+// past midnight into the next day. A limit left unset falls back to the
+// block-level default.
+export const BandwidthPeriod = z.object({
+  days: z.array(Weekday).min(1),
+  start: TimeOfDay,
+  end: TimeOfDay,
+  downloadLimitKiBps: RateLimitKiBps,
+  uploadLimitKiBps: RateLimitKiBps,
+})
+
+export type BandwidthPeriod = z.infer<typeof BandwidthPeriod>
+
+// Combined limits across all peers. Every key applies without a restart.
+export const BandwidthConfig = z.object({
+  downloadLimitKiBps: RateLimitKiBps,
+  uploadLimitKiBps: RateLimitKiBps,
+  // Peers asking for a file while this many uploads run get a 503 with
+  // Retry-After and retry later. Absent means unlimited.
+  maxConcurrentUploads: z.number().int().min(1).nullish(),
+  schedule: z.array(BandwidthPeriod).default([]),
+})
+
+export type BandwidthConfig = z.infer<typeof BandwidthConfig>
+
+// PATCH body for the bandwidth block, merged onto the stored block. `null` drops
+// the key; `schedule` is replaced as a whole.
+export const RawBandwidthConfig = z.object({
+  downloadLimitKiBps: RateLimitKiBps,
+  uploadLimitKiBps: RateLimitKiBps,
+  maxConcurrentUploads: z.number().int().min(1).nullish(),
+  schedule: z.array(BandwidthPeriod).nullish(),
+})
+
+export type RawBandwidthConfig = z.infer<typeof RawBandwidthConfig>
+
 export const AppConfig = z.object({
   version: z.number(),
   jack: JackConfig,
   downloads: DownloadsConfig.optional(),
+  bandwidth: BandwidthConfig.optional(),
   servers: z.array(ServerConfig).default([]),
   peers: z.array(PeerConfig).default([]),
 })
