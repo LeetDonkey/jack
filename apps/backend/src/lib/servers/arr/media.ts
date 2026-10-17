@@ -17,12 +17,16 @@ interface TitleLike {
 const OVERVIEW_MAX = 400
 // TMDB serves every size from the same path; the "original" Radarr links to is several MB.
 const TMDB_ORIGINAL = '/t/p/original/'
+// TheTVDB keeps a small "_t" copy next to each artwork (a poster drops from ~400 KB to ~80 KB).
+const TVDB_ARTWORK = /^(https:\/\/artworks\.thetvdb\.com\/.+?)(?<!_t)(\.(?:jpg|jpeg|png))$/i
 
 function coverUrl(images: Cover[] | null | undefined, type: string, tmdbSize: string): string | undefined {
   const remote = images?.find(i => i.coverType === type)?.remoteUrl
   if (!remote?.startsWith('https://'))
     return undefined
-  return remote.includes(TMDB_ORIGINAL) ? remote.replace(TMDB_ORIGINAL, `/t/p/${tmdbSize}/`) : remote
+  if (remote.includes(TMDB_ORIGINAL))
+    return remote.replace(TMDB_ORIGINAL, `/t/p/${tmdbSize}/`)
+  return remote.replace(TVDB_ARTWORK, '$1_t$2')
 }
 
 function shorten(text: string): string {

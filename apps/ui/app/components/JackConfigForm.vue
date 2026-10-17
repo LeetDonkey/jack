@@ -57,7 +57,7 @@ function onSubmit() {
     <UFormField name="tmdbApiKey" label="TMDB API key" hint="Optional">
       <SecretInput v-model="state.tmdbApiKey" :editing="editing" />
       <template #help>
-        <span>Enables artwork and metadata when browsing peer catalogs. Applies after a restart.</span>
+        <span>Fills in artwork and metadata in peer catalogs for titles a peer sends without them (older jacks). Applies after a restart.</span>
       </template>
     </UFormField>
 

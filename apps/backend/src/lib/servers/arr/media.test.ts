@@ -26,6 +26,17 @@ describe('releaseMedia', () => {
     })
   })
 
+  test('uses TheTVDB thumbnails rather than full-size artwork', () => {
+    const media = releaseMedia({ title: 'Futurama', images: [
+      { coverType: 'poster', remoteUrl: 'https://artworks.thetvdb.com/banners/posters/73871-2.jpg' },
+      { coverType: 'fanart', remoteUrl: 'https://artworks.thetvdb.com/banners/fanart/original/73871-21_t.jpg' },
+    ] }, 8.5)
+    expect(media).toMatchObject({
+      posterUrl: 'https://artworks.thetvdb.com/banners/posters/73871-2_t.jpg',
+      backdropUrl: 'https://artworks.thetvdb.com/banners/fanart/original/73871-21_t.jpg',
+    })
+  })
+
   test('shortens a long synopsis, skips non-https images and a missing title', () => {
     const media = releaseMedia({ title: 'Long', overview: 'word '.repeat(200), images: [{ coverType: 'poster', remoteUrl: 'http://x/p.jpg' }] }, 0)
     expect(media!.overview!.length).toBeLessThanOrEqual(401)

@@ -70,7 +70,8 @@ export class RadarrServerConnector extends ArrServerConnector {
       edition: file.edition ?? undefined,
       mediaInfo: (file.mediaInfo as Record<string, unknown> | undefined) ?? undefined,
       publishDate: file.dateAdded ?? undefined,
-      media: releaseMedia(movie, movie.ratings?.tmdb?.value ?? movie.ratings?.imdb?.value),
+      // Radarr reports an unrated movie as tmdb { value: 0 }, so fall back on any non-positive value.
+      media: releaseMedia(movie, movie.ratings?.tmdb?.value || movie.ratings?.imdb?.value),
     }
   }
 

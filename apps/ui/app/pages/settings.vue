@@ -263,7 +263,7 @@ async function confirmRevoke() {
               </template>
               <template v-else>
                 <UIcon name="i-ph-info" class="size-4 text-dimmed" />
-                <span class="text-muted">TMDB not configured — peer catalogs show names only.</span>
+                <span class="text-muted">TMDB not configured. Peers running a current jack send titles and posters from their Radarr/Sonarr; TMDB fills in for older ones.</span>
               </template>
             </p>
           </UCard>

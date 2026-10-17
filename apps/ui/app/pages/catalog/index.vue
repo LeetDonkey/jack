@@ -7,25 +7,43 @@ const toast = useToast()
 
 // Lazy (no top-level await) so navigation into the page is instant; the grid shows
 // skeletons until the catalog request resolves.
-const { data, pending, error } = useLazyAsyncData(
+// Peer catalogs are cached on the server for 15 minutes; the refresh button asks the
+// peers again. It goes through the async data's own refresh, so a successful refresh
+// also clears an earlier load error.
+const forceRefresh = ref(false)
+const { data, pending, error, refresh } = useLazyAsyncData(
   'peer-catalog',
-  () => request<CatalogResponse>('catalog'),
+  () => request<CatalogResponse>(forceRefresh.value ? 'catalog?refresh=true' : 'catalog'),
 )
 
-// Peer catalogs are cached on the server for 15 minutes; this asks the peers again.
 const refreshing = ref(false)
 async function refreshCatalog() {
   refreshing.value = true
+  forceRefresh.value = true
   try {
-    data.value = await request<CatalogResponse>('catalog?refresh=true')
-  }
-  catch (err) {
-    toast.add({ color: 'error', title: extractError(err, 'Could not refresh the catalog.') })
+    await refresh()
+    if (error.value && data.value)
+      toast.add({ color: 'error', title: extractError(error.value, 'Could not refresh the catalog.') })
   }
   finally {
+    forceRefresh.value = false
     refreshing.value = false
   }
 }
+
+// "Updated 5m ago" has to move on its own; formatAgo reads the clock, which Vue doesn't track.
+const clock = ref(Date.now())
+const clockTimer = ref<ReturnType<typeof setInterval>>()
+onMounted(() => {
+  clockTimer.value = setInterval(() => {
+    clock.value = Date.now()
+  }, 30_000)
+})
+onBeforeUnmount(() => clearInterval(clockTimer.value))
+const updatedAgo = computed(() => {
+  void clock.value
+  return data.value?.updatedAt ? formatAgo(data.value.updatedAt) : null
+})
 
 // Distinct, view-consistent peer colors from the shared settings store. Provided so
 // the poster badges and detail cards resolve the same color for a given peer.
@@ -97,7 +115,7 @@ async function onConfirm(payload: CatalogRequestPayload) {
     <template #header>
       <UDashboardNavbar title="Peer Catalog">
         <template #right>
-          <span v-if="data?.updatedAt" class="hidden text-xs text-muted sm:inline">Updated {{ formatAgo(data.updatedAt) }}</span>
+          <span v-if="updatedAgo" class="hidden text-xs text-muted sm:inline">Updated {{ updatedAgo }} ago</span>
           <UButton icon="i-ph-arrows-clockwise" size="sm" color="neutral" variant="ghost" aria-label="Refresh the catalog" :loading="refreshing" @click="refreshCatalog" />
           <UTabs
             v-model="typeFilter"
@@ -110,7 +128,8 @@ async function onConfirm(payload: CatalogRequestPayload) {
     </template>
 
     <template #body>
-      <UAlert v-if="error" color="error" variant="soft" icon="i-ph-warning" title="Failed to load the peer catalog." />
+      <!-- A failed refresh keeps showing the catalog it already has (and toasts). -->
+      <UAlert v-if="error && !data" color="error" variant="soft" icon="i-ph-warning" title="Failed to load the peer catalog." />
 
       <UCard v-else-if="!pending && titles.length === 0" variant="subtle">
         <div class="flex flex-col items-center gap-3 py-6 text-center">

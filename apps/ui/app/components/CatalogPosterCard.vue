@@ -7,7 +7,10 @@ defineEmits<{ select: [] }>()
 const { load, entryFor } = useCatalogMetadata()
 const entry = computed(() => entryFor(props.title))
 // Metadata from the peer's *arr comes with the catalog; TMDB only fills in what's missing.
-const metadata = computed(() => props.title.metadata ?? entry.value?.data ?? null)
+const metadata = computed(() => mergeCatalogMetadata(props.title.metadata, entry.value?.data))
+// Set once the card nears the viewport: images (and any TMDB lookup) wait for it, so
+// opening a catalog of thousands of titles doesn't request every poster at once.
+const near = ref(false)
 
 // Three visual states: the lookup is in flight, it finished with nothing (or there
 // was no id to look up), or we have metadata.
@@ -22,10 +25,9 @@ const status = computed<'loading' | 'unavailable' | 'ready'>(() => {
 const name = computed(() => metadata.value?.title ?? props.title.displayTitle)
 // Prefer the poster, fall back to the backdrop — both for titles that only have one
 // and for transient TMDB load failures (object-cover crops it to the card shape).
-const { src: poster, onError: onPosterError } = useFallbackImage(() => [
-  metadata.value?.posterUrl,
-  metadata.value?.backdropUrl,
-])
+const { src: poster, onError: onPosterError } = useFallbackImage(() => near.value
+  ? [metadata.value?.posterUrl, metadata.value?.backdropUrl]
+  : [])
 const year = computed(() => metadata.value?.year ?? null)
 const rating = computed(() => metadata.value?.rating ?? null)
 const typeLabel = computed(() => props.title.mediaType === 'tv' ? 'TV' : 'Movie')
@@ -46,7 +48,8 @@ onMounted(() => {
   observer = new IntersectionObserver((entries) => {
     if (!entries.some(entry => entry.isIntersecting))
       return
-    if (!props.title.metadata)
+    near.value = true
+    if (needsTmdbMetadata(props.title))
       load(props.title)
     observer?.disconnect()
     observer = null
@@ -77,7 +80,7 @@ onBeforeUnmount(() => observer?.disconnect())
         @error="onPosterError"
       >
       <!-- Loading: pulsing surface with a spinner. -->
-      <div v-else-if="status === 'loading'" class="flex size-full animate-pulse items-center justify-center">
+      <div v-else-if="status === 'loading' || (status === 'ready' && !near)" class="flex size-full animate-pulse items-center justify-center">
         <UIcon name="i-ph-circle-notch" class="size-7 animate-spin text-dimmed" />
       </div>
       <!-- Metadata unavailable: dimmed broken-image mark, no pulse. -->

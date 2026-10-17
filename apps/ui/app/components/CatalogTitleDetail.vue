@@ -6,7 +6,7 @@ const emit = defineEmits<{ download: [peerId: string] }>()
 
 const { load, entryFor } = useCatalogMetadata()
 // Reuse the cache the grid populated; load() is a no-op if the card already fetched it.
-const meta = computed(() => props.title.metadata ?? entryFor(props.title)?.data ?? null)
+const meta = computed(() => mergeCatalogMetadata(props.title.metadata, entryFor(props.title)?.data))
 const name = computed(() => meta.value?.title ?? props.title.displayTitle)
 // Prefer the wide backdrop, fall back to the poster — covers titles with only one
 // image and transient TMDB load failures (the poster is usually already cached by
@@ -17,7 +17,7 @@ const { src: heroImage, onError: onHeroError } = useFallbackImage(() => [
 ])
 
 onMounted(() => {
-  if (!props.title.metadata)
+  if (needsTmdbMetadata(props.title))
     load(props.title)
 })
 
