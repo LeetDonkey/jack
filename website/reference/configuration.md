@@ -38,6 +38,8 @@ it alone.)
 | [`downloads.unlinkImportedFiles`](#downloads-unlinkimportedfiles) | Drop jack's copy after *arr imports |
 | [`torznab.rssMaxAgeDays`](#torznab-rssmaxagedays) | Age limit for releases in the RSS feed |
 | [`torznab.rssMaxItems`](#torznab-rssmaxitems) | Size limit for the RSS feed |
+| [`bandwidth`](#bandwidth) | Speed limits, upload slots and per-friend limits |
+| [`notifications`](#notifications) | Webhooks for failures, offline friends and a daily summary |
 | [`servers[].name`](#servers-name) | Display name |
 | [`servers[].type`](#servers-type) | Radarr or Sonarr |
 | [`servers[].url`](#servers-url) | *arr base URL |
@@ -269,6 +271,48 @@ still references is left alone. If the unlink fails, the download stays
 
 Editable from the management UI (***Settings -> Downloads***) and applies
 immediately. Unlike the other keys in this block, it does not need a restart.
+
+## `bandwidth`
+
+Limits on what jack moves to and from peers. Optional; every key applies
+right away when edited in ***Settings -> Bandwidth***.
+
+- **`downloadLimitKiBps`** / **`uploadLimitKiBps`**: combined speed limit in
+  KiB/s across all peers. Absent means unlimited.
+- **`maxConcurrentUploads`**: uploads running at once. A peer asking while all
+  slots are taken gets a 503 with `Retry-After: 60`.
+- **`maxConcurrentUploadsPerPeer`**: the same, per friend. Each API key you
+  issued counts as one friend.
+- **`dailyUploadLimitGiBPerPeer`**: GiB one friend may download from you per
+  server day. Past it, new requests get a 429 with `Retry-After` until local
+  midnight. The limit is checked when a request starts, so a peer that fetches
+  in 64 MiB windows stops within one window.
+- **`schedule`**: periods (`days`, `start`, `end` as `HH:MM`, optional
+  `downloadLimitKiBps` / `uploadLimitKiBps`) that override the limits above.
+  The first matching period wins; a period with `end` before `start` runs past
+  midnight. Times follow the container's `TZ`.
+
+## `notifications`
+
+Where jack sends notifications, and which. Optional; edited in
+***Settings -> Notifications*** and applies right away. ***Send test*** posts
+a message to every webhook.
+
+- **`webhooks`**: a list of `{ type, url }`. `url` is a
+  [`ConfigSecret`](#configsecret), since webhook URLs usually embed a token.
+  - `discord`: a Discord webhook URL.
+  - `ntfy`: an ntfy topic URL. The title goes in the `Title` header.
+  - `json`: posts `{ event, title, message, at }`, e.g. to a Home Assistant
+    webhook.
+- **`downloadFailed`** (default `true`): a download that still fails after its
+  retries and [`downloads.retryWindowMs`](#downloads-retrywindowms). Cancelling
+  a download sends nothing.
+- **`peerOffline`** (default `true`) and **`peerOfflineMinutes`** (default
+  `60`, at least `5`): a peer that hasn't answered its handshake for that
+  long, and again when it is back. Peers are checked every 5 minutes.
+- **`dailySummaryAt`**: `HH:MM` (server time) for a daily message with GB
+  downloaded from and uploaded to each friend that day, and how many downloads
+  finished, failed or are still running. Absent means no summary.
 
 ## `torznab`
 
