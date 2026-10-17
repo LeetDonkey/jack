@@ -1,4 +1,5 @@
 import type { AddressInfo } from 'node:net'
+import { connect } from 'node:net'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -249,6 +250,47 @@ describe('file route through the node:http server', () => {
       expect(new Uint8Array(await res.arrayBuffer())).toEqual(big.slice(100))
       await Bun.sleep(10)
       expect(monitor.activeCount('upload')).toBe(0)
+    }
+    finally {
+      server.close()
+    }
+  })
+
+  test('a peer that disconnects mid-file frees its upload slot and stops the reads', async () => {
+    const big = new Uint8Array(4 * 1024 * 1024).map((_, i) => i % 251)
+    await Bun.write(filePath, big)
+    const monitor = new TransferMonitor({ setInterval: () => 0 as any, clearInterval: () => {} })
+    let taken = 0
+    const app = new Hono()
+    app.route('/peer', getPeerRouter(controllerForFile(), {
+      monitor,
+      // Slow the upload down so the client can leave halfway.
+      uploadLimiter: { take: async (bytes: number) => {
+        taken += bytes
+        await Bun.sleep(20)
+      } } as any,
+      uploadRefusal: () => null,
+    }))
+    const server = startPublicServer(app.fetch, 0)
+    await new Promise<void>(resolve => server.once('listening', () => resolve()))
+    const { port } = server.address() as AddressInfo
+
+    try {
+      const socket = connect(port, '127.0.0.1')
+      socket.write('GET /peer/items/remote1:movie:1/file HTTP/1.1\r\nHost: test\r\n\r\n')
+      await new Promise<void>(resolve => socket.once('data', () => resolve()))
+      expect(monitor.activeCount('upload')).toBe(1)
+
+      socket.end()
+      for (let i = 0; i < 50 && monitor.activeCount('upload') > 0; i++)
+        await Bun.sleep(10)
+      const takenAtEnd = taken
+      await Bun.sleep(200)
+
+      expect(monitor.activeCount('upload')).toBe(0)
+      // No more of the file is read once the peer is gone.
+      expect(taken).toBe(takenAtEnd)
+      expect(taken).toBeLessThan(big.length)
     }
     finally {
       server.close()
