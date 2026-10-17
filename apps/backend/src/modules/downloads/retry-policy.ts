@@ -1,6 +1,7 @@
 import { FetchError } from '../../lib/errors/FetchError'
 import { IdleTimeoutError } from '../../lib/errors/IdleTimeoutError'
 import { IncompleteDownloadError } from '../../lib/errors/IncompleteDownloadError'
+import { PeerFileMissingError } from '../../lib/errors/PeerFileMissingError'
 import { PieceMismatchError } from '../../lib/errors/PieceMismatchError'
 
 // Socket-level failures. Bun rejects a body read whose connection drops
@@ -31,6 +32,8 @@ export function isTransientDownloadError(error: unknown): boolean {
   // A piece no peer could repair: the next attempt checks the .part again.
   if (error instanceof PieceMismatchError)
     return true
+  if (error instanceof PeerFileMissingError)
+    return true
   if (error instanceof IdleTimeoutError)
     return true
   if (error instanceof FetchError) {
@@ -56,7 +59,13 @@ export function isTransientDownloadError(error: unknown): boolean {
 }
 
 /** Milliseconds to wait per a 429 `Retry-After` header (seconds or HTTP-date), or null. */
+// A file missing at the peer is usually back once its *arr finishes a move or
+// upgrade; asking every few seconds would only hammer it.
+const FILE_MISSING_RETRY_MS = 15 * 60_000
+
 export function downloadRetryAfterMs(error: unknown): number | null {
+  if (error instanceof PeerFileMissingError)
+    return FILE_MISSING_RETRY_MS
   if (!(error instanceof FetchError))
     return null
   const header = error.response?.headers?.get('Retry-After')

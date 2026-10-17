@@ -2,6 +2,7 @@ import { describe, expect, spyOn, test } from 'bun:test'
 import { DownloadsConfig } from '../lib/config'
 import { FetchError } from '../lib/errors/FetchError'
 import { IncompleteDownloadError } from '../lib/errors/IncompleteDownloadError'
+import { PeerFileMissingError } from '../lib/errors/PeerFileMissingError'
 import { retry } from '../lib/retry'
 import { downloadRetryAfterMs, isTransientDownloadError } from '../modules/downloads/retry-policy'
 
@@ -221,6 +222,12 @@ describe('isTransientDownloadError', () => {
   test('treats non-429 4xx as permanent', () => {
     expect(isTransientDownloadError(fetchError(400))).toBe(false)
     expect(isTransientDownloadError(fetchError(404))).toBe(false)
+  })
+
+  test('retries a file missing at the peer, but only every 15 minutes', () => {
+    const missing = new PeerFileMissingError('gone for now')
+    expect(isTransientDownloadError(missing)).toBe(true)
+    expect(downloadRetryAfterMs(missing)).toBe(15 * 60_000)
   })
 
   test('treats timeouts and network TypeErrors as transient', () => {

@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from 'b
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import { IdleTimeoutError } from '../lib/errors/IdleTimeoutError'
+import { PeerFileMissingError } from '../lib/errors/PeerFileMissingError'
 import { UnknownSizeError } from '../lib/errors/UnknownSizeError'
 import { PeerConnector } from '../lib/servers/peer'
 
@@ -763,6 +764,15 @@ describe('PeerConnector.downloadFile windows', () => {
 
       await expect(download).rejects.toMatchObject({ response: { status: 503 } })
       expect(Bun.file(partPath).size).toBe(4)
+    })
+  })
+
+  test('a file the peer cannot find right now fails as PeerFileMissingError, fresh or resumed', async () => {
+    server.use(http.get(`${PEER_JACK_URL}/peer/items/:itemId/file`, () => HttpResponse.json({ error: 'File not found' }, { status: 404 })))
+    await withDir(async ({ destPath, partPath }) => {
+      await expect(peer().downloadFile('remote1:movie:99', destPath, { partPath, releaseSize: 10 })).rejects.toBeInstanceOf(PeerFileMissingError)
+      await writeFile(partPath, new Uint8Array([0, 1]))
+      await expect(peer().downloadFile('remote1:movie:99', destPath, { partPath, releaseSize: 10 })).rejects.toThrow('Friend Jack can\'t find this file on disk right now (404)')
     })
   })
 })

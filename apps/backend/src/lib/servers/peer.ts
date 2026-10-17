@@ -9,6 +9,7 @@ import { FetchError } from '../errors/FetchError'
 import { IdleTimeoutError } from '../errors/IdleTimeoutError'
 import { IncompatiblePeerError } from '../errors/IncompatiblePeerError'
 import { IncompleteDownloadError } from '../errors/IncompleteDownloadError'
+import { PeerFileMissingError } from '../errors/PeerFileMissingError'
 import { UnknownSizeError } from '../errors/UnknownSizeError'
 import { normalizeImdbId, Release } from '../release'
 import { setSpanAttribute, setSpanAttributes } from '../span-attributes'
@@ -394,6 +395,9 @@ export class PeerConnector extends ServerConnector {
           response = await restartFresh(response, 'range_not_satisfiable', existingBytes)
           setSpanAttribute(span, 'http.response.status_code', response.status)
         }
+        else if (response.status === 404) {
+          throw new PeerFileMissingError(`${this.name} can't find this file on disk right now (404). It may be moving or upgrading it, or a mount is missing there.`)
+        }
         else if (!response.ok) {
           throw new FetchError(`Failed to resume download from peer: ${response.statusText}`, response)
         }
@@ -428,6 +432,8 @@ export class PeerConnector extends ServerConnector {
         // Fresh download: require a clean 200. A 206 here is untrustworthy — we
         // did not send a satisfiable Range, so a partial body must not be
         // treated as the whole file (it would rename a truncated file into place).
+        if (response.status === 404)
+          throw new PeerFileMissingError(`${this.name} can't find this file on disk right now (404). It may be moving or upgrading it, or a mount is missing there.`)
         if (!response.ok)
           throw new FetchError(`Failed to download file from peer: ${response.statusText}`, response)
         if (response.status === 206)
