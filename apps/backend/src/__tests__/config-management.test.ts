@@ -403,6 +403,24 @@ describe('Management API servers', () => {
     expect(saved).toEqual([serverId, serverId])
   })
 
+  test('stores an upgrade policy and reports it with defaults applied', async () => {
+    const { app, path } = await makeMutableApp()
+    await app.request('/config/servers', { method: 'POST', headers: { ...KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(SERVER) })
+    const before = await (await app.request('/config/servers', { headers: KEY })).json() as { servers: Array<{ upgrades: unknown }> }
+
+    await app.request(`/config/servers/${serverId}`, {
+      method: 'PATCH',
+      headers: { ...KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...SERVER, upgrades: { allow: true, maxSizeGiB: 20 } }),
+    })
+    const after = await (await app.request('/config/servers', { headers: KEY })).json() as { servers: Array<{ upgrades: unknown }> }
+
+    expect(before.servers[0]?.upgrades).toEqual({ allow: true, maxSizeGiB: null })
+    expect(after.servers[0]?.upgrades).toEqual({ allow: true, maxSizeGiB: 20 })
+    const onDisk = jsonc.parse(await Bun.file(path).text()) as { servers: Array<{ upgrades?: unknown }> }
+    expect(onDisk.servers[0]?.upgrades).toEqual({ allow: true, maxSizeGiB: 20 })
+  })
+
   test('rejects an indexer priority *arr would refuse', async () => {
     const { app, path } = await makeMutableApp()
     await app.request('/config/servers', { method: 'POST', headers: { ...KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(SERVER) })

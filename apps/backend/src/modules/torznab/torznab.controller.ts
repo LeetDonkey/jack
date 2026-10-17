@@ -1,6 +1,8 @@
 import type { AppConfig, TorznabConfig } from '../../lib/config'
 import type { Release } from '../../lib/release'
+import type { ArrServerConnector } from '../../lib/servers/arr/base'
 import type { PeerConnector } from '../../lib/servers/peer'
+import { Semaphore } from '../../lib/semaphore'
 import { setSpanAttribute } from '../../lib/span-attributes'
 import { withSpan } from '../../lib/tracing'
 import { logger } from '../../logger'
@@ -48,13 +50,74 @@ export function releaseToTorznab(release: Release, peerId: string, peerName: str
   }
 }
 
+// How long "does this *arr already have it?" answers are reused, and how many
+// lookups one feed may run against that *arr at once.
+const OWNED_CACHE_MS = 10 * 60_000
+const OWNED_LOOKUP_CONCURRENCY = 4
+
 export class TorznabController {
+  private readonly ownedCache = new Map<string, { at: number, owned: Promise<boolean> }>()
+
   constructor(
     private readonly getPeers: () => PeerConnector[],
     private readonly jackConfig: NonNullable<AppConfig['jack']>,
     // Read on every RSS request so a change in the management UI applies at once.
     private readonly getTorznabConfig: () => TorznabConfig = () => ({ rssMaxAgeDays: 7, rssMaxItems: 100 }),
+    // The destination a managed key belongs to, for its upgrade policy.
+    private readonly getDestination: (id: string) => ArrServerConnector | undefined = () => undefined,
   ) {}
+
+  /**
+   * Drop releases the requesting destination's upgrade policy rules out. With
+   * upgrades off, that is anything the destination already has a file for; with a
+   * size cap, upgrades above it. Missing items always stay. A lookup that fails
+   * drops the item (this poll only): offering it could start a large transfer
+   * the policy was set to prevent.
+   */
+  async applyUpgradePolicy(items: TorznabItem[], destinationId: string | undefined, now = Date.now()): Promise<TorznabItem[]> {
+    const dest = destinationId ? this.getDestination(destinationId) : undefined
+    if (!dest || items.length === 0)
+      return items
+    const { allow, maxSizeGiB } = dest.upgrades
+    if (allow && maxSizeGiB == null)
+      return items
+    const maxUpgradeBytes = allow && maxSizeGiB != null ? maxSizeGiB * 1024 ** 3 : -1
+    this.pruneOwnedCache(now)
+    const limit = new Semaphore(OWNED_LOOKUP_CONCURRENCY)
+    const keep = await Promise.all(items.map(async (item) => {
+      if (item.size <= maxUpgradeBytes)
+        return true
+      try {
+        return !(await limit.run(() => this.owns(dest, item, now)))
+      }
+      catch (err) {
+        logger.warn({ destination: dest.name, title: item.title, err }, 'Could not check whether the destination already has this release; leaving it out')
+        return false
+      }
+    }))
+    return items.filter((_, i) => keep[i])
+  }
+
+  private owns(dest: ArrServerConnector, item: TorznabItem, now: number): Promise<boolean> {
+    const key = [dest.id, item.tmdbId ?? item.imdbId ?? '', item.tvdbId ?? '', item.season ?? '', item.episode ?? ''].join(':')
+    const cached = this.ownedCache.get(key)
+    if (cached && now - cached.at < OWNED_CACHE_MS)
+      return cached.owned
+    const owned = dest.ownedFiles(item).then(files => files.length > 0)
+    this.ownedCache.set(key, { at: now, owned })
+    owned.catch(() => {
+      if (this.ownedCache.get(key)?.owned === owned)
+        this.ownedCache.delete(key)
+    })
+    return owned
+  }
+
+  private pruneOwnedCache(now: number): void {
+    for (const [key, entry] of this.ownedCache) {
+      if (now - entry.at >= OWNED_CACHE_MS)
+        this.ownedCache.delete(key)
+    }
+  }
 
   private async fanOut(label: string, search: (peer: PeerConnector) => Promise<Release[]>, apiKey: string): Promise<TorznabItem[]> {
     // We fan out to ALL peers — no isInitialized pre-filter. A peer that failed

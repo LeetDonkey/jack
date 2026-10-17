@@ -20,12 +20,14 @@ export interface ServerItem extends ConnectorBase {
   source: boolean
   destination: boolean
   autoregister: { enable: boolean, priority: number }
+  // Whether friends' releases are offered for items this *arr already has.
+  upgrades: { allow: boolean, maxSizeGiB: number | null }
 }
 
 // The /overview endpoint returns connector items WITHOUT autoregister (that field
 // only comes back on the full /config/servers payload). Keep the type honest so
 // nothing reaches for a field the overview never sends.
-export type OverviewServerItem = Omit<ServerItem, 'autoregister'>
+export type OverviewServerItem = Omit<ServerItem, 'autoregister' | 'upgrades'>
 
 export interface DownloadItem {
   id: number
@@ -144,6 +146,7 @@ export interface ServerInput {
   destination?: boolean
   headers?: Record<string, SecretRef>
   autoregister?: { enable?: boolean, priority?: number }
+  upgrades?: { allow?: boolean, maxSizeGiB?: number | null }
 }
 
 // config.jack: internalUrl + optional secrets and the external access profile.

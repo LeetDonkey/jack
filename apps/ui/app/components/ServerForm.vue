@@ -16,6 +16,12 @@ const typeItems = [
   { label: 'Sonarr', value: 'sonarr' },
 ]
 
+const upgradeItems = [
+  { label: 'Also offer upgrades', value: 'all' },
+  { label: 'Offer upgrades up to a size', value: 'capped' },
+  { label: 'Only offer what is missing', value: 'none' },
+]
+
 const state = reactive({
   name: props.initial?.name ?? '',
   url: props.initial?.url ?? '',
@@ -25,6 +31,8 @@ const state = reactive({
   destination: props.initial?.destination ?? true,
   autoEnable: props.initial?.autoregister?.enable ?? true,
   autoPriority: props.initial?.autoregister?.priority ?? 1,
+  upgradeMode: (!props.initial || props.initial.upgrades.allow ? (props.initial?.upgrades.maxSizeGiB == null ? 'all' : 'capped') : 'none') as 'all' | 'capped' | 'none',
+  upgradeMaxGiB: (props.initial?.upgrades.maxSizeGiB ?? null) as number | null,
   headers: { ...(props.initial?.headers ?? {}) } as Record<string, SecretRef>,
 })
 
@@ -38,6 +46,8 @@ function validate(s: typeof state): FormError[] {
     errors.push({ name: 'apiKey', message: 'An API key is required.' })
   if (s.autoEnable && (!Number.isInteger(s.autoPriority) || s.autoPriority < 1 || s.autoPriority > 50))
     errors.push({ name: 'autoPriority', message: 'Pick a priority from 1 to 50.' })
+  if (s.upgradeMode === 'capped' && !(s.upgradeMaxGiB != null && s.upgradeMaxGiB > 0))
+    errors.push({ name: 'upgradeMaxGiB', message: 'Enter the largest upgrade to fetch, in GB.' })
   return errors
 }
 
@@ -50,6 +60,7 @@ function onSubmit() {
     source: state.source,
     destination: state.destination,
     autoregister: { enable: state.autoEnable, priority: state.autoPriority },
+    upgrades: { allow: state.upgradeMode !== 'none', maxSizeGiB: state.upgradeMode === 'capped' ? state.upgradeMaxGiB : null },
   }
   if (Object.keys(state.headers).length)
     input.headers = state.headers
@@ -94,6 +105,19 @@ function onSubmit() {
         description="1 (highest) to 50 (lowest). When two releases are otherwise equal, *arr grabs from the indexer with the lower number. Saving applies it to *arr right away."
       >
         <UInputNumber v-model="state.autoPriority" :min="1" :max="50" class="w-24" />
+      </UFormField>
+    </UCard>
+
+    <UCard v-if="state.destination" variant="subtle" :ui="{ body: 'space-y-3' }">
+      <UFormField
+        name="upgradeMode"
+        label="Releases from friends"
+        description="For movies and episodes this *arr already has. Missing ones are always offered."
+      >
+        <URadioGroup v-model="state.upgradeMode" :items="upgradeItems" />
+      </UFormField>
+      <UFormField v-if="state.upgradeMode === 'capped'" name="upgradeMaxGiB" label="Largest upgrade" hint="GB" :ui="{ hint: 'font-mono text-xs text-dimmed' }">
+        <UInputNumber v-model="state.upgradeMaxGiB" :min="1" :step="1" :increment="false" :decrement="false" class="w-24" />
       </UFormField>
     </UCard>
 

@@ -1,4 +1,5 @@
 import type { Release } from '../lib/release'
+import type { ArrServerConnector } from '../lib/servers/arr/base'
 import type { PeerConnector } from '../lib/servers/peer'
 import { describe, expect, test } from 'bun:test'
 import { releaseToTorznab, TorznabController } from '../modules/torznab/torznab.controller'
@@ -199,5 +200,67 @@ describe('TorznabController RSS feed', () => {
     const items = await controller.catalog('key', now)
 
     expect(items.map(i => i.guid)).toEqual(['peer1:c:movie:0', 'peer1:c:movie:1'])
+  })
+})
+
+describe('TorznabController upgrade policy', () => {
+  const jackConfig = { internalUrl: 'http://localhost:3000' } as any
+  const GiB = 1024 ** 3
+  const item = (tmdbId: number, size: number) => releaseToTorznab({ ...movieRelease, id: `c:movie:${tmdbId}`, tmdbId, size }, 'peer1', 'Friend', 'http://localhost:3000', 'k')
+
+  function destination(upgrades: { allow: boolean, maxSizeGiB?: number | null }, owned: Set<number>, lookups: number[] = []) {
+    return {
+      id: 'radarr1',
+      name: 'Radarr',
+      upgrades,
+      ownedFiles: async ({ tmdbId }: { tmdbId?: number }) => {
+        lookups.push(tmdbId!)
+        if (tmdbId === 666)
+          throw new Error('Radarr timed out')
+        return owned.has(tmdbId!) ? [movieRelease] : []
+      },
+    } as unknown as ArrServerConnector
+  }
+
+  const controllerFor = (dest: ArrServerConnector) =>
+    new TorznabController(() => [], jackConfig, undefined, id => (id === dest.id ? dest : undefined))
+
+  test('with upgrades off, offers only what the destination is missing', async () => {
+    const controller = controllerFor(destination({ allow: false }, new Set([1])))
+
+    const offered = await controller.applyUpgradePolicy([item(1, GiB), item(2, GiB)], 'radarr1')
+
+    expect(offered.map(i => i.tmdbId)).toEqual([2])
+  })
+
+  test('a size cap lets small upgrades through and holds back large ones, but never a missing item', async () => {
+    const lookups: number[] = []
+    const controller = controllerFor(destination({ allow: true, maxSizeGiB: 20 }, new Set([1, 2]), lookups))
+
+    const offered = await controller.applyUpgradePolicy([item(1, 10 * GiB), item(2, 40 * GiB), item(3, 40 * GiB)], 'radarr1')
+
+    expect(offered.map(i => i.tmdbId)).toEqual([1, 3])
+    // An upgrade under the cap needs no lookup.
+    expect(lookups).toEqual([2, 3])
+  })
+
+  test('leaves an item out when the lookup fails, and offers everything without a policy or destination', async () => {
+    const restricted = controllerFor(destination({ allow: false }, new Set()))
+    expect(await restricted.applyUpgradePolicy([item(666, GiB), item(2, GiB)], 'radarr1')).toHaveLength(1)
+
+    const open = controllerFor(destination({ allow: true }, new Set([1])))
+    expect(await open.applyUpgradePolicy([item(1, GiB)], 'radarr1')).toHaveLength(1)
+    expect(await restricted.applyUpgradePolicy([item(1, GiB)], undefined)).toHaveLength(1)
+  })
+
+  test('reuses an ownership answer for ten minutes', async () => {
+    const lookups: number[] = []
+    const controller = controllerFor(destination({ allow: false }, new Set(), lookups))
+
+    await controller.applyUpgradePolicy([item(1, GiB)], 'radarr1', 0)
+    await controller.applyUpgradePolicy([item(1, GiB)], 'radarr1', 9 * 60_000)
+    await controller.applyUpgradePolicy([item(1, GiB)], 'radarr1', 11 * 60_000)
+
+    expect(lookups).toEqual([1, 1])
   })
 })

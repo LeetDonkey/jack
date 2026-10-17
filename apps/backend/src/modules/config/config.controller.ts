@@ -24,6 +24,7 @@ function stringifyServer(c: ArrServerConnector) {
     // Effective (defaults-applied) autoregister so the edit form prefills what's
     // actually in effect, not just what the file happened to spell out.
     autoregister: { enable: c.autoRegister.enable, priority: c.autoRegister.priority },
+    upgrades: { allow: c.upgrades.allow, maxSizeGiB: c.upgrades.maxSizeGiB ?? null },
   }
 }
 

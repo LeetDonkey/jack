@@ -79,6 +79,12 @@ function roleLabel(server: ServerItem): string {
   return roles.length ? roles.join(' · ') : 'disabled'
 }
 
+function upgradesLabel(server: ServerItem): string {
+  if (!server.upgrades.allow)
+    return 'only missing items from friends'
+  return server.upgrades.maxSizeGiB == null ? 'upgrades from friends' : `upgrades from friends up to ${server.upgrades.maxSizeGiB} GB`
+}
+
 function statusBadge(server: ServerItem): { color: BadgeProps['color'], label: string } {
   if (server.initialized)
     return { color: 'success', label: 'Connected' }
@@ -156,6 +162,8 @@ const destinations = computed(() => servers.value.filter(s => s.destination).len
               <span class="text-dimmed">·</span>
               <span v-if="server.autoregister.enable">auto-registers with priority {{ server.autoregister.priority }}</span>
               <span v-else>manual registration</span>
+              <span class="text-dimmed">·</span>
+              <span>{{ upgradesLabel(server) }}</span>
             </div>
           </template>
         </ConnectorCard>

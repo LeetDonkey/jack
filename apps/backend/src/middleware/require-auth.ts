@@ -6,6 +6,10 @@ import { UnauthorizedError } from '../lib/errors/UnauthorizedError'
 
 export interface AuthVariables {
   apiKeyName?: string
+  /** The peer api_key row that authenticated (peer scope). */
+  apiKeyId?: number
+  /** The destination server a managed key was minted for (*arr scope). */
+  destinationId?: string
 }
 
 // Each protected surface accepts exactly one class of key, so the scope is mounted
@@ -41,8 +45,10 @@ export function requireApiKey(masterKey: string, scope: ApiKeyScope) {
       if (!isManagedKey(key)) {
         throw new UnauthorizedError('invalid API key')
       }
-      if (scope.repository.findByHash(hashKey(key))) {
+      const managed = scope.repository.findByHash(hashKey(key))
+      if (managed) {
         ctx.set('apiKeyName', 'managed')
+        ctx.set('destinationId', managed.serverId)
         return next()
       }
       throw new UnauthorizedError('invalid API key')
@@ -63,6 +69,7 @@ export function requireApiKey(masterKey: string, scope: ApiKeyScope) {
     }
 
     ctx.set('apiKeyName', resolution.row.name ?? 'unnamed')
+    ctx.set('apiKeyId', resolution.row.id)
     return next()
   })
 }

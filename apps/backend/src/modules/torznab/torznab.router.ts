@@ -1,3 +1,4 @@
+import type { AuthVariables } from '../../middleware/require-auth'
 import type { TorznabController, TorznabItem } from './torznab.controller'
 import { Hono } from 'hono'
 import { describeRoute } from 'hono-openapi'
@@ -123,7 +124,7 @@ export function buildErrorXml(code: number, description: string): Record<string,
 }
 
 export function getTorznabRouter(controller: TorznabController) {
-  const app = new Hono()
+  const app = new Hono<{ Variables: AuthVariables }>()
 
   // Documented via `parameters` instead of a zod validator: the Torznab spec
   // requires XML error envelopes, so validation stays hand-rolled in the handler.
@@ -159,6 +160,12 @@ export function getTorznabRouter(controller: TorznabController) {
     // same way requireApiKey does. Embedded into each release's download URL so
     // the subsequent grab passes auth (managed indexer keys, not the main key).
     const apiKey = c.req.query('apikey') ?? c.req.header('x-api-key') ?? ''
+    // Category filter first, then the destination's upgrade policy (which may
+    // look items up in that *arr, so it should see as few as possible).
+    const respond = async (items: TorznabItem[]) => {
+      const offered = await controller.applyUpgradePolicy(filterByCategory(items, c.req.query('cat')), c.get('destinationId'))
+      return xml(c, buildSearchResultXml(offered))
+    }
 
     switch (t) {
       case 'caps': {
@@ -171,9 +178,7 @@ export function getTorznabRouter(controller: TorznabController) {
       // self-test, which *arr requires to return results).
       case 'search': {
         const q = c.req.query('q')?.trim()
-        const items = q ? [] : await controller.catalog(apiKey)
-        const body = buildSearchResultXml(filterByCategory(items, c.req.query('cat')))
-        return xml(c, body)
+        return respond(q ? [] : await controller.catalog(apiKey))
       }
 
       case 'movie': {
@@ -185,8 +190,7 @@ export function getTorznabRouter(controller: TorznabController) {
           items = await controller.searchMovie({ tmdbId, imdbId }, apiKey)
         else
           items = q ? [] : await controller.catalog(apiKey)
-        const body = buildSearchResultXml(filterByCategory(items, c.req.query('cat')))
-        return xml(c, body)
+        return respond(items)
       }
 
       case 'tvsearch': {
@@ -206,8 +210,7 @@ export function getTorznabRouter(controller: TorznabController) {
         else {
           items = q ? [] : await controller.catalog(apiKey)
         }
-        const body = buildSearchResultXml(filterByCategory(items, c.req.query('cat')))
-        return xml(c, body)
+        return respond(items)
       }
 
       default: {

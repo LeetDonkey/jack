@@ -1,4 +1,4 @@
-import type { AutoRegisterConfig, ConnectorHeadersConfig, ServerConfig } from '../../config'
+import type { AutoRegisterConfig, ConnectorHeadersConfig, ServerConfig, UpgradePolicyConfig } from '../../config'
 import type { Release } from '../../release'
 import z from 'zod'
 import { logger } from '../../../logger'
@@ -106,18 +106,20 @@ export abstract class ArrServerConnector extends ServerConnector {
   public readonly canSource: boolean
   public readonly canDestination: boolean
   public readonly autoRegister: AutoRegisterConfig
+  public readonly upgrades: UpgradePolicyConfig
   protected readonly expectedAppName: string
 
   constructor(
     connectorConfig: { pingPath: string, pingMethod: string, authHeader: string, expectedAppName: string },
     // `headers` optional so subclasses/tests can omit it; the base defaults it to {}.
-    config: Omit<ServerConfig, 'headers'> & { headers?: ConnectorHeadersConfig },
+    config: Omit<ServerConfig, 'headers' | 'upgrades'> & { headers?: ConnectorHeadersConfig, upgrades?: UpgradePolicyConfig },
   ) {
     super(connectorConfig, config)
     this.expectedAppName = connectorConfig.expectedAppName
     this.canSource = config.source
     this.canDestination = config.destination
     this.autoRegister = config.autoregister
+    this.upgrades = config.upgrades ?? { allow: true }
   }
 
   // Category id reported to *arr (2000 movies / 5000 tv).
@@ -216,6 +218,23 @@ export abstract class ArrServerConnector extends ServerConnector {
   protected abstract doGetFilePath(id: string): Promise<string | null>
 
   // ---- Destination role ----
+
+  /**
+   * The files this *arr already has for the item a release describes (empty when
+   * it has none). Used as a destination to hold back peer releases that would only
+   * be upgrades, so it skips the source guard on the do* lookups.
+   */
+  @requiresDestination
+  @requiresInitialization
+  async ownedFiles(item: { tmdbId?: number, imdbId?: string, tvdbId?: number, season?: number, episode?: number }): Promise<Release[]> {
+    if (item.tmdbId != null)
+      return this.doSearchByTmdbId(String(item.tmdbId))
+    if (item.imdbId)
+      return this.doSearchByImdbId(item.imdbId)
+    if (item.tvdbId != null)
+      return this.doSearchByTvdbId(String(item.tvdbId), item.season, item.episode)
+    return []
+  }
 
   @requiresDestination
   @requiresInitialization

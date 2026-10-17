@@ -101,6 +101,16 @@ export const AutoRegisterConfig = z.object({
 
 export type AutoRegisterConfig = z.infer<typeof AutoRegisterConfig>
 
+// Whether jack offers peer releases for items this *arr already has a file for.
+// `allow: false` offers only what is missing; `maxSizeGiB` lets an upgrade
+// through only up to that size. Missing items are always offered.
+export const UpgradePolicyConfig = z.object({
+  allow: z.boolean().default(true),
+  maxSizeGiB: z.number().positive().nullish(),
+})
+
+export type UpgradePolicyConfig = z.infer<typeof UpgradePolicyConfig>
+
 export const ServerConfig = z.object({
   name: z.string(),
   url: z.url(),
@@ -110,6 +120,7 @@ export const ServerConfig = z.object({
   source: z.boolean().default(true),
   destination: z.boolean().default(true),
   autoregister: AutoRegisterConfig.prefault({}),
+  upgrades: UpgradePolicyConfig.prefault({}),
 })
 
 export type ServerConfig = z.infer<typeof ServerConfig>
@@ -125,6 +136,7 @@ export const RawServerConfig = z.object({
   source: z.boolean().optional(),
   destination: z.boolean().optional(),
   autoregister: z.object({ enable: z.boolean().optional(), priority: z.number().int().min(1).max(50).optional() }).optional(),
+  upgrades: z.object({ allow: z.boolean().optional(), maxSizeGiB: z.number().positive().nullish() }).optional(),
 })
 
 export type RawServerConfig = z.infer<typeof RawServerConfig>

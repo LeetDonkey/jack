@@ -46,6 +46,7 @@ it alone.)
 | [`servers[].source`](#servers-source) | Share this library with peers |
 | [`servers[].destination`](#servers-destination) | Search + import through this *arr |
 | [`servers[].autoregister`](#servers-autoregister) | Indexer/client registration control |
+| [`servers[].upgrades`](#servers-upgrades) | Peer releases for items you already have |
 | [`peers[].name`](#peers-name) | Display name |
 | [`peers[].url`](#peers-url) | Friend's peer URL |
 | [`peers[].apiKey`](#peers-apikey) | Key the friend issued you |
@@ -371,6 +372,24 @@ servers on startup, and again when the server is saved in the management UI.
   jack's client. Grabs from the Jack indexer still reach it because the indexer
   is bound to the client explicitly (`downloadClientId`), which *arr resolves
   before applying priority.
+
+### `servers[].upgrades`
+
+**Type:** `object`\
+**Content:** `allow`: `boolean`, default `true` · `maxSizeGiB`: `number` > 0, optional
+
+Which peer releases jack offers this destination for movies and episodes it
+already has a file for. Releases for missing items are always offered.
+
+- **`allow`**: set `false` to offer only what the destination is missing. *arr
+  then never replaces a file with a peer's copy.
+- **`maxSizeGiB`**: with `allow` on, offer an upgrade only when the release is at
+  most this many GiB.
+
+To tell, jack looks the item up in the destination when it answers a search or
+RSS sync, and reuses each answer for 10 minutes. When the lookup fails the
+release is left out of that answer. Editable in the server form under
+***Settings -> Servers*** and applies right away.
 
 ## `peers`
 
