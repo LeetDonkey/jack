@@ -17,11 +17,14 @@ import { ConfigService } from './modules/config/config.service'
 import { DownloadsRepository } from './modules/downloads/downloads.repository'
 import { DownloadsService } from './modules/downloads/downloads.service'
 import { ImportWatcher } from './modules/downloads/import-watcher'
+import { PeerHealthMonitor } from './modules/friends/peer-health'
 import { ManagedKeysRepository } from './modules/managed-keys/managed-keys.repository'
 import { ManagedApiKeys } from './modules/managed-keys/managed-keys.service'
+import { buildDailySummary } from './modules/notifications/daily-summary'
+import { NotificationsService } from './modules/notifications/notifications.service'
 import { PieceHasher } from './modules/peer/piece-hasher'
 import { qbCategoryForServer } from './modules/qbittorrent/qbittorrent.mapper'
-import { TrafficLedger } from './modules/transfers/traffic-ledger'
+import { localDay, TrafficLedger } from './modules/transfers/traffic-ledger'
 import { TransfersService } from './modules/transfers/transfers.service'
 
 function logRegistrationFailure(what: string, destName: string | undefined, err: unknown) {
@@ -114,6 +117,29 @@ const importWatcher = downloadsConfig
     })
   : undefined
 
+// Notifications (webhooks) and peer reachability, read live from the config.
+const notificationsConfig = () => configService?.getNotifications() ?? config.notifications
+const notifications = new NotificationsService(notificationsConfig)
+const peerHealth = new PeerHealthMonitor(
+  () => connectorManager.peers,
+  () => (notificationsConfig()?.peerOfflineMinutes ?? 60) * 60_000,
+)
+peerHealth.onEvent((event) => {
+  const { name } = event.peer
+  void notifications.send(event.type === 'offline'
+    ? { event: 'peer-offline', title: `${name} is offline`, message: `jack hasn't reached ${name} for ${event.offlineMinutes} minutes. Downloads from them wait and retry.${event.peer.lastError ? `\nLast error: ${event.peer.lastError}` : ''}` }
+    : { event: 'peer-back', title: `${name} is back`, message: `${name} answers again after ${event.offlineMinutes} minutes offline.` })
+})
+downloadsService?.onDownloadFailed((record, error) => {
+  void notifications.send({ event: 'download-failed', title: `Download failed: ${record.filename}`, message: `From ${record.peerName}: ${error}` })
+})
+notifications.startDailySummary(() => buildDailySummary(
+  transfersService.ledger?.totalsSince(localDay(new Date())) ?? [],
+  downloadsRepository.list(),
+  new Date(),
+))
+peerHealth.start()
+
 function startManagementServer() {
   if (!envs.MANAGEMENT_KEY)
     return undefined
@@ -134,6 +160,8 @@ function startManagementServer() {
     transfersService,
     apiKeysRepository,
     tmdbApiKey: config.jack.tmdbApiKey,
+    peerHealth,
+    notifications,
   })
   const instance = Bun.serve({ port: envs.MANAGEMENT_PORT, fetch: managementApp.fetch, idleTimeout: 60 })
   logger.info({ port: instance.port }, 'Management API listening')
@@ -214,6 +242,8 @@ else {
 process.on('SIGINT', async () => {
   logger.info('SIGINT received, exiting')
   importWatcher?.stop()
+  peerHealth.stop()
+  notifications.stop()
   // Before database.close(): stopping flushes the traffic counts.
   transfersService.stop()
   database.close()
@@ -226,6 +256,8 @@ process.on('SIGINT', async () => {
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM received, exiting')
   importWatcher?.stop()
+  peerHealth.stop()
+  notifications.stop()
   // Before database.close(): stopping flushes the traffic counts.
   transfersService.stop()
   database.close()

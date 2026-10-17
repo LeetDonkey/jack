@@ -4,7 +4,7 @@ import type { ConnectorManager } from '../../lib/servers'
 import type { DownloadsRepository } from '../downloads/downloads.repository'
 import { jsonc } from 'jsonc'
 import { atomicWriteFile } from '../../lib/atomic-write'
-import { BandwidthConfig, DownloadsConfig, ExternalJackConfig, JackConfig, PeerConfig, RawBandwidthConfig, RawDownloadsConfig, RawExternalJackConfig, RawJackConfig, RawPeerConfig, RawServerConfig, RawTorznabConfig, ServerConfig, TorznabConfig } from '../../lib/config'
+import { BandwidthConfig, DownloadsConfig, ExternalJackConfig, JackConfig, NotificationsConfig, PeerConfig, RawBandwidthConfig, RawDownloadsConfig, RawExternalJackConfig, RawJackConfig, RawNotificationsConfig, RawPeerConfig, RawServerConfig, RawTorznabConfig, ServerConfig, TorznabConfig } from '../../lib/config'
 import { BadRequestError } from '../../lib/errors/BadRequestError'
 import { ConflictError } from '../../lib/errors/ConflictError'
 import { NotFoundError } from '../../lib/errors/NotFoundError'
@@ -432,6 +432,37 @@ export class ConfigService {
       }
       TorznabConfig.parse(merged)
       const next = { ...this.raw, torznab: merged } as RawConfig
+      await this.persist(next)
+      this.raw = next
+    })
+  }
+
+  // ── Notifications ──────────────────────────────────────────────────────────
+  /**
+   * Notification settings with secrets resolved, for sending. Undefined when the
+   * block is absent or a webhook URL reference can't be resolved.
+   */
+  getNotifications(): NotificationsConfig | undefined {
+    const parsed = NotificationsConfig.safeParse(this.raw.notifications ?? {})
+    return parsed.success ? parsed.data : undefined
+  }
+
+  /** The block as stored, with {env}/{file} references intact (for the UI). */
+  getRawNotifications(): RawNotificationsConfig {
+    return RawNotificationsConfig.parse(this.raw.notifications ?? {})
+  }
+
+  /** Patch the notifications block: `null` restores a default; `webhooks` is replaced whole. Applies immediately. */
+  async updateNotifications(input: unknown): Promise<void> {
+    const patch = RawNotificationsConfig.parse(input)
+    return this.enqueue(async () => {
+      const merged: Record<string, unknown> = { ...(this.raw.notifications ?? {}), ...patch }
+      for (const [key, value] of Object.entries(merged)) {
+        if (value === null)
+          delete merged[key]
+      }
+      NotificationsConfig.parse(merged)
+      const next = { ...this.raw, notifications: merged } as RawConfig
       await this.persist(next)
       this.raw = next
     })

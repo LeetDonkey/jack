@@ -377,12 +377,45 @@ export const RawTorznabConfig = z.object({
 
 export type RawTorznabConfig = z.infer<typeof RawTorznabConfig>
 
+// Where jack sends notifications. `discord` posts to a Discord webhook URL,
+// `ntfy` to an ntfy topic URL, `json` posts `{ event, title, message, at }`
+// (e.g. to a Home Assistant webhook). The URL usually embeds a secret.
+export const NotificationWebhook = z.object({
+  type: z.enum(['discord', 'ntfy', 'json']),
+  url: ConfigSecret(),
+})
+
+export const NotificationsConfig = z.object({
+  webhooks: z.array(NotificationWebhook).default([]),
+  // A download that failed for good (after its retries and retry window).
+  downloadFailed: z.boolean().default(true),
+  // A peer unreachable for this long, and again when it is back.
+  peerOffline: z.boolean().default(true),
+  peerOfflineMinutes: z.number().int().min(5).default(60),
+  // HH:MM (server time) for a daily summary of traffic and downloads; absent means none.
+  dailySummaryAt: TimeOfDay.nullish(),
+})
+
+export type NotificationsConfig = z.infer<typeof NotificationsConfig>
+
+// PATCH body: `null` drops a key back to its default; `webhooks` is replaced whole.
+export const RawNotificationsConfig = z.object({
+  webhooks: z.array(z.object({ type: z.enum(['discord', 'ntfy', 'json']), url: RawConfigSecret })).nullish(),
+  downloadFailed: z.boolean().nullish(),
+  peerOffline: z.boolean().nullish(),
+  peerOfflineMinutes: z.number().int().min(5).nullish(),
+  dailySummaryAt: TimeOfDay.nullish(),
+})
+
+export type RawNotificationsConfig = z.infer<typeof RawNotificationsConfig>
+
 export const AppConfig = z.object({
   version: z.number(),
   jack: JackConfig,
   downloads: DownloadsConfig.optional(),
   bandwidth: BandwidthConfig.optional(),
   torznab: TorznabConfig.optional(),
+  notifications: NotificationsConfig.optional(),
   servers: z.array(ServerConfig).default([]),
   peers: z.array(PeerConfig).default([]),
 })

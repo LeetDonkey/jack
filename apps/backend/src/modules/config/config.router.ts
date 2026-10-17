@@ -2,7 +2,7 @@ import type { ConfigController } from './config.controller'
 import { Hono } from 'hono'
 import { describeRoute, validator as zValidator } from 'hono-openapi'
 import { z } from 'zod'
-import { RawBandwidthConfig, RawDownloadsConfig, RawExternalJackConfig, RawJackConfig, RawPeerConfig, RawServerConfig, RawTorznabConfig } from '../../lib/config'
+import { RawBandwidthConfig, RawDownloadsConfig, RawExternalJackConfig, RawJackConfig, RawNotificationsConfig, RawPeerConfig, RawServerConfig, RawTorznabConfig } from '../../lib/config'
 import { streamSnapshots } from '../../lib/sse'
 
 const idParam = z.object({ id: z.string().min(1) })
@@ -27,6 +27,7 @@ export function getConfigRouter(controller: ConfigController) {
   app.get('/downloads', configDoc('Get the downloads block', 'The persisted downloads config, or null when downloads are not configured.'), c => c.json(controller.getDownloads()))
   app.get('/bandwidth', configDoc('Get the bandwidth block', 'Combined rate limits, the upload slot limit and the weekly schedule, with defaults applied. Null when bandwidth is not configured.'), c => c.json(controller.getBandwidth()))
   app.get('/torznab', configDoc('Get the torznab block', 'What the Torznab RSS feed offers: releases peers added within rssMaxAgeDays, newest first, at most rssMaxItems. Defaults apply when the block is absent.'), c => c.json(controller.getTorznab()))
+  app.get('/notifications', configDoc('Get the notifications block', 'Webhooks and which events to send, as stored: webhook URLs keep their {env}/{file} references.'), c => c.json(controller.getNotifications()))
   app.get('/stream', describeRoute({
     tags: ['Config'],
     summary: 'Stream connector config',
@@ -93,6 +94,10 @@ export function getConfigRouter(controller: ConfigController) {
 
     app.patch('/torznab', configDoc('Update the torznab block', 'Merges the given fields into the stored torznab config. `null` restores a default. Applies immediately.'), zValidator('json', RawTorznabConfig), async (c) => {
       return c.json(await controller.updateTorznab(c.req.valid('json')))
+    })
+
+    app.patch('/notifications', configDoc('Update the notifications block', 'Merges the given fields into the stored notifications config. `null` restores a default; `webhooks` is replaced as a whole. Applies immediately.'), zValidator('json', RawNotificationsConfig), async (c) => {
+      return c.json(await controller.updateNotifications(c.req.valid('json')))
     })
   }
 

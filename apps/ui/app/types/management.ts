@@ -290,3 +290,51 @@ export interface TorznabConfig {
 }
 
 export type TorznabConfigPatch = { [K in keyof TorznabConfig]?: TorznabConfig[K] | null }
+
+// GET /friends: reachability and traffic per friend, both directions.
+export interface TrafficWindow {
+  today: number
+  week: number
+  month: number
+}
+
+export interface FriendPeer {
+  id: string
+  name: string
+  url: string
+  online: boolean | null
+  version: string | null
+  lastSeenAt: string | null
+  offlineSince: string | null
+  lastError: string | null
+  checkedAt: string | null
+  downloaded: TrafficWindow
+}
+
+export interface FriendKey {
+  id: number
+  name: string | null
+  expiresAt: string | null
+  activeUploads: number
+  uploaded: TrafficWindow
+}
+
+export interface FriendsSnapshot {
+  peers: FriendPeer[]
+  keys: FriendKey[]
+  limits: { maxConcurrentUploadsPerPeer: number | null, dailyUploadLimitGiBPerPeer: number | null }
+}
+
+// config.notifications as stored (webhook URLs may be {env}/{file} references).
+export interface NotificationWebhook {
+  type: 'discord' | 'ntfy' | 'json'
+  url: SecretRef
+}
+
+export interface NotificationsConfig {
+  webhooks?: NotificationWebhook[] | null
+  downloadFailed?: boolean | null
+  peerOffline?: boolean | null
+  peerOfflineMinutes?: number | null
+  dailySummaryAt?: string | null
+}

@@ -53,6 +53,7 @@ export class DownloadsService {
   private readonly active = new Set<string>()
   private readonly transfers = new Map<number, { controller: AbortController, task: Promise<void> }>()
   private readonly coordinator?: DownloadOperationCoordinator
+  private readonly failedListeners = new Set<(record: DownloadRecord, error: string) => void>()
 
   constructor(
     private readonly config: DownloadsServiceConfig,
@@ -68,6 +69,12 @@ export class DownloadsService {
     this.semaphore = new Semaphore(config.maxConcurrentDownloads)
     this.maxConcurrent = config.maxConcurrentDownloads
     this.coordinator = coordinator ?? (downloadsRepository ? coordinatorFor(downloadsRepository) : undefined)
+  }
+
+  /** Called when a download fails for good (not when it is cancelled). */
+  onDownloadFailed(listener: (record: DownloadRecord, error: string) => void): () => void {
+    this.failedListeners.add(listener)
+    return () => this.failedListeners.delete(listener)
   }
 
   get maxConcurrentDownloads(): number {
@@ -528,6 +535,15 @@ export class DownloadsService {
       // The stack is what pins down an unexpected error (e.g. a RangeError from a dependency).
       const stack = err instanceof Error ? err.stack : undefined
       logger.error({ torrentFilename: record.torrentFilename, filename: record.filename, error: message, stack }, 'Download failed')
+      // A cancel is the user's own doing; only real failures are announced.
+      if (!signal.aborted) {
+        for (const listener of this.failedListeners) {
+          try {
+            listener(record, message)
+          }
+          catch {}
+        }
+      }
     }
   }
 }

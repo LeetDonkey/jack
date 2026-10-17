@@ -299,6 +299,10 @@ async function confirmRevoke() {
 
         <USeparator />
 
+        <NotificationsSection />
+
+        <USeparator />
+
         <PeersSection ref="peersSection" />
 
         <USeparator />

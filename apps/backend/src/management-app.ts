@@ -4,6 +4,8 @@ import type { ConfigService } from './modules/config/config.service'
 import type { DownloadsRepository } from './modules/downloads/downloads.repository'
 import type { DownloadsService } from './modules/downloads/downloads.service'
 import type { ImportWatcher } from './modules/downloads/import-watcher'
+import type { PeerHealthMonitor } from './modules/friends/peer-health'
+import type { NotificationsService } from './modules/notifications/notifications.service'
 import type { TransfersService } from './modules/transfers/transfers.service'
 import { Hono } from 'hono'
 import { describeRoute, openAPIRouteHandler, resolver } from 'hono-openapi'
@@ -21,9 +23,11 @@ import { ConfigController } from './modules/config/config.controller'
 import { getConfigRouter } from './modules/config/config.router'
 import { DownloadsManagementController } from './modules/downloads/downloads.controller'
 import { getDownloadsManagementRouter } from './modules/downloads/downloads.router'
+import { getFriendsRouter } from './modules/friends/friends.router'
 import { logHub } from './modules/logging/log-store'
 import { LogsController } from './modules/logging/logs.controller'
 import { getLogsRouter } from './modules/logging/logs.router'
+import { getNotificationsRouter } from './modules/notifications/notifications.router'
 import { QuickLinksController } from './modules/quick-links/quick-links.controller'
 import { getQuickLinksRouter } from './modules/quick-links/quick-links.router'
 import { StatusController } from './modules/status/status.controller'
@@ -42,6 +46,8 @@ export function getManagementApp(params: {
   transfersService?: TransfersService
   apiKeysRepository?: ApiKeysRepository
   tmdbApiKey?: string
+  peerHealth?: PeerHealthMonitor
+  notifications?: NotificationsService
 }) {
   const app = new Hono()
 
@@ -85,6 +91,19 @@ export function getManagementApp(params: {
 
   if (params.transfersService)
     app.route('/transfers', getTransfersRouter(params.transfersService))
+
+  if (params.peerHealth) {
+    app.route('/friends', getFriendsRouter({
+      health: params.peerHealth,
+      ledger: params.transfersService?.ledger,
+      monitor: params.transfersService?.monitor,
+      apiKeys: params.apiKeysRepository,
+      bandwidth: () => params.configService?.getBandwidth(),
+    }))
+  }
+
+  if (params.notifications)
+    app.route('/notifications', getNotificationsRouter(params.notifications))
 
   const tmdbClient = params.tmdbApiKey ? new TmdbClient(params.tmdbApiKey) : undefined
   const catalogController = new CatalogController(params.connectors, tmdbClient, params.downloadsService)

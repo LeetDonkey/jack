@@ -160,4 +160,13 @@ export class ConfigController {
   updateTorznab(input: unknown) {
     return this.mutate(s => s.updateTorznab(input))
   }
+
+  /** The notifications block as stored (secret refs intact), or null when read-only. */
+  getNotifications() {
+    return this.configService?.getRawNotifications() ?? null
+  }
+
+  updateNotifications(input: unknown) {
+    return this.mutate(s => s.updateNotifications(input))
+  }
 }
