@@ -169,6 +169,7 @@ export interface DownloadsConfig {
   maxDownloadAttempts?: number
   retryBaseDelayMs?: number
   retryMaxDelayMs?: number
+  retryWindowMs?: number
   idleTimeoutMs?: number
   importPollIntervalMs?: number
   maxManualImportAttempts?: number

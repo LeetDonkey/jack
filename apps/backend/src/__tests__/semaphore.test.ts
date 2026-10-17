@@ -30,6 +30,22 @@ describe('Semaphore', () => {
     expect(order).toEqual([1, 2, 3])
   })
 
+  test('a front waiter is admitted before earlier waiters', async () => {
+    const sem = new Semaphore(1)
+    const order: number[] = []
+    await sem.acquire()
+    const waiters = [
+      sem.acquire().then(() => order.push(1)),
+      sem.acquire().then(() => order.push(2)),
+      sem.acquire(undefined, { front: true }).then(() => order.push(3)),
+    ]
+    sem.release()
+    sem.release()
+    sem.release()
+    await Promise.all(waiters)
+    expect(order).toEqual([3, 1, 2])
+  })
+
   test('releases the permit when the task throws', async () => {
     const sem = new Semaphore(1)
     await expect(sem.run(async () => {

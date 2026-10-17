@@ -519,6 +519,118 @@ describe('DownloadsService download progress persistence', () => {
     handle.close()
   })
 
+  test('network errors keep retrying past maxDownloadAttempts inside the retry window', async () => {
+    const handle = await openDatabase({ appConfigPath: join(tempDir, 'config.jsonc') })
+    const repository = new DownloadsRepository(handle.db)
+    let calls = 0
+    const peer = fakePeer({
+      downloadFile: async (_itemId: string, _destPath: string, options: any) => {
+        calls++
+        // The peer is unreachable for a while, then comes back.
+        if (calls <= 5)
+          throw Object.assign(new Error('Unable to connect.'), { code: 'ConnectionRefused' })
+        await options.onProgress({ type: 'completed', downloadedBytes: 10, expectedBytes: 10 })
+      },
+    })
+    const service = new DownloadsService(downloadsConfig({ maxDownloadAttempts: 2, retryWindowMs: 60_000 }), { peers: [peer as any] }, repository)
+
+    await service.startQbDownload({ peerId: 'peer-1', itemId: 'movie:1', qbCategory: 'jack-x', qbSourceServer: 'My Radarr', sourceServerId: 'radarr-1' })
+    await waitForStatus(repository, 'import_queued')
+
+    expect(calls).toBe(6)
+    expect(repository.list()[0]?.status).toBe('import_queued')
+    handle.close()
+  })
+
+  test('gives up once the retry window has passed without progress', async () => {
+    const handle = await openDatabase({ appConfigPath: join(tempDir, 'config.jsonc') })
+    const repository = new DownloadsRepository(handle.db)
+    let calls = 0
+    const peer = fakePeer({
+      downloadFile: async () => {
+        calls++
+        throw Object.assign(new Error('Unable to connect.'), { code: 'ConnectionRefused' })
+      },
+    })
+    const config = downloadsConfig({ maxDownloadAttempts: 1, retryWindowMs: 40, retryBaseDelayMs: 5, retryMaxDelayMs: 5 })
+    const service = new DownloadsService(config, { peers: [peer as any] }, repository)
+
+    await service.startQbDownload({ peerId: 'peer-1', itemId: 'movie:1', qbCategory: 'jack-x', qbSourceServer: 'My Radarr', sourceServerId: 'radarr-1' })
+    await waitForStatus(repository, 'failed')
+
+    expect(calls).toBeGreaterThan(1)
+    expect(repository.list()[0]).toMatchObject({ status: 'failed', error: 'Unable to connect.' })
+    handle.close()
+  })
+
+  test('a download waiting to retry gives its slot away, then goes ahead of fresh downloads', async () => {
+    const handle = await openDatabase({ appConfigPath: join(tempDir, 'config.jsonc') })
+    const repository = new DownloadsRepository(handle.db)
+    const gate = Promise.withResolvers<void>()
+    const secondGate = Promise.withResolvers<void>()
+    const order: string[] = []
+    let firstCalls = 0
+    const peer = {
+      ...fakePeer(),
+      getRelease: async (itemId: string) => ({ ...release, filename: `${itemId}.mkv` }),
+      downloadFile: async (itemId: string, _destPath: string, options: any) => {
+        order.push(itemId)
+        if (itemId === 'movie:1' && ++firstCalls === 1) {
+          await gate.promise
+          throw Object.assign(new Error('The socket connection was closed unexpectedly.'), { code: 'ECONNRESET' })
+        }
+        // Hold the slot until movie:1 is back in the queue.
+        if (itemId === 'movie:2')
+          await secondGate.promise
+        await options.onProgress({ type: 'completed', downloadedBytes: 10, expectedBytes: 10 })
+      },
+    }
+    const service = new DownloadsService(downloadsConfig({ maxConcurrentDownloads: 1 }), { peers: [peer as any] }, repository)
+
+    await service.startQbDownload({ peerId: 'peer-1', itemId: 'movie:1', qbCategory: 'jack-x', qbSourceServer: 'My Radarr', sourceServerId: 'radarr-1' })
+    await service.startQbDownload({ peerId: 'peer-1', itemId: 'movie:2', qbCategory: 'jack-x', qbSourceServer: 'My Radarr', sourceServerId: 'radarr-1' })
+    await service.startQbDownload({ peerId: 'peer-1', itemId: 'movie:3', qbCategory: 'jack-x', qbSourceServer: 'My Radarr', sourceServerId: 'radarr-1' })
+    gate.resolve()
+    for (let i = 0; i < 50 && !order.includes('movie:2'); i++)
+      await Bun.sleep(10)
+    // The backoff is 0 ms; give movie:1 time to rejoin the queue.
+    await Bun.sleep(30)
+    secondGate.resolve()
+    for (let i = 0; i < 50 && !repository.list().every(d => d.status === 'import_queued'); i++)
+      await Bun.sleep(10)
+
+    // movie:2 ran while movie:1 waited for its retry, and the retry went before movie:3.
+    expect(order).toEqual(['movie:1', 'movie:2', 'movie:1', 'movie:3'])
+    expect(repository.list().map(d => d.status)).toEqual(['import_queued', 'import_queued', 'import_queued'])
+    handle.close()
+  })
+
+  test('shows when the next attempt is due, and clears it once that attempt runs', async () => {
+    const handle = await openDatabase({ appConfigPath: join(tempDir, 'config.jsonc') })
+    const repository = new DownloadsRepository(handle.db)
+    const notes: Array<string | null> = []
+    repository.subscribe(() => notes.push(repository.list()[0]?.error ?? null))
+    let calls = 0
+    let errorDuringRetry: string | null | undefined
+    const peer = fakePeer({
+      downloadFile: async (_itemId: string, _destPath: string, options: any) => {
+        calls++
+        if (calls === 1)
+          throw Object.assign(new Error('The socket connection was closed unexpectedly.'), { code: 'ECONNRESET' })
+        errorDuringRetry = repository.list()[0]?.error
+        await options.onProgress({ type: 'completed', downloadedBytes: 10, expectedBytes: 10 })
+      },
+    })
+    const service = new DownloadsService(downloadsConfig(), { peers: [peer as any] }, repository)
+
+    await service.startQbDownload({ peerId: 'peer-1', itemId: 'movie:1', qbCategory: 'jack-x', qbSourceServer: 'My Radarr', sourceServerId: 'radarr-1' })
+    await waitForStatus(repository, 'import_queued')
+
+    expect(notes).toContainEqual(expect.stringMatching(/^Waiting to retry at \d\d:\d\d: The socket connection was closed unexpectedly\.$/))
+    expect(errorDuringRetry).toBeNull()
+    handle.close()
+  })
+
   test('tracks the transfer live and paces every chunk through the download limiter', async () => {
     const handle = await openDatabase({ appConfigPath: join(tempDir, 'config.jsonc') })
     const repository = new DownloadsRepository(handle.db)

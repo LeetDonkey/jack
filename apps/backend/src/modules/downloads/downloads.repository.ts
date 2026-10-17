@@ -249,6 +249,15 @@ export class DownloadsRepository {
     this.notifyChanged()
   }
 
+  /** Set or clear the message shown on a row without changing its status. */
+  setError(id: number, error: string | null): void {
+    this.db.update(downloads)
+      .set({ error, updatedAt: nowIso() })
+      .where(eq(downloads.id, id))
+      .run()
+    this.notifyChanged()
+  }
+
   markResumeReset(id: number): void {
     this.db.update(downloads)
       .set({ downloadedBytes: 0, error: 'resume validation failed; restarted from byte 0', updatedAt: nowIso() })

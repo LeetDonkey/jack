@@ -248,6 +248,10 @@ export const DownloadsConfig = z.object({
   maxDownloadAttempts: z.number().int().min(1).default(13),
   retryBaseDelayMs: z.number().int().min(0).default(1000),
   retryMaxDelayMs: z.number().int().min(0).default(1_800_000),
+  // A transient failure is retried past maxDownloadAttempts until this long has
+  // passed since the download last received data, so a peer that is down for a
+  // few hours does not fail the queue. 0 leaves only maxDownloadAttempts.
+  retryWindowMs: z.number().int().min(0).default(86_400_000),
   idleTimeoutMs: z.number().int().min(1000).default(60_000),
   // How often the import watcher polls each destination *arr's history to detect
   // which finished downloads it has imported (flipping them import_queued → imported).
@@ -283,6 +287,7 @@ export const RawDownloadsConfig = z.object({
   maxDownloadAttempts: z.number().int().min(1).nullish(),
   retryBaseDelayMs: z.number().int().min(0).nullish(),
   retryMaxDelayMs: z.number().int().min(0).nullish(),
+  retryWindowMs: z.number().int().min(0).nullish(),
   idleTimeoutMs: z.number().int().min(1000).nullish(),
   importPollIntervalMs: z.number().int().min(1000).nullish(),
   maxManualImportAttempts: z.number().int().min(1).nullish(),

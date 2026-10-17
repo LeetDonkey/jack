@@ -21,6 +21,7 @@ function blankState() {
     maxDownloadAttempts: null as number | null,
     retryBaseDelayMs: null as number | null,
     retryMaxDelayMs: null as number | null,
+    retryWindowMs: null as number | null,
     idleTimeoutMs: null as number | null,
     importPollIntervalMs: null as number | null,
     maxManualImportAttempts: null as number | null,
@@ -89,6 +90,7 @@ async function save() {
     maxDownloadAttempts: state.maxDownloadAttempts,
     retryBaseDelayMs: state.retryBaseDelayMs,
     retryMaxDelayMs: state.retryMaxDelayMs,
+    retryWindowMs: state.retryWindowMs,
     idleTimeoutMs: state.idleTimeoutMs,
     importPollIntervalMs: state.importPollIntervalMs,
     maxManualImportAttempts: state.maxManualImportAttempts,
@@ -125,7 +127,7 @@ function revert() {
 // The two collapsed groups. `custom` counts the keys in a group that carry a value
 // other than jack's default, so a collapsed group still says whether it holds
 // anything you set yourself.
-const transferKeys = ['maxDownloadAttempts', 'idleTimeoutMs', 'retryBaseDelayMs', 'retryMaxDelayMs'] as const
+const transferKeys = ['maxDownloadAttempts', 'retryWindowMs', 'idleTimeoutMs', 'retryBaseDelayMs', 'retryMaxDelayMs'] as const
 const importKeys = ['importPollIntervalMs', 'maxManualImportAttempts', 'manualImportBackoffBaseMs', 'manualImportBackoffMaxMs'] as const
 
 const DEFAULTS: Record<string, number> = {
@@ -133,6 +135,7 @@ const DEFAULTS: Record<string, number> = {
   maxDownloadAttempts: 13,
   retryBaseDelayMs: 1000,
   retryMaxDelayMs: 1_800_000,
+  retryWindowMs: 86_400_000,
   idleTimeoutMs: 60_000,
   importPollIntervalMs: 30_000,
   maxManualImportAttempts: 6,
@@ -233,9 +236,18 @@ const importOpen = ref(false)
               :disabled="saving"
               name="maxDownloadAttempts"
               label="Attempts before giving up"
-              description="How many times a failing download is retried before it's marked failed."
+              description="How many times a failing download is retried before it's marked failed, unless the retry window below is still open."
               :default-value="DEFAULTS.maxDownloadAttempts!"
               :min="1"
+            />
+            <ConfigNumberField
+              v-model="state.retryWindowMs"
+              :disabled="saving"
+              name="retryWindowMs"
+              label="Retry window"
+              description="After a network or peer error, keep retrying until this long has passed since the download last received data, even when the attempts above are used up. Waiting downloads don't take a transfer slot. 0 turns it off."
+              :default-value="DEFAULTS.retryWindowMs!"
+              unit="ms"
             />
             <ConfigNumberField
               v-model="state.idleTimeoutMs"

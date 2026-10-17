@@ -29,6 +29,7 @@ it alone.)
 | [`downloads.maxDownloadAttempts`](#downloads-maxdownloadattempts) | Retries before a download fails |
 | [`downloads.retryBaseDelayMs`](#downloads-retrybasedelayms) | Download retry backoff base |
 | [`downloads.retryMaxDelayMs`](#downloads-retrymaxdelayms) | Download retry backoff cap |
+| [`downloads.retryWindowMs`](#downloads-retrywindowms) | How long network errors are retried |
 | [`downloads.idleTimeoutMs`](#downloads-idletimeoutms) | Stalled-transfer timeout |
 | [`downloads.importPollIntervalMs`](#downloads-importpollintervalms) | Import watcher poll cadence |
 | [`downloads.maxManualImportAttempts`](#downloads-maxmanualimportattempts) | Retries before an import fails |
@@ -156,6 +157,9 @@ Maximum simultaneous transfers from peers.
 **Default:** `13`
 
 How many times a failing download is attempted before it's marked failed.
+Attempts that grow the partial file don't count. A network or peer error is
+retried past this limit while
+[`downloads.retryWindowMs`](#downloads-retrywindowms) is still open.
 
 ### `downloads.retryBaseDelayMs`
 
@@ -172,6 +176,24 @@ Base delay for the exponential backoff between download retries.
 **Default:** `1800000`
 
 Upper bound for the download retry backoff. The default is 30 minutes.
+
+### `downloads.retryWindowMs`
+
+**Type:** `integer`\
+**Format:** milliseconds, ≥ 0\
+**Default:** `86400000`
+
+How long jack keeps retrying a download that fails with a network error, a
+timeout, HTTP 429 or a 5xx from the peer, counted from the last time the
+download received data. Within the window the attempt limit doesn't apply, so a
+peer that is offline for a few hours doesn't fail the queue. The default is 24
+hours; `0` leaves only
+[`downloads.maxDownloadAttempts`](#downloads-maxdownloadattempts).
+
+A download waiting between attempts doesn't hold one of the
+[`downloads.maxConcurrentDownloads`](#downloads-maxconcurrentdownloads) slots,
+and shows the time of its next attempt in ***Downloads***. Other errors, such
+as a 404 for a release the peer no longer has, fail right away.
 
 ### `downloads.idleTimeoutMs`
 

@@ -15,7 +15,13 @@ import { unlinkDownloadArtifact } from './artifact-cleanup'
 import { coordinatorFor } from './download-operation-coordinator'
 import { downloadRetryAfterMs, isTransientDownloadError } from './retry-policy'
 
-type DownloadsServiceConfig = NonNullable<AppConfig['downloads']>
+// retryWindowMs is optional so a config built without the schema keeps only the
+// maxDownloadAttempts limit.
+type DownloadsServiceConfig = Omit<NonNullable<AppConfig['downloads']>, 'retryWindowMs'> & { retryWindowMs?: number }
+
+// HH:MM in the server's time zone, for the "waiting to retry" note on a row.
+const retryTimeFormat = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' })
+const RETRY_WAIT_PREFIX = 'Waiting to retry at'
 
 // Characters disallowed in the synthetic qB torrent filename (keep word chars, dot, dash).
 const UNSAFE_FILENAME_CHARS = /[^\w.-]/g
@@ -361,7 +367,7 @@ export class DownloadsService {
       return
     this.active.add(record.destPath)
     try {
-      await this.semaphore.run(() => this.downloadWithRetry(record, controller.signal), controller.signal)
+      await this.downloadWithRetry(record, controller.signal)
     }
     catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -404,8 +410,19 @@ export class DownloadsService {
       return await part.exists() ? part.size : 0
     }
 
+    // Start of the retry window: the first attempt, then the last byte received.
+    let lastProgressAt: number | undefined
+    const retryWindowMs = this.config.retryWindowMs ?? 0
+
     try {
-      await retry(async () => {
+      // Each attempt takes a download slot and gives it back before the backoff,
+      // so a peer that is down doesn't block downloads from the others. A retry
+      // rejoins the head of the queue, so it doesn't wait behind fresh downloads.
+      await retry(attempt => this.semaphore.run(async () => {
+        lastProgressAt ??= Date.now()
+        // Clear the "waiting to retry" note now that the next attempt is running.
+        if (repo?.get(record.id)?.error?.startsWith(RETRY_WAIT_PREFIX))
+          repo.setError(record.id, null)
         // A transient failure that still grew the .part resumes right away and
         // doesn't use up a retry attempt. Otherwise a link that drops every GiB
         // could never finish a file larger than maxDownloadAttempts GiB. Only
@@ -435,6 +452,7 @@ export class DownloadsService {
                 await onProgress(event)
               },
               onChunk: async (bytes) => {
+                lastProgressAt = Date.now()
                 transfer?.add(bytes)
                 await this.transfersService?.downloadLimiter.take(bytes, signal)
               },
@@ -445,6 +463,7 @@ export class DownloadsService {
           catch (err) {
             if (signal.aborted || !isTransientDownloadError(err) || await partBytes() <= bytesBefore)
               throw err
+            lastProgressAt = Date.now()
             const message = err instanceof Error ? err.message : String(err)
             logger.warn({ torrentFilename: record.torrentFilename, error: message }, 'Peer download interrupted after progress; resuming')
           }
@@ -452,8 +471,9 @@ export class DownloadsService {
             transfer?.end()
           }
         }
-      }, {
+      }, signal, { front: attempt > 1 }), {
         maxAttempts: this.config.maxDownloadAttempts,
+        keepRetrying: () => lastProgressAt != null && Date.now() - lastProgressAt < retryWindowMs,
         baseDelayMs: this.config.retryBaseDelayMs,
         maxDelayMs: this.config.retryMaxDelayMs,
         isRetryable: isTransientDownloadError,
@@ -461,6 +481,7 @@ export class DownloadsService {
         onRetry: ({ attempt, delayMs, error }) => {
           const message = error instanceof Error ? error.message : String(error)
           logger.warn({ torrentFilename: record.torrentFilename, attempt, delayMs, error: message }, 'Retrying peer download after transient failure')
+          repo?.setError(record.id, `${RETRY_WAIT_PREFIX} ${retryTimeFormat.format(Date.now() + delayMs)}: ${message}`)
         },
         signal,
       })

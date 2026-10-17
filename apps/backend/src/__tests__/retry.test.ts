@@ -36,6 +36,35 @@ describe('retry', () => {
     expect(calls).toBe(2)
   })
 
+  test('keepRetrying extends past maxAttempts until it returns false', async () => {
+    let calls = 0
+    const delays: number[] = []
+    await expect(retry(async () => {
+      calls++
+      throw new Error('down')
+    }, {
+      maxAttempts: 2,
+      keepRetrying: () => calls < 1100,
+      baseDelayMs: 0,
+      maxDelayMs: 0,
+      isRetryable: () => true,
+      sleep: async (ms) => { delays.push(ms) },
+      random: () => 1,
+    })).rejects.toThrow('down')
+    expect(calls).toBe(1100)
+    // 2 ** 1100 is Infinity, and 0 * Infinity would be a NaN delay.
+    expect(delays.at(-1)).toBe(0)
+  })
+
+  test('keepRetrying does not retry a non-retryable error', async () => {
+    let calls = 0
+    await expect(retry(async () => {
+      calls++
+      throw new Error('nope')
+    }, { maxAttempts: 1, keepRetrying: () => true, baseDelayMs: 1, maxDelayMs: 1, isRetryable: () => false, sleep: noSleep })).rejects.toThrow('nope')
+    expect(calls).toBe(1)
+  })
+
   test('does not retry a non-retryable error', async () => {
     let calls = 0
     await expect(retry(async () => {

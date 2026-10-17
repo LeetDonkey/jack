@@ -1,6 +1,8 @@
 export interface RetryOptions {
   /** Total attempts, including the first. */
   maxAttempts: number
+  /** Keep retrying past maxAttempts for as long as this returns true. */
+  keepRetrying?: () => boolean
   baseDelayMs: number
   maxDelayMs: number
   /** Whether a thrown error should be retried. */
@@ -36,7 +38,7 @@ function abortableDefaultSleep(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 export async function retry<T>(fn: (attempt: number) => Promise<T>, options: RetryOptions): Promise<T> {
-  const { maxAttempts, baseDelayMs, maxDelayMs, isRetryable, retryAfterMs, onRetry } = options
+  const { maxAttempts, keepRetrying, baseDelayMs, maxDelayMs, isRetryable, retryAfterMs, onRetry } = options
   const sleep = options.sleep ?? defaultSleep
   const random = options.random ?? Math.random
 
@@ -49,12 +51,13 @@ export async function retry<T>(fn: (attempt: number) => Promise<T>, options: Ret
       return await fn(attempt)
     }
     catch (error) {
-      if (attempt >= maxAttempts || !isRetryable(error))
+      if (!isRetryable(error) || (attempt >= maxAttempts && !keepRetrying?.()))
         throw error
 
       const explicit = retryAfterMs?.(error) ?? null
-      // Full jitter (AWS): pick uniformly in [0, exponential backoff].
-      const backoff = Math.min(maxDelayMs, baseDelayMs * 2 ** (attempt - 1))
+      // Full jitter (AWS): pick uniformly in [0, exponential backoff]. The exponent
+      // is clamped so a long keepRetrying run can't overflow to Infinity.
+      const backoff = Math.min(maxDelayMs, baseDelayMs * 2 ** Math.min(attempt - 1, 52))
       const delayMs = explicit != null ? Math.min(explicit, maxDelayMs) : random() * backoff
       onRetry?.({ attempt, delayMs, error })
       if (options.signal && !options.sleep) {

@@ -38,7 +38,8 @@ export class Semaphore {
     waiter.resolve()
   }
 
-  async acquire(signal?: AbortSignal): Promise<void> {
+  /** `front` joins the head of the queue instead of the tail (e.g. a retry that already had a turn). */
+  async acquire(signal?: AbortSignal, { front = false }: { front?: boolean } = {}): Promise<void> {
     signal?.throwIfAborted()
     if (this.available > 0) {
       this.available--
@@ -55,7 +56,10 @@ export class Semaphore {
         }
         signal.addEventListener('abort', waiter.onAbort, { once: true })
       }
-      this.waiters.push(waiter)
+      if (front)
+        this.waiters.unshift(waiter)
+      else
+        this.waiters.push(waiter)
     })
   }
 
@@ -74,8 +78,8 @@ export class Semaphore {
     this.available++
   }
 
-  async run<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-    await this.acquire(signal)
+  async run<T>(fn: () => Promise<T>, signal?: AbortSignal, options?: { front?: boolean }): Promise<T> {
+    await this.acquire(signal, options)
     try {
       return await fn()
     }
