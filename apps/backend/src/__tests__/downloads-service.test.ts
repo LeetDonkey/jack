@@ -884,3 +884,40 @@ describe('DownloadsService download progress persistence', () => {
     handle.close()
   })
 })
+
+describe('DownloadsService with several peers', () => {
+  test('continues from another peer with a byte-identical file when the grabbed peer fails', async () => {
+    const handle = await openDatabase({ appConfigPath: join(tempDir, 'config.jsonc') })
+    const repository = new DownloadsRepository(handle.db)
+    const pieces = { size: 10, pieceBytes: 4, hashes: new Uint8Array(96) }
+    const used: string[] = []
+    const primary = {
+      ...fakePeer(),
+      getRelease: async () => ({ ...release, tmdbId: 42 }),
+      getPieces: async () => pieces,
+      downloadFile: async () => {
+        used.push('primary')
+        throw Object.assign(new Error('Unable to connect.'), { code: 'ConnectionRefused' })
+      },
+    }
+    const mirror = {
+      ...fakePeer(),
+      id: 'peer-2',
+      name: 'Other Friend',
+      getPieces: async () => pieces,
+      searchByTmdbId: async () => [{ ...release, id: 'mirror:movie:7', tmdbId: 42 }],
+      downloadFile: async (itemId: string, _destPath: string, options: any) => {
+        used.push(`mirror ${itemId}`)
+        await options.onProgress({ type: 'completed', downloadedBytes: 10, expectedBytes: 10 })
+      },
+    }
+    const service = new DownloadsService(downloadsConfig({ maxDownloadAttempts: 3 }), { peers: [primary as any, mirror as any] }, repository)
+
+    await service.startQbDownload({ peerId: 'peer-1', itemId: 'movie:1', qbCategory: 'jack-x', qbSourceServer: 'My Radarr', sourceServerId: 'radarr-1' })
+    await waitForStatus(repository, 'import_queued')
+
+    expect(used).toEqual(['primary', 'mirror mirror:movie:7'])
+    expect(repository.list()[0]?.status).toBe('import_queued')
+    handle.close()
+  })
+})

@@ -1,6 +1,8 @@
 import type { AuthVariables } from '../../middleware/require-auth'
 import type { TransfersService } from '../transfers/transfers.service'
 import type { PeerController } from './peer.controller'
+import type { PieceHasher } from './piece-hasher'
+import { Buffer } from 'node:buffer'
 import { Hono } from 'hono'
 import { describeRoute, resolver, validator as zValidator } from 'hono-openapi'
 import z from 'zod'
@@ -14,11 +16,35 @@ function safeFilename(name: string): string {
   return name.replace(UNSAFE_FILENAME_CHARS, '')
 }
 
+// Seconds a peer is told to wait while a file's piece hashes are computed.
+const PIECES_PENDING_RETRY_AFTER_S = 30
+
 export function getPeerRouter(
   controller: PeerController,
   transfers?: Pick<TransfersService, 'monitor' | 'uploadLimiter' | 'uploadRefusal' | 'ledger'>,
+  pieceHasher?: Pick<PieceHasher, 'get'>,
 ) {
   const app = new Hono<{ Variables: AuthVariables }>()
+
+  app.get('/items/:itemId/pieces', describeRoute({
+    tags: ['Peer'],
+    summary: 'Piece hashes of the release file',
+    description: 'SHA-256 of every 16 MiB piece of the file, so a downloader can verify what it fetched and recognise the same file at another peer. Computed in the background on first request.',
+    security: [{ 'X-Api-Key': [] }],
+    responses: {
+      200: { description: '`{ size, pieceBytes, algorithm: "sha256", hashes }` with `hashes` the base64 of the concatenated digests' },
+      202: { description: 'Still hashing; retry after the Retry-After delay' },
+      404: { description: 'No item with this id, its file is missing, or this jack does not hash files' },
+    },
+  }), async (c) => {
+    const path = pieceHasher ? await controller.filePathFor(c.req.param('itemId')) : null
+    const pieces = path ? await pieceHasher!.get(path).catch(() => null) : null
+    if (!pieces)
+      return c.json({ error: 'File not found' }, 404)
+    if (pieces === 'pending')
+      return c.json({ pending: true }, 202, { 'Retry-After': String(PIECES_PENDING_RETRY_AFTER_S) })
+    return c.json({ size: pieces.size, pieceBytes: pieces.pieceBytes, algorithm: 'sha256', hashes: Buffer.from(pieces.hashes).toString('base64') })
+  })
 
   app.get(
     '/search',

@@ -5,6 +5,7 @@ import type { ApiKeysRepository } from './modules/api-keys/api-keys.repository'
 import type { DownloadsRepository } from './modules/downloads/downloads.repository'
 import type { DownloadsService } from './modules/downloads/downloads.service'
 import type { ManagedKeysRepository } from './modules/managed-keys/managed-keys.repository'
+import type { PieceHasher } from './modules/peer/piece-hasher'
 import type { TransfersService } from './modules/transfers/transfers.service'
 import { httpInstrumentationMiddleware } from '@hono/otel'
 import { Hono } from 'hono'
@@ -36,6 +37,8 @@ interface AppServices {
   transfersService?: TransfersService
   /** Live torznab feed settings; defaults when absent. */
   torznabConfig?: () => TorznabConfig
+  /** Piece hashes of shared files, for peers that verify or compare them. */
+  pieceHasher?: PieceHasher
 }
 
 // This is the external surface, gated per audience rather than by one global key:
@@ -114,7 +117,7 @@ export function getApp(envs: Envs, config: AppConfig, connManager: { servers: Co
   // Peer API — other Jacks talk to us to search and download. Serves empty results
   // when there's no local source to read from.
   app.use('/peer/*', peerAuth)
-  app.route('/peer', getPeerRouter(peerController, services.transfersService))
+  app.route('/peer', getPeerRouter(peerController, services.transfersService, services.pieceHasher))
 
   // Torznab API — the operator's Radarr/Sonarr search through us and grab via the
   // download router. Returns empty results when there are no peers to fan out to.

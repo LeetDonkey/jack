@@ -134,6 +134,12 @@ export class PeerController {
     })
   }
 
+  /** Path on disk of an item's file, or null when the item or its file is unknown. */
+  async filePathFor(id: string): Promise<string | null> {
+    const source = this.findSource(id)
+    return source ? source.getFilePath(id) : null
+  }
+
   async getItem(id: string): Promise<Release | null> {
     const source = this.findSource(id)
     if (!source)

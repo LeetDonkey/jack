@@ -13,6 +13,8 @@ import { Semaphore } from '../../lib/semaphore'
 import { logger } from '../../logger'
 import { unlinkDownloadArtifact } from './artifact-cleanup'
 import { coordinatorFor } from './download-operation-coordinator'
+import { DownloadSources } from './download-sources'
+import { verifyAndRepair } from './piece-verifier'
 import { downloadRetryAfterMs, isTransientDownloadError } from './retry-policy'
 
 // retryWindowMs is optional so a config built without the schema keeps only the
@@ -22,6 +24,8 @@ type DownloadsServiceConfig = Omit<NonNullable<AppConfig['downloads']>, 'retryWi
 // HH:MM in the server's time zone, for the "waiting to retry" note on a row.
 const retryTimeFormat = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' })
 const RETRY_WAIT_PREFIX = 'Waiting to retry at'
+// How long a finished download waits for a peer that is still hashing the file.
+const PIECES_WAIT_MS = 10 * 60_000
 
 // Characters disallowed in the synthetic qB torrent filename (keep word chars, dot, dash).
 const UNSAFE_FILENAME_CHARS = /[^\w.-]/g
@@ -378,6 +382,24 @@ export class DownloadsService {
     }
   }
 
+  /**
+   * Check the finished .part against the peers' piece hashes and repair any
+   * piece that doesn't match. A peer without hashes (an older jack) leaves the
+   * download unverified, as before; the size check still applies.
+   */
+  private async verifyPart(record: DownloadRecord, sources: DownloadSources, signal: AbortSignal): Promise<void> {
+    const list = await sources.pieceList(PIECES_WAIT_MS)
+    if (!list) {
+      logger.info({ filename: record.filename }, 'Download not verified: no peer has piece hashes for it')
+      return
+    }
+    signal.throwIfAborted()
+    const result = await verifyAndRepair(record.partPath, list, sources.pieceSources(signal))
+    logger.info({ filename: record.filename, pieces: result.pieces, repaired: result.repaired }, result.repaired > 0
+      ? 'Download verified after repairing pieces'
+      : 'Download verified against the peer\'s piece hashes')
+  }
+
   private async downloadWithRetry(record: DownloadRecord, signal: AbortSignal): Promise<void> {
     const repo = this.downloadsRepository
     const peer = this.peers.find(p => p.id === record.peerId)
@@ -413,6 +435,8 @@ export class DownloadsService {
     // Start of the retry window: the first attempt, then the last byte received.
     let lastProgressAt: number | undefined
     const retryWindowMs = this.config.retryWindowMs ?? 0
+    // The grabbed peer, plus peers with a byte-identical file once one is needed.
+    const sources = new DownloadSources({ peer, itemId: record.itemId }, { ...record.release, size: record.releaseSize }, () => this.peers)
 
     try {
       // Each attempt takes a download slot and gives it back before the backoff,
@@ -423,6 +447,9 @@ export class DownloadsService {
         // Clear the "waiting to retry" note now that the next attempt is running.
         if (repo?.get(record.id)?.error?.startsWith(RETRY_WAIT_PREFIX))
           repo.setError(record.id, null)
+        // After a failed attempt, continue from another peer with the same file if there is one.
+        const source = attempt > 1 ? await sources.advance() : sources.current
+        const sourceName = source.peer.name ?? source.peer.url
         // A transient failure that still grew the .part resumes right away and
         // doesn't use up a retry attempt. Otherwise a link that drops every GiB
         // could never finish a file larger than maxDownloadAttempts GiB. Only
@@ -433,13 +460,15 @@ export class DownloadsService {
           const bytesBefore = await partBytes()
           const transfer = this.transfersService?.monitor.start({
             direction: 'download',
-            peer: peer.name ?? peer.url,
+            peer: sourceName,
             filename: record.filename,
             totalBytes: record.releaseSize ?? null,
             offsetBytes: bytesBefore,
+            party: `peer:${source.peer.id}`,
           })
           try {
-            await peer.downloadFile(record.itemId, record.destPath, {
+            await source.peer.downloadFile(source.itemId, record.destPath, {
+              beforeFinalize: () => this.verifyPart(record, sources, signal),
               torrentFilename: record.torrentFilename,
               partPath: record.partPath,
               releaseSize: record.releaseSize,
@@ -454,7 +483,7 @@ export class DownloadsService {
               onChunk: async (bytes) => {
                 lastProgressAt = Date.now()
                 transfer?.add(bytes)
-                this.transfersService?.ledger?.add('in', `peer:${peer.id}`, peer.name ?? peer.url, bytes)
+                this.transfersService?.ledger?.add('in', `peer:${source.peer.id}`, sourceName, bytes)
                 await this.transfersService?.downloadLimiter.take(bytes, signal)
               },
               signal,

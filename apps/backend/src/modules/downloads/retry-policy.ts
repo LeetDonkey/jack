@@ -1,6 +1,7 @@
 import { FetchError } from '../../lib/errors/FetchError'
 import { IdleTimeoutError } from '../../lib/errors/IdleTimeoutError'
 import { IncompleteDownloadError } from '../../lib/errors/IncompleteDownloadError'
+import { PieceMismatchError } from '../../lib/errors/PieceMismatchError'
 
 // Socket-level failures. Bun rejects a body read whose connection drops
 // mid-stream with a plain Error carrying `code: 'ECONNRESET'` ("The socket
@@ -26,6 +27,9 @@ const TRANSIENT_NETWORK_CODES = new Set([
  */
 export function isTransientDownloadError(error: unknown): boolean {
   if (error instanceof IncompleteDownloadError)
+    return true
+  // A piece no peer could repair: the next attempt checks the .part again.
+  if (error instanceof PieceMismatchError)
     return true
   if (error instanceof IdleTimeoutError)
     return true

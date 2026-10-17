@@ -1,4 +1,6 @@
+import type { PieceList } from '../../modules/peer/piece-hasher'
 import type { ConnectorHeadersConfig } from '../config'
+import { Buffer } from 'node:buffer'
 import { open, rename, unlink } from 'node:fs/promises'
 import z from 'zod'
 import { logger } from '../../logger'
@@ -46,7 +48,17 @@ export interface PeerDownloadOptions {
   onChunk?: (bytes: number) => void | Promise<void>
   /** Size of each Range request for a file larger than this. Defaults to DOWNLOAD_WINDOW_BYTES. */
   windowBytes?: number
+  /**
+   * Runs once the .part holds the whole file, before it is renamed into place
+   * (e.g. to verify piece hashes). A throw keeps the .part for the next attempt.
+   */
+  beforeFinalize?: () => Promise<void>
 }
+
+const PiecesResponse = z.union([
+  z.object({ size: z.number().int(), pieceBytes: z.number().int().positive(), algorithm: z.literal('sha256'), hashes: z.string() }),
+  z.object({ pending: z.literal(true) }),
+])
 
 function parseContentLength(headers: Headers): number | null {
   const raw = headers.get('Content-Length')
@@ -216,6 +228,38 @@ export class PeerConnector extends ServerConnector {
     })
   }
 
+  /**
+   * The peer's piece hashes for an item's file: the list, 'pending' while the
+   * peer is still hashing it, or null when it has none (an older jack, or no file).
+   */
+  @requiresInitialization
+  async getPieces(id: string): Promise<PieceList | 'pending' | null> {
+    try {
+      const body = await this.fetch(`/peer/items/${encodeURIComponent(id)}/pieces`, { method: 'GET', schema: PiecesResponse })
+      if ('pending' in body)
+        return 'pending'
+      return { size: body.size, pieceBytes: body.pieceBytes, hashes: new Uint8Array(Buffer.from(body.hashes, 'base64')) }
+    }
+    catch (err) {
+      if (err instanceof FetchError && err.response.status === 404)
+        return null
+      throw err
+    }
+  }
+
+  /** Bytes `start..end` (inclusive) of an item's file, for repairing one piece. */
+  @requiresInitialization
+  async fetchRange(id: string, start: number, end: number, signal?: AbortSignal): Promise<Uint8Array> {
+    const url = new URL(`/peer/items/${encodeURIComponent(id)}/file`, this.url)
+    const response = await fetch(url, { headers: { ...this.headers, 'X-Api-Key': this.apiKey, 'Range': `bytes=${start}-${end}` }, signal })
+    const cr = parseContentRange(response.headers.get('Content-Range'))
+    if (response.status !== 206 || cr == null || cr.start !== start || cr.end !== end) {
+      void response.body?.cancel().catch(() => {})
+      throw new FetchError(`Failed to fetch bytes ${start}-${end} from peer: ${response.status} ${response.statusText}`, response)
+    }
+    return new Uint8Array(await response.arrayBuffer())
+  }
+
   @requiresInitialization
   async getRelease(id: string): Promise<Release> {
     return this.fetch(`/peer/items/${encodeURIComponent(id)}`, { method: 'GET', schema: Release })
@@ -320,6 +364,8 @@ export class PeerConnector extends ServerConnector {
           existingBytes = 0
         }
         else if (existingBytes === options.releaseSize) {
+          signal.throwIfAborted()
+          await options.beforeFinalize?.()
           signal.throwIfAborted()
           await rename(partPath, destPath)
           setSpanAttribute(span, 'download.downloaded_bytes', existingBytes)
@@ -516,6 +562,8 @@ export class PeerConnector extends ServerConnector {
           throw new IncompleteDownloadError(`Incomplete file download: got ${downloadedBytes} bytes, expected ${expectedBytes}`)
         reader.releaseLock()
 
+        signal.throwIfAborted()
+        await options.beforeFinalize?.()
         signal.throwIfAborted()
         await rename(partPath, destPath)
         setSpanAttribute(span, 'download.downloaded_bytes', downloadedBytes)

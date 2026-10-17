@@ -19,6 +19,7 @@ import { DownloadsService } from './modules/downloads/downloads.service'
 import { ImportWatcher } from './modules/downloads/import-watcher'
 import { ManagedKeysRepository } from './modules/managed-keys/managed-keys.repository'
 import { ManagedApiKeys } from './modules/managed-keys/managed-keys.service'
+import { PieceHasher } from './modules/peer/piece-hasher'
 import { qbCategoryForServer } from './modules/qbittorrent/qbittorrent.mapper'
 import { TrafficLedger } from './modules/transfers/traffic-ledger'
 import { TransfersService } from './modules/transfers/transfers.service'
@@ -81,7 +82,8 @@ configService?.subscribe(() => {
 })
 
 const torznabConfig = () => configService?.getTorznab() ?? TorznabConfig.parse(config.torznab ?? {})
-const app = getApp(envs, config, connectorManager, { downloadsRepository, downloadsService, apiKeysRepository, managedKeysRepository, transfersService, torznabConfig })
+const pieceHasher = new PieceHasher(database.sqlite)
+const app = getApp(envs, config, connectorManager, { downloadsRepository, downloadsService, apiKeysRepository, managedKeysRepository, transfersService, torznabConfig, pieceHasher })
 // Public server on node:http (see startPublicServer for why).
 const server = startPublicServer(app.fetch, envs.PORT)
 
