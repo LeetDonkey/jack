@@ -392,6 +392,8 @@ export const NotificationsConfig = z.object({
   // A peer unreachable for this long, and again when it is back.
   peerOffline: z.boolean().default(true),
   peerOfflineMinutes: z.number().int().min(5).default(60),
+  // An address banned for repeated failed authentication (see `security`).
+  ipBanned: z.boolean().default(true),
   // HH:MM (server time) for a daily summary of traffic and downloads; absent means none.
   dailySummaryAt: TimeOfDay.nullish(),
 })
@@ -404,6 +406,7 @@ export const RawNotificationsConfig = z.object({
   downloadFailed: z.boolean().nullish(),
   peerOffline: z.boolean().nullish(),
   peerOfflineMinutes: z.number().int().min(5).nullish(),
+  ipBanned: z.boolean().nullish(),
   dailySummaryAt: TimeOfDay.nullish(),
 })
 
@@ -431,6 +434,35 @@ export const RawDiscoveryConfig = z.object({
 
 export type RawDiscoveryConfig = z.infer<typeof RawDiscoveryConfig>
 
+const Cidr = z.string().trim().min(2).max(50)
+
+// Temporary bans for addresses that keep failing authentication on the public
+// port, like fail2ban. Off by default.
+export const SecurityConfig = z.object({
+  banEnabled: z.boolean().default(false),
+  // Failed attempts (401/403 answers, failed qBittorrent logins) within the window that trigger a ban.
+  maxFailures: z.number().int().min(1).max(1000).default(10),
+  windowMinutes: z.number().int().min(1).max(1440).default(10),
+  banMinutes: z.number().int().min(1).max(525_600).default(60),
+  // Proxies whose X-Real-IP / X-Forwarded-For are believed (the reverse proxy in front of jack).
+  trustedProxies: z.array(Cidr).nullish(),
+  // Addresses that are never banned (by default the LAN and loopback, so your *arr apps can't lock themselves out).
+  neverBan: z.array(Cidr).nullish(),
+})
+
+export type SecurityConfig = z.infer<typeof SecurityConfig>
+
+export const RawSecurityConfig = z.object({
+  banEnabled: z.boolean().nullish(),
+  maxFailures: z.number().int().min(1).max(1000).nullish(),
+  windowMinutes: z.number().int().min(1).max(1440).nullish(),
+  banMinutes: z.number().int().min(1).max(525_600).nullish(),
+  trustedProxies: z.array(Cidr).nullish(),
+  neverBan: z.array(Cidr).nullish(),
+})
+
+export type RawSecurityConfig = z.infer<typeof RawSecurityConfig>
+
 export const AppConfig = z.object({
   version: z.number(),
   jack: JackConfig,
@@ -439,6 +471,7 @@ export const AppConfig = z.object({
   torznab: TorznabConfig.optional(),
   notifications: NotificationsConfig.optional(),
   discovery: DiscoveryConfig.optional(),
+  security: SecurityConfig.optional(),
   servers: z.array(ServerConfig).default([]),
   peers: z.array(PeerConfig).default([]),
 })

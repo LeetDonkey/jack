@@ -2,7 +2,7 @@ import type { ConfigController } from './config.controller'
 import { Hono } from 'hono'
 import { describeRoute, validator as zValidator } from 'hono-openapi'
 import { z } from 'zod'
-import { RawBandwidthConfig, RawDiscoveryConfig, RawDownloadsConfig, RawExternalJackConfig, RawJackConfig, RawNotificationsConfig, RawPeerConfig, RawServerConfig, RawTorznabConfig } from '../../lib/config'
+import { RawBandwidthConfig, RawDiscoveryConfig, RawDownloadsConfig, RawExternalJackConfig, RawJackConfig, RawNotificationsConfig, RawPeerConfig, RawSecurityConfig, RawServerConfig, RawTorznabConfig } from '../../lib/config'
 import { streamSnapshots } from '../../lib/sse'
 
 const idParam = z.object({ id: z.string().min(1) })
@@ -29,6 +29,7 @@ export function getConfigRouter(controller: ConfigController) {
   app.get('/torznab', configDoc('Get the torznab block', 'What the Torznab RSS feed offers: releases peers added within rssMaxAgeDays, newest first, at most rssMaxItems. Defaults apply when the block is absent.'), c => c.json(controller.getTorznab()))
   app.get('/notifications', configDoc('Get the notifications block', 'Webhooks and which events to send, as stored: webhook URLs keep their {env}/{file} references.'), c => c.json(controller.getNotifications()))
   app.get('/discovery', configDoc('Get the discovery block', 'Public name and whether friends of friends may find you and whether you introduce your friends to each other, with defaults applied.'), c => c.json(controller.getDiscovery()))
+  app.get('/security', configDoc('Get the security block', 'Ban settings for addresses that keep failing authentication on the public port, with defaults applied.'), c => c.json(controller.getSecurity()))
   app.get('/stream', describeRoute({
     tags: ['Config'],
     summary: 'Stream connector config',
@@ -103,6 +104,10 @@ export function getConfigRouter(controller: ConfigController) {
 
     app.patch('/discovery', configDoc('Update the discovery block', 'Merges the given fields into the stored discovery config. `null` restores a default. Applies immediately.'), zValidator('json', RawDiscoveryConfig), async (c) => {
       return c.json(await controller.updateDiscovery(c.req.valid('json')))
+    })
+
+    app.patch('/security', configDoc('Update the security block', 'Merges the given fields into the stored security config. `null` restores a default; lists are replaced whole. Applies immediately.'), zValidator('json', RawSecurityConfig), async (c) => {
+      return c.json(await controller.updateSecurity(c.req.valid('json')))
     })
   }
 

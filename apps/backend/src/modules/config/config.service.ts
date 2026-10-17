@@ -4,7 +4,7 @@ import type { ConnectorManager } from '../../lib/servers'
 import type { DownloadsRepository } from '../downloads/downloads.repository'
 import { jsonc } from 'jsonc'
 import { atomicWriteFile } from '../../lib/atomic-write'
-import { BandwidthConfig, DiscoveryConfig, DownloadsConfig, ExternalJackConfig, JackConfig, NotificationsConfig, PeerConfig, RawBandwidthConfig, RawDiscoveryConfig, RawDownloadsConfig, RawExternalJackConfig, RawJackConfig, RawNotificationsConfig, RawPeerConfig, RawServerConfig, RawTorznabConfig, ServerConfig, TorznabConfig } from '../../lib/config'
+import { BandwidthConfig, DiscoveryConfig, DownloadsConfig, ExternalJackConfig, JackConfig, NotificationsConfig, PeerConfig, RawBandwidthConfig, RawDiscoveryConfig, RawDownloadsConfig, RawExternalJackConfig, RawJackConfig, RawNotificationsConfig, RawPeerConfig, RawSecurityConfig, RawServerConfig, RawTorznabConfig, SecurityConfig, ServerConfig, TorznabConfig } from '../../lib/config'
 import { BadRequestError } from '../../lib/errors/BadRequestError'
 import { ConflictError } from '../../lib/errors/ConflictError'
 import { NotFoundError } from '../../lib/errors/NotFoundError'
@@ -485,6 +485,28 @@ export class ConfigService {
       }
       DiscoveryConfig.parse(merged)
       const next = { ...this.raw, discovery: merged } as RawConfig
+      await this.persist(next)
+      this.raw = next
+    })
+  }
+
+  // ── Security ───────────────────────────────────────────────────────────────
+  /** Ban settings with defaults applied. */
+  getSecurity(): SecurityConfig {
+    return SecurityConfig.parse(this.raw.security ?? {})
+  }
+
+  /** Patch the security block: `null` restores a default; lists are replaced whole. Applies immediately. */
+  async updateSecurity(input: unknown): Promise<void> {
+    const patch = RawSecurityConfig.parse(input)
+    return this.enqueue(async () => {
+      const merged: Record<string, unknown> = { ...(this.raw.security ?? {}), ...patch }
+      for (const [key, value] of Object.entries(merged)) {
+        if (value === null)
+          delete merged[key]
+      }
+      SecurityConfig.parse(merged)
+      const next = { ...this.raw, security: merged } as RawConfig
       await this.persist(next)
       this.raw = next
     })

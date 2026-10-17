@@ -27,6 +27,7 @@ function blankState() {
     webhooks: [] as WebhookState[],
     downloadFailed: true,
     peerOffline: true,
+    ipBanned: true,
     peerOfflineMinutes: null as number | null,
     dailySummaryAt: '',
   }
@@ -45,6 +46,7 @@ function seed(config: NotificationsConfig | null | undefined) {
     state.webhooks = (config.webhooks ?? []).map(w => ({ type: w.type, url: w.url }))
     state.downloadFailed = config.downloadFailed ?? true
     state.peerOffline = config.peerOffline ?? true
+    state.ipBanned = config.ipBanned ?? true
     state.peerOfflineMinutes = config.peerOfflineMinutes ?? null
     state.dailySummaryAt = config.dailySummaryAt ?? ''
   }
@@ -86,6 +88,7 @@ async function save() {
         // On is the default, so write it as an absent key.
         downloadFailed: state.downloadFailed ? null : false,
         peerOffline: state.peerOffline ? null : false,
+        ipBanned: state.ipBanned ? null : false,
         peerOfflineMinutes: state.peerOfflineMinutes,
         dailySummaryAt: state.dailySummaryAt || null,
       },
@@ -173,6 +176,9 @@ async function sendTest() {
         </UFormField>
         <UFormField v-if="state.peerOffline" name="peerOfflineMinutes" label="Offline for at least" hint="minutes" :ui="{ hint: 'font-mono text-xs text-dimmed' }">
           <UInputNumber v-model="state.peerOfflineMinutes" :disabled="saving" :min="5" :increment="false" :decrement="false" placeholder="60" class="w-28" />
+        </UFormField>
+        <UFormField name="ipBanned" label="Banned addresses" description="An address banned for repeated failed authentication (Settings: Security).">
+          <USwitch v-model="state.ipBanned" :disabled="saving" />
         </UFormField>
         <UFormField name="dailySummaryAt" label="Daily summary" description="Traffic per friend and how downloads went, once a day at this time (server time). Empty means none.">
           <UInput v-model="state.dailySummaryAt" type="time" :disabled="saving" class="w-32" />

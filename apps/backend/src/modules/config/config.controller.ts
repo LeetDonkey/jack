@@ -178,4 +178,13 @@ export class ConfigController {
   updateDiscovery(input: unknown) {
     return this.mutate(s => s.updateDiscovery(input))
   }
+
+  /** Ban settings with defaults applied, or null when read-only. */
+  getSecurity() {
+    return this.configService?.getSecurity() ?? null
+  }
+
+  updateSecurity(input: unknown) {
+    return this.mutate(s => s.updateSecurity(input))
+  }
 }

@@ -7,6 +7,7 @@ import type { DownloadsService } from './modules/downloads/downloads.service'
 import type { IntroductionsService } from './modules/introductions/introductions.service'
 import type { ManagedKeysRepository } from './modules/managed-keys/managed-keys.repository'
 import type { PieceHasher } from './modules/peer/piece-hasher'
+import type { BanList } from './modules/security/ban-list'
 import type { TransfersService } from './modules/transfers/transfers.service'
 import { httpInstrumentationMiddleware } from '@hono/otel'
 import { Hono } from 'hono'
@@ -24,6 +25,7 @@ import { PeerController } from './modules/peer/peer.controller'
 import { getPeerRouter } from './modules/peer/peer.router'
 import { QbittorrentController } from './modules/qbittorrent/qbittorrent.controller'
 import { getQbittorrentRouter } from './modules/qbittorrent/qbittorrent.router'
+import { banGuard } from './modules/security/ban-guard'
 import { getDownloadRouter } from './modules/torznab/download.router'
 import { TorznabController } from './modules/torznab/torznab.controller'
 import { getTorznabRouter } from './modules/torznab/torznab.router'
@@ -43,6 +45,9 @@ interface AppServices {
   pieceHasher?: PieceHasher
   /** Friends-of-friends introductions (peer side). */
   introductions?: IntroductionsService
+  /** Temporary bans for addresses that keep failing authentication (fail2ban). */
+  bans?: BanList
+  trustedProxies?: () => readonly string[] | null | undefined
 }
 
 // This is the external surface, gated per audience rather than by one global key:
@@ -59,6 +64,9 @@ export function getApp(envs: Envs, config: AppConfig, connManager: { servers: Co
   const peerController = new PeerController(() => connManager.servers)
 
   app.use('*', secureHeaders())
+  // Before every route: refuse banned addresses, count failed authentication.
+  if (services.bans)
+    app.use('*', banGuard(services.bans, services.trustedProxies ?? (() => undefined)))
 
   // Health check — unauthenticated, used by Docker/orchestrators.
   app.get('/ping', describeRoute({

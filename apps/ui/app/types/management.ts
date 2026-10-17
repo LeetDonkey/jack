@@ -336,6 +336,7 @@ export interface NotificationsConfig {
   downloadFailed?: boolean | null
   peerOffline?: boolean | null
   peerOfflineMinutes?: number | null
+  ipBanned?: boolean | null
   dailySummaryAt?: string | null
 }
 
@@ -379,4 +380,30 @@ export interface IntroductionsOverview {
   me: { id: string, name: string | null, discoverable: boolean, introduce: boolean, ready: boolean, missing: string[] }
   people: IntroPerson[]
   threads: IntroThread[]
+}
+
+// config.security with defaults applied.
+export interface SecurityConfig {
+  banEnabled: boolean
+  maxFailures: number
+  windowMinutes: number
+  banMinutes: number
+  trustedProxies?: string[] | null
+  neverBan?: string[] | null
+}
+
+export type SecurityConfigPatch = { [K in keyof SecurityConfig]?: SecurityConfig[K] | null }
+
+// GET /security/bans
+export interface BanEntry {
+  ip: string
+  bannedAt: string
+  bannedUntil: string
+  failures: number
+  reason: string
+}
+
+export interface BansSnapshot {
+  bans: BanEntry[]
+  failing: Array<{ ip: string, failures: number, lastAt: string }>
 }

@@ -41,6 +41,7 @@ it alone.)
 | [`bandwidth`](#bandwidth) | Speed limits, upload slots and per-friend limits |
 | [`notifications`](#notifications) | Webhooks for failures, offline friends and a daily summary |
 | [`discovery`](#discovery) | Meeting friends of friends |
+| [`security`](#security) | Temporary bans for repeated failed authentication |
 | [`servers[].name`](#servers-name) | Display name |
 | [`servers[].type`](#servers-type) | Radarr or Sonarr |
 | [`servers[].url`](#servers-url) | *arr base URL |
@@ -345,6 +346,31 @@ peer. Both sides therefore need a public name and quick linking set up.
 The friend in between carries the public keys, so it could in principle swap
 them. Both sides see the same safety code for a request; comparing it outside
 jack rules that out.
+
+## `security`
+
+Temporary bans on the public port, like fail2ban. Optional; edited in
+***Settings -> Security***, where the banned addresses are listed with a
+button to lift each ban. Applies right away.
+
+- **`banEnabled`** (default `false`): turn bans on.
+- **`maxFailures`** (default `10`), **`windowMinutes`** (default `10`): an
+  address refused that many times within the window is banned. A refusal is a
+  401 or 403 answer (a wrong, missing or expired key, no qBittorrent session) or
+  a failed qBittorrent login.
+- **`banMinutes`** (default `60`): a banned address gets 403 with
+  `Retry-After` on every route, `/ping` included, until the ban ends. Bans are
+  stored, so a restart doesn't lift them.
+- **`trustedProxies`** (default: private network ranges): addresses or CIDR
+  ranges of the reverse proxy in front of jack. Only a request from one of these
+  may name the real client, in `X-Real-IP` or `X-Forwarded-For`; any other
+  request is judged by its own address, so a client can't dodge a ban or get
+  someone else banned by sending those headers.
+- **`neverBan`** (default: private network ranges and loopback): addresses that
+  are never counted, so your Radarr/Sonarr on the LAN can't lock themselves out.
+
+[`notifications.ipBanned`](#notifications) (default `true`) sends a
+notification when an address is banned.
 
 ## `torznab`
 

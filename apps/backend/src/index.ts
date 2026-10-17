@@ -4,7 +4,7 @@ import { getApp } from './app'
 import { openDatabase } from './database/connection'
 import { shutdownTelemetry } from './instrumentation'
 import { registerManagedForDestination } from './lib/autoregister'
-import { DownloadsConfig, getAppConfig, TorznabConfig } from './lib/config'
+import { DownloadsConfig, getAppConfig, SecurityConfig, TorznabConfig } from './lib/config'
 import { getAppEnvs } from './lib/envs'
 import { FetchError } from './lib/errors/FetchError'
 import { startPublicServer } from './lib/public-server'
@@ -27,6 +27,7 @@ import { buildDailySummary } from './modules/notifications/daily-summary'
 import { NotificationsService } from './modules/notifications/notifications.service'
 import { PieceHasher } from './modules/peer/piece-hasher'
 import { qbCategoryForServer } from './modules/qbittorrent/qbittorrent.mapper'
+import { BanList } from './modules/security/ban-list'
 import { localDay, TrafficLedger } from './modules/transfers/traffic-ledger'
 import { TransfersService } from './modules/transfers/transfers.service'
 
@@ -90,6 +91,10 @@ configService?.subscribe(() => {
 const torznabConfig = () => configService?.getTorznab() ?? TorznabConfig.parse(config.torznab ?? {})
 const pieceHasher = new PieceHasher(database.sqlite)
 
+// fail2ban for the public port, read live from the config.
+const securityConfig = () => configService?.getSecurity() ?? SecurityConfig.parse(config.security ?? {})
+const bans = new BanList(database.sqlite, securityConfig)
+
 // Meeting friends of friends. Needs the management API's config service, since
 // accepting adds a peer to the config file.
 const apiKeysController = new ApiKeysController(apiKeysRepository)
@@ -115,7 +120,7 @@ const introductions = configService
     })
   : undefined
 introductions?.start()
-const app = getApp(envs, config, connectorManager, { downloadsRepository, downloadsService, apiKeysRepository, managedKeysRepository, transfersService, torznabConfig, pieceHasher, introductions })
+const app = getApp(envs, config, connectorManager, { downloadsRepository, downloadsService, apiKeysRepository, managedKeysRepository, transfersService, torznabConfig, pieceHasher, introductions, bans, trustedProxies: () => securityConfig().trustedProxies })
 // Public server on node:http (see startPublicServer for why).
 const server = startPublicServer(app.fetch, envs.PORT)
 
@@ -167,6 +172,9 @@ notifications.startDailySummary(() => buildDailySummary(
   downloadsRepository.list(),
   new Date(),
 ))
+bans.onBan((ban) => {
+  void notifications.send({ event: 'ip-banned', title: `Banned ${ban.ip}`, message: `${ban.failures} failed attempts on the public port (last: ${ban.reason}). Banned until ${new Date(ban.bannedUntil).toLocaleString('en-GB')}. Lift it under Settings -> Security.` })
+})
 peerHealth.start()
 
 function startManagementServer() {
@@ -192,6 +200,7 @@ function startManagementServer() {
     peerHealth,
     notifications,
     introductions,
+    bans,
   })
   const instance = Bun.serve({ port: envs.MANAGEMENT_PORT, fetch: managementApp.fetch, idleTimeout: 60 })
   logger.info({ port: instance.port }, 'Management API listening')

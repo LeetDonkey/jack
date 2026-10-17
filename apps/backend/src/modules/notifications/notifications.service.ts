@@ -2,7 +2,7 @@ import type { NotificationsConfig } from '../../lib/config'
 import { logger } from '../../logger'
 import { localDay } from '../transfers/traffic-ledger'
 
-export type NotificationEvent = 'download-failed' | 'peer-offline' | 'peer-back' | 'daily-summary' | 'test'
+export type NotificationEvent = 'download-failed' | 'peer-offline' | 'peer-back' | 'daily-summary' | 'ip-banned' | 'test'
 
 export interface Notification {
   event: NotificationEvent
@@ -61,6 +61,8 @@ export class NotificationsService {
       return config.peerOffline
     if (event === 'daily-summary')
       return config.dailySummaryAt != null
+    if (event === 'ip-banned')
+      return config.ipBanned
     return true
   }
 

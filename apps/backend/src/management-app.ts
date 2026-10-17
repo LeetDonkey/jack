@@ -7,6 +7,7 @@ import type { ImportWatcher } from './modules/downloads/import-watcher'
 import type { PeerHealthMonitor } from './modules/friends/peer-health'
 import type { IntroductionsService } from './modules/introductions/introductions.service'
 import type { NotificationsService } from './modules/notifications/notifications.service'
+import type { BanList } from './modules/security/ban-list'
 import type { TransfersService } from './modules/transfers/transfers.service'
 import { Hono } from 'hono'
 import { describeRoute, openAPIRouteHandler, resolver } from 'hono-openapi'
@@ -32,6 +33,7 @@ import { getLogsRouter } from './modules/logging/logs.router'
 import { getNotificationsRouter } from './modules/notifications/notifications.router'
 import { QuickLinksController } from './modules/quick-links/quick-links.controller'
 import { getQuickLinksRouter } from './modules/quick-links/quick-links.router'
+import { getSecurityRouter } from './modules/security/security.router'
 import { StatusController } from './modules/status/status.controller'
 import { getStatusRouter } from './modules/status/status.router'
 import { getTransfersRouter } from './modules/transfers/transfers.router'
@@ -51,6 +53,7 @@ export function getManagementApp(params: {
   peerHealth?: PeerHealthMonitor
   notifications?: NotificationsService
   introductions?: IntroductionsService
+  bans?: BanList
 }) {
   const app = new Hono()
 
@@ -110,6 +113,9 @@ export function getManagementApp(params: {
 
   if (params.introductions)
     app.route('/introductions', getIntroductionsRouter(params.introductions))
+
+  if (params.bans)
+    app.route('/security', getSecurityRouter(params.bans))
 
   const tmdbClient = params.tmdbApiKey ? new TmdbClient(params.tmdbApiKey) : undefined
   const catalogController = new CatalogController(params.connectors, tmdbClient, params.downloadsService)
