@@ -276,6 +276,8 @@ export interface BandwidthConfig {
   downloadLimitKiBps?: number | null
   uploadLimitKiBps?: number | null
   maxConcurrentUploads?: number | null
+  maxConcurrentUploadsPerPeer?: number | null
+  dailyUploadLimitGiBPerPeer?: number | null
   schedule: BandwidthPeriod[]
 }
 

@@ -59,7 +59,7 @@ export class DownloadsService {
     coordinator?: DownloadOperationCoordinator,
     // Live speed tracking and the shared download rate limit. Optional so the
     // service still works standalone (tests, no management API).
-    private readonly transfersService?: Pick<TransfersService, 'monitor' | 'downloadLimiter'>,
+    private readonly transfersService?: Pick<TransfersService, 'monitor' | 'downloadLimiter' | 'ledger'>,
   ) {
     this.semaphore = new Semaphore(config.maxConcurrentDownloads)
     this.maxConcurrent = config.maxConcurrentDownloads
@@ -454,6 +454,7 @@ export class DownloadsService {
               onChunk: async (bytes) => {
                 lastProgressAt = Date.now()
                 transfer?.add(bytes)
+                this.transfersService?.ledger?.add('in', `peer:${peer.id}`, peer.name ?? peer.url, bytes)
                 await this.transfersService?.downloadLimiter.take(bytes, signal)
               },
               signal,

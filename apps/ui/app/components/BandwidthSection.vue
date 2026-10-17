@@ -37,6 +37,8 @@ function blankState() {
     downloadMb: null as number | null,
     uploadMb: null as number | null,
     maxConcurrentUploads: null as number | null,
+    maxConcurrentUploadsPerPeer: null as number | null,
+    dailyUploadLimitGiBPerPeer: null as number | null,
     schedule: [] as PeriodState[],
   }
 }
@@ -52,6 +54,8 @@ function seed(config: BandwidthConfig | null | undefined) {
     state.downloadMb = toMb(config.downloadLimitKiBps)
     state.uploadMb = toMb(config.uploadLimitKiBps)
     state.maxConcurrentUploads = config.maxConcurrentUploads ?? null
+    state.maxConcurrentUploadsPerPeer = config.maxConcurrentUploadsPerPeer ?? null
+    state.dailyUploadLimitGiBPerPeer = config.dailyUploadLimitGiBPerPeer ?? null
     state.schedule = config.schedule.map(p => ({
       days: [...p.days],
       start: p.start,
@@ -115,6 +119,8 @@ async function save() {
     downloadLimitKiBps: toKib(state.downloadMb),
     uploadLimitKiBps: toKib(state.uploadMb),
     maxConcurrentUploads: state.maxConcurrentUploads,
+    maxConcurrentUploadsPerPeer: state.maxConcurrentUploadsPerPeer,
+    dailyUploadLimitGiBPerPeer: state.dailyUploadLimitGiBPerPeer,
     schedule: state.schedule.length === 0
       ? null
       : state.schedule.map(p => ({
@@ -175,6 +181,25 @@ function revert() {
         >
           <UInputNumber v-model="state.maxConcurrentUploads" :disabled="saving" :min="1" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" />
         </UFormField>
+
+        <div class="grid gap-4 sm:grid-cols-2">
+          <UFormField
+            name="maxConcurrentUploadsPerPeer"
+            label="Simultaneous uploads per friend"
+            description="So one friend can't take every upload slot. Each API key you issued counts as one friend."
+          >
+            <UInputNumber v-model="state.maxConcurrentUploadsPerPeer" :disabled="saving" :min="1" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" />
+          </UFormField>
+          <UFormField
+            name="dailyUploadLimitGiBPerPeer"
+            label="Daily limit per friend"
+            description="How much one friend may download from you per day. Past it, their jack waits until midnight."
+            hint="GB"
+            :ui="{ hint: 'font-mono text-xs text-dimmed' }"
+          >
+            <UInputNumber v-model="state.dailyUploadLimitGiBPerPeer" :disabled="saving" :min="1" :step="10" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" />
+          </UFormField>
+        </div>
       </UCard>
 
       <UCard variant="subtle" :ui="{ body: 'space-y-3' }">

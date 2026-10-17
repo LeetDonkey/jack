@@ -23,8 +23,26 @@ export interface TransferHandle {
   end: () => void
 }
 
+export interface TransferStart {
+  direction: TransferDirection
+  peer: string
+  filename: string
+  totalBytes?: number | null
+  offsetBytes?: number
+  /** Who is on the other end (a peer connector or an api key), for per-peer limits. */
+  party?: string
+  /**
+   * Identifies one file transfer across requests. A transfer fetched in Range
+   * windows ends and restarts every window; a start with the same key shortly
+   * after continues the same entry.
+   */
+  resumeKey?: string
+}
+
 interface TrackedTransfer {
   info: Omit<TransferInfo, 'bytesPerSecond' | 'etaSeconds'>
+  party?: string
+  resumeKey?: string
   sampledBytes: number
   // Bytes moved in each of the last few ticks, newest last.
   samples: number[]
@@ -33,6 +51,9 @@ interface TrackedTransfer {
 // Speed is averaged over this many one-second ticks.
 const SPEED_WINDOW_TICKS = 5
 const TICK_MS = 1000
+// How long an ended transfer with a resumeKey waits for its next window. It stays
+// listed meanwhile (so the view doesn't flicker) but holds no upload slot.
+const LINGER_MS = 5000
 
 /**
  * Live registry of in-flight peer transfers in both directions. Transfers report
@@ -41,6 +62,7 @@ const TICK_MS = 1000
  */
 export class TransferMonitor {
   private readonly transfers = new Map<string, TrackedTransfer>()
+  private readonly lingering = new Map<string, { tracked: TrackedTransfer, endedAt: number }>()
   private readonly subscribers = new Set<() => void>()
   private timer: ReturnType<typeof setInterval> | undefined
   private nextId = 1
@@ -53,22 +75,36 @@ export class TransferMonitor {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
-  start(input: { direction: TransferDirection, peer: string, filename: string, totalBytes?: number | null, offsetBytes?: number }): TransferHandle {
-    const id = `${input.direction}-${this.nextId++}`
+  start(input: TransferStart): TransferHandle {
     const offset = input.offsetBytes ?? 0
-    const tracked: TrackedTransfer = {
-      info: {
-        id,
-        direction: input.direction,
-        peer: input.peer,
-        filename: input.filename,
-        totalBytes: input.totalBytes ?? null,
-        transferredBytes: offset,
-        startedAt: this.now().toISOString(),
-      },
-      sampledBytes: offset,
-      samples: [],
+    this.purgeLingering()
+    const resumed = input.resumeKey ? this.lingering.get(input.resumeKey) : undefined
+    let tracked: TrackedTransfer
+    if (resumed && input.resumeKey) {
+      this.lingering.delete(input.resumeKey)
+      tracked = resumed.tracked
+      tracked.info.transferredBytes = offset
+      tracked.info.totalBytes = input.totalBytes ?? tracked.info.totalBytes
+      tracked.sampledBytes = Math.min(tracked.sampledBytes, offset)
     }
+    else {
+      tracked = {
+        info: {
+          id: `${input.direction}-${this.nextId++}`,
+          direction: input.direction,
+          peer: input.peer,
+          filename: input.filename,
+          totalBytes: input.totalBytes ?? null,
+          transferredBytes: offset,
+          startedAt: this.now().toISOString(),
+        },
+        party: input.party,
+        resumeKey: input.resumeKey,
+        sampledBytes: offset,
+        samples: [],
+      }
+    }
+    const id = tracked.info.id
     this.transfers.set(id, tracked)
     this.ensureTicking()
     this.notify()
@@ -87,25 +123,32 @@ export class TransferMonitor {
         if (ended)
           return
         ended = true
+        if (this.transfers.get(id) !== tracked)
+          return
         this.transfers.delete(id)
-        if (this.transfers.size === 0)
+        if (tracked.resumeKey)
+          this.lingering.set(tracked.resumeKey, { tracked, endedAt: this.now().getTime() })
+        if (this.transfers.size === 0 && this.lingering.size === 0)
           this.stopTicking()
         this.notify()
       },
     }
   }
 
-  activeCount(direction: TransferDirection): number {
+  /** Running transfers in one direction, optionally only those with one party. */
+  activeCount(direction: TransferDirection, party?: string): number {
     let count = 0
     for (const transfer of this.transfers.values()) {
-      if (transfer.info.direction === direction)
+      if (transfer.info.direction === direction && (party == null || transfer.party === party))
         count++
     }
     return count
   }
 
   list(): TransferInfo[] {
-    return Array.from(this.transfers.values(), ({ info, samples }) => {
+    this.purgeLingering()
+    const all = [...this.transfers.values(), ...Array.from(this.lingering.values(), l => l.tracked)]
+    return all.map(({ info, samples }) => {
       const bytesPerSecond = samples.length === 0 ? 0 : Math.round(samples.reduce((sum, s) => sum + s, 0) / samples.length)
       const remaining = info.totalBytes == null ? null : Math.max(0, info.totalBytes - info.transferredBytes)
       return {
@@ -123,14 +166,30 @@ export class TransferMonitor {
 
   /** Sample every transfer once. Driven by the interval; exposed for tests. */
   tick(): void {
-    for (const transfer of this.transfers.values()) {
+    const hadLingering = this.lingering.size > 0
+    this.purgeLingering()
+    const sample = (transfer: TrackedTransfer) => {
       // A resume reset subtracts the discarded bytes; never report negative speed.
       transfer.samples.push(Math.max(0, transfer.info.transferredBytes - transfer.sampledBytes))
       if (transfer.samples.length > SPEED_WINDOW_TICKS)
         transfer.samples.shift()
       transfer.sampledBytes = transfer.info.transferredBytes
     }
+    for (const transfer of this.transfers.values())
+      sample(transfer)
+    for (const { tracked } of this.lingering.values())
+      sample(tracked)
+    if (hadLingering && this.transfers.size === 0 && this.lingering.size === 0)
+      this.stopTicking()
     this.notify()
+  }
+
+  private purgeLingering(): void {
+    const now = this.now().getTime()
+    for (const [key, entry] of this.lingering) {
+      if (now - entry.endedAt > LINGER_MS)
+        this.lingering.delete(key)
+    }
   }
 
   private ensureTicking(): void {

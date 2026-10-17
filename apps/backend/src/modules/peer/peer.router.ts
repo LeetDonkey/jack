@@ -14,12 +14,9 @@ function safeFilename(name: string): string {
   return name.replace(UNSAFE_FILENAME_CHARS, '')
 }
 
-// Seconds a peer is told to wait when every upload slot is taken.
-const UPLOAD_BUSY_RETRY_AFTER_S = 60
-
 export function getPeerRouter(
   controller: PeerController,
-  transfers?: Pick<TransfersService, 'monitor' | 'uploadLimiter' | 'canStartUpload'>,
+  transfers?: Pick<TransfersService, 'monitor' | 'uploadLimiter' | 'uploadRefusal' | 'ledger'>,
 ) {
   const app = new Hono<{ Variables: AuthVariables }>()
 
@@ -80,12 +77,18 @@ export function getPeerRouter(
       206: { description: 'Partial content for a satisfiable Range request', content: { 'application/octet-stream': {} } },
       404: { description: 'No item with this id, or its file is missing on disk' },
       416: { description: 'Unsatisfiable Range request' },
-      503: { description: 'Every upload slot is in use; retry after the Retry-After delay' },
+      429: { description: 'This friend\'s daily upload limit is reached; retry after the Retry-After delay (local midnight)' },
+      503: { description: 'Every upload slot (or every slot for this friend) is in use; retry after the Retry-After delay' },
     },
   }), async (c) => {
-    if (transfers && !transfers.canStartUpload()) {
-      return c.json({ error: 'Too many concurrent uploads' }, 503, {
-        'Retry-After': String(UPLOAD_BUSY_RETRY_AFTER_S),
+    // Limits are per friend: one api key is one friend. The master key has none.
+    const apiKeyId = c.get('apiKeyId')
+    const party = apiKeyId != null ? `key:${apiKeyId}` : undefined
+    const label = c.get('apiKeyName') ?? 'unknown peer'
+    const refusal = transfers?.uploadRefusal(party)
+    if (refusal) {
+      return c.json({ error: refusal.message }, refusal.status, {
+        'Retry-After': String(refusal.retryAfterSeconds),
       })
     }
 
@@ -111,15 +114,19 @@ export function getPeerRouter(
     const signal = c.req.raw.signal
     const upload = transfers?.monitor.start({
       direction: 'upload',
-      peer: c.get('apiKeyName') ?? 'unknown peer',
+      peer: label,
       filename: result.filename,
       totalBytes: result.type === 'partial' ? result.totalSize : result.size,
       offsetBytes: result.type === 'partial' ? result.start : 0,
+      party,
+      // A peer fetching in Range windows stays one entry in the transfers view.
+      resumeKey: result.type === 'partial' ? `${party ?? 'master'}:${itemId}` : undefined,
     })
     const body = createFileStream(result.body, {
       onChunk: async (bytes) => {
         await transfers?.uploadLimiter.take(bytes, signal)
         upload?.add(bytes)
+        transfers?.ledger?.add('out', party ?? 'master', label, bytes)
       },
       onEnd: () => upload?.end(),
       signal,

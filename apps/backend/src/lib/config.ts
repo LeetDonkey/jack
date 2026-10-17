@@ -336,6 +336,11 @@ export const BandwidthConfig = z.object({
   // Peers asking for a file while this many uploads run get a 503 with
   // Retry-After and retry later. Absent means unlimited.
   maxConcurrentUploads: z.number().int().min(1).nullish(),
+  // The same, per friend (per api key), so one friend can't take every slot.
+  maxConcurrentUploadsPerPeer: z.number().int().min(1).nullish(),
+  // GiB one friend may download from us per day (server time). Past it, new
+  // transfers get a 429 with Retry-After until midnight. Absent means no cap.
+  dailyUploadLimitGiBPerPeer: z.number().positive().nullish(),
   schedule: z.array(BandwidthPeriod).default([]),
 })
 
@@ -347,6 +352,8 @@ export const RawBandwidthConfig = z.object({
   downloadLimitKiBps: RateLimitKiBps,
   uploadLimitKiBps: RateLimitKiBps,
   maxConcurrentUploads: z.number().int().min(1).nullish(),
+  maxConcurrentUploadsPerPeer: z.number().int().min(1).nullish(),
+  dailyUploadLimitGiBPerPeer: z.number().positive().nullish(),
   schedule: z.array(BandwidthPeriod).nullish(),
 })
 

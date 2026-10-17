@@ -20,6 +20,7 @@ import { ImportWatcher } from './modules/downloads/import-watcher'
 import { ManagedKeysRepository } from './modules/managed-keys/managed-keys.repository'
 import { ManagedApiKeys } from './modules/managed-keys/managed-keys.service'
 import { qbCategoryForServer } from './modules/qbittorrent/qbittorrent.mapper'
+import { TrafficLedger } from './modules/transfers/traffic-ledger'
 import { TransfersService } from './modules/transfers/transfers.service'
 
 function logRegistrationFailure(what: string, destName: string | undefined, err: unknown) {
@@ -63,6 +64,7 @@ function currentMaxConcurrentDownloads(): number | null {
 const transfersService = new TransfersService(
   () => configService?.getBandwidth() ?? config.bandwidth,
   currentMaxConcurrentDownloads,
+  { ledger: new TrafficLedger(database.sqlite) },
 )
 transfersService.start()
 
@@ -210,9 +212,10 @@ else {
 process.on('SIGINT', async () => {
   logger.info('SIGINT received, exiting')
   importWatcher?.stop()
+  // Before database.close(): stopping flushes the traffic counts.
+  transfersService.stop()
   database.close()
   server.close()
-  transfersService.stop()
   managementServer?.stop()
   await shutdownTelemetry()
   process.exit(0)
@@ -221,9 +224,10 @@ process.on('SIGINT', async () => {
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM received, exiting')
   importWatcher?.stop()
+  // Before database.close(): stopping flushes the traffic counts.
+  transfersService.stop()
   database.close()
   server.close()
-  transfersService.stop()
   managementServer?.stop()
   await shutdownTelemetry()
   process.exit(0)

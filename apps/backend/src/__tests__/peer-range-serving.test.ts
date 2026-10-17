@@ -148,7 +148,7 @@ describe('GET /peer/items/:id/file upload tracking and limits', () => {
       uploadLimiter: { take: async (bytes: number) => {
         taken.push(bytes)
       } } as any,
-      canStartUpload: () => options.canStart ?? true,
+      uploadRefusal: () => (options.canStart ?? true) ? null : { status: 503 as const, retryAfterSeconds: 60, message: 'Too many concurrent uploads' },
     }
     const app = new Hono<{ Variables: { apiKeyName?: string } }>()
     app.use('*', async (c, next) => {
@@ -158,6 +158,33 @@ describe('GET /peer/items/:id/file upload tracking and limits', () => {
     app.route('/peer', getPeerRouter(controllerForFile(), transfers))
     return { app, monitor, taken }
   }
+
+  test('answers 429 until midnight past the daily limit, and counts bytes on the friend key', async () => {
+    const monitor = new TransferMonitor({ setInterval: () => 0 as any, clearInterval: () => {} })
+    const counted: Array<[string, string, string, number]> = []
+    let limited = false
+    const transfers = {
+      monitor,
+      uploadLimiter: { take: async () => {} } as any,
+      uploadRefusal: (party?: string) => (limited && party === 'key:7' ? { status: 429 as const, retryAfterSeconds: 3600, message: 'Daily limit of 50 GiB reached' } : null),
+      ledger: { add: (...args: [string, string, string, number]) => void counted.push(args) } as any,
+    }
+    const app = new Hono<{ Variables: { apiKeyName?: string, apiKeyId?: number } }>()
+    app.use('*', async (c, next) => {
+      c.set('apiKeyName', 'Nicklas')
+      c.set('apiKeyId', 7)
+      await next()
+    })
+    app.route('/peer', getPeerRouter(controllerForFile(), transfers))
+
+    await (await app.request('/peer/items/remote1:movie:1/file')).arrayBuffer()
+    limited = true
+    const refused = await app.request('/peer/items/remote1:movie:1/file')
+
+    expect(counted).toEqual([['out', 'key:7', 'Nicklas', 10]])
+    expect(refused.status).toBe(429)
+    expect(refused.headers.get('Retry-After')).toBe('3600')
+  })
 
   test('answers 503 with Retry-After when every upload slot is taken', async () => {
     const { app } = appWithTransfers({ canStart: false })
@@ -172,7 +199,8 @@ describe('GET /peer/items/:id/file upload tracking and limits', () => {
 
     expect(monitor.list()).toMatchObject([{ direction: 'upload', peer: 'Nicklas', filename: 'Movie.mkv', totalBytes: 10, transferredBytes: 4 }])
     await res.arrayBuffer()
-    expect(monitor.list()).toEqual([])
+    // Ended: it no longer holds a slot (a ranged upload stays listed briefly for its next window).
+    expect(monitor.activeCount('upload')).toBe(0)
     expect(taken.reduce((sum, n) => sum + n, 0)).toBe(6)
   })
 })
@@ -208,7 +236,7 @@ describe('file route through the node:http server', () => {
     app.route('/peer', getPeerRouter(controllerForFile(), {
       monitor,
       uploadLimiter: { take: async () => {} } as any,
-      canStartUpload: () => true,
+      uploadRefusal: () => null,
     }))
     const server = startPublicServer(app.fetch, 0)
     await new Promise<void>(resolve => server.once('listening', () => resolve()))
@@ -220,7 +248,7 @@ describe('file route through the node:http server', () => {
       expect(res.headers.get('Content-Range')).toBe(`bytes 100-${big.length - 1}/${big.length}`)
       expect(new Uint8Array(await res.arrayBuffer())).toEqual(big.slice(100))
       await Bun.sleep(10)
-      expect(monitor.list()).toEqual([])
+      expect(monitor.activeCount('upload')).toBe(0)
     }
     finally {
       server.close()

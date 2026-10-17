@@ -107,3 +107,64 @@ describe('TransfersService', () => {
     expect(service.uploadLimiter.rate).toBeNull()
   })
 })
+
+describe('TransferMonitor across Range windows', () => {
+  test('a restart with the same resumeKey continues the entry and keeps its speed', () => {
+    let now = 0
+    const monitor = new TransferMonitor({ setInterval: () => 1 as any, clearInterval: () => {} }, () => new Date(now))
+    const first = monitor.start({ direction: 'upload', peer: 'Nicklas', filename: 'a.mkv', totalBytes: 100, party: 'key:1', resumeKey: 'key:1:item' })
+    first.add(40)
+    monitor.tick()
+    first.end()
+
+    // Between windows the entry stays listed but holds no slot.
+    expect(monitor.list()).toHaveLength(1)
+    expect(monitor.activeCount('upload')).toBe(0)
+
+    now += 1000
+    const second = monitor.start({ direction: 'upload', peer: 'Nicklas', filename: 'a.mkv', totalBytes: 100, offsetBytes: 40, party: 'key:1', resumeKey: 'key:1:item' })
+    second.add(20)
+    monitor.tick()
+
+    const [entry] = monitor.list()
+    expect(monitor.list()).toHaveLength(1)
+    expect(entry).toMatchObject({ transferredBytes: 60, bytesPerSecond: 30 })
+    expect(monitor.activeCount('upload', 'key:1')).toBe(1)
+    expect(monitor.activeCount('upload', 'key:2')).toBe(0)
+  })
+
+  test('an ended entry disappears once the linger time has passed', () => {
+    let now = 0
+    const monitor = new TransferMonitor({ setInterval: () => 1 as any, clearInterval: () => {} }, () => new Date(now))
+    monitor.start({ direction: 'upload', peer: 'p', filename: 'f', resumeKey: 'k' }).end()
+    now += 6000
+    expect(monitor.list()).toEqual([])
+  })
+})
+
+describe('TransfersService per-friend upload limits', () => {
+  const GiB = 1024 ** 3
+
+  test('a friend at its own slot limit is refused while others still get a slot', () => {
+    const { monitor } = manualMonitor()
+    const service = new TransfersService(() => BandwidthConfig.parse({ maxConcurrentUploadsPerPeer: 1, maxConcurrentUploads: 3 }), () => null, { monitor })
+
+    monitor.start({ direction: 'upload', peer: 'a', filename: 'f', party: 'key:1' })
+
+    expect(service.uploadRefusal('key:1')).toMatchObject({ status: 503, retryAfterSeconds: 60 })
+    expect(service.uploadRefusal('key:2')).toBeNull()
+  })
+
+  test('a friend past its daily limit waits until local midnight', () => {
+    const { monitor } = manualMonitor()
+    const now = new Date(2026, 9, 17, 23, 0, 0)
+    const ledger = { bytesToday: (_d: string, party: string) => (party === 'key:1' ? 50 * GiB : 0) } as any
+    const service = new TransfersService(() => BandwidthConfig.parse({ dailyUploadLimitGiBPerPeer: 50 }), () => null, { monitor, ledger, now: () => now })
+
+    const refusal = service.uploadRefusal('key:1')
+
+    expect(refusal).toMatchObject({ status: 429, message: 'Daily limit of 50 GiB reached' })
+    expect(refusal!.retryAfterSeconds).toBe(3600)
+    expect(service.uploadRefusal('key:2')).toBeNull()
+  })
+})
