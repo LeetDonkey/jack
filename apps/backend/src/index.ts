@@ -1,3 +1,4 @@
+import type { ArrServerConnector } from './lib/servers/arr/base'
 import process from 'node:process'
 import { getApp } from './app'
 import { openDatabase } from './database/connection'
@@ -150,9 +151,13 @@ if (!downloads) {
   logger.warn('No "downloads" config set; skipping download client auto-registration. Grabs will fail until a qBittorrent client is configured.')
 }
 
-const registrable = connectorManager.destinations.filter(d => d.isInitialized && d.autoRegister.enable)
-for (const dest of registrable) {
-  await registerManagedForDestination(dest, {
+// Registrations run one at a time: each provisions a key and commits it by
+// dropping the destination's other keys, so two overlapping runs would revoke
+// each other's key.
+let registrationQueue: Promise<void> = Promise.resolve()
+
+function registerDestination(dest: ArrServerConnector): Promise<void> {
+  const run = registrationQueue.then(() => registerManagedForDestination(dest, {
     managedKeys: managedApiKeys,
     internalUrl: jackConfig.internalUrl,
     downloads: Boolean(downloads),
@@ -165,10 +170,24 @@ for (const dest of registrable) {
       logger.info({ destination: name, categories: meta.categories, downloadClientId: meta.downloadClientId }, 'Registered Jack as Torznab indexer')
     },
     onFailure: logRegistrationFailure,
-  })
+  }))
+  registrationQueue = run.catch(() => {})
+  return run
 }
+
+const registrable = connectorManager.destinations.filter(d => d.isInitialized && d.autoRegister.enable)
+for (const dest of registrable)
+  await registerDestination(dest)
 // Drop managed keys for destinations no longer registrable so stale keys can't authenticate.
 managedApiKeys.prune(registrable.map(d => d.id))
+
+// Re-register after a server is saved in the management UI, so a changed
+// priority (or a newly added *arr) applies without a restart.
+configService?.onServerSaved((id) => {
+  const dest = connectorManager.destinations.find(d => d.id === id)
+  if (dest?.isInitialized && dest.autoRegister.enable)
+    void registerDestination(dest)
+})
 
 importWatcher?.start()
 

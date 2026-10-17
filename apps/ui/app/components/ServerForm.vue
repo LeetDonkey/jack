@@ -36,6 +36,8 @@ function validate(s: typeof state): FormError[] {
     errors.push({ name: 'url', message: 'Enter the server URL.' })
   if (!s.apiKey)
     errors.push({ name: 'apiKey', message: 'An API key is required.' })
+  if (s.autoEnable && (!Number.isInteger(s.autoPriority) || s.autoPriority < 1 || s.autoPriority > 50))
+    errors.push({ name: 'autoPriority', message: 'Pick a priority from 1 to 50.' })
   return errors
 }
 
@@ -85,8 +87,13 @@ function onSubmit() {
 
     <UCard variant="subtle" :ui="{ body: 'space-y-3' }">
       <UCheckbox v-model="state.autoEnable" label="Auto-register jack in this *arr" />
-      <UFormField v-if="state.autoEnable" label="Priority" :ui="{ container: 'w-24' }">
-        <UInputNumber v-model="state.autoPriority" :min="1" />
+      <UFormField
+        v-if="state.autoEnable"
+        name="autoPriority"
+        label="Indexer priority"
+        description="1 (highest) to 50 (lowest). When two releases are otherwise equal, *arr grabs from the indexer with the lower number. Saving applies it to *arr right away."
+      >
+        <UInputNumber v-model="state.autoPriority" :min="1" :max="50" class="w-24" />
       </UFormField>
     </UCard>
 

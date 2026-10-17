@@ -326,13 +326,14 @@ into it.
 ### `servers[].autoregister`
 
 **Type:** `object`\
-**Content:** `enable`: `boolean`, default `true` · `priority`: `integer` ≥ 1, default `1`
+**Content:** `enable`: `boolean`, default `true` · `priority`: `integer` 1-50, default `1`
 
 Controls the indexer/download-client registration jack performs in destination
-servers on startup.
+servers on startup, and again when the server is saved in the management UI.
 
 - **`enable`**: set `false` to register jack in that *arr yourself.
-- **`priority`**: indexer priority in *arr (lower = preferred). The
+- **`priority`**: indexer priority in *arr, from 1 (preferred) to 50. *arr uses
+  it to choose between releases that are otherwise equal. The
   qBittorrent download client is always registered at *arr's lowest priority
   (50): *arr's general client pool only round-robins among the best-priority
   group, so torrents grabbed from your other indexers never get routed to

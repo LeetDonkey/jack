@@ -381,6 +381,42 @@ describe('Management API servers', () => {
     expect(connectorManager.sources.some(s => s.id === serverId)).toBe(true)
     expect(connectorManager.destinations.some(s => s.id === serverId)).toBe(true)
   })
+
+  test('announces each saved server so jack can re-register in it, but not a rolled-back one', async () => {
+    const { app, configService } = await makeMutableApp()
+    const saved: string[] = []
+    configService.onServerSaved(id => saved.push(id))
+
+    await app.request('/config/servers', { method: 'POST', headers: { ...KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(SERVER) })
+    await app.request(`/config/servers/${serverId}`, {
+      method: 'PATCH',
+      headers: { ...KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...SERVER, autoregister: { enable: true, priority: 50 } }),
+    })
+    const failed = await app.request(`/config/servers/${serverId}`, {
+      method: 'PATCH',
+      headers: { ...KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...SERVER, url: 'http://dead-radarr.test:7878' }),
+    })
+
+    expect(failed.status).toBe(502)
+    expect(saved).toEqual([serverId, serverId])
+  })
+
+  test('rejects an indexer priority *arr would refuse', async () => {
+    const { app, path } = await makeMutableApp()
+    await app.request('/config/servers', { method: 'POST', headers: { ...KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(SERVER) })
+
+    const res = await app.request(`/config/servers/${serverId}`, {
+      method: 'PATCH',
+      headers: { ...KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...SERVER, autoregister: { enable: true, priority: 51 } }),
+    })
+
+    expect(res.status).toBe(400)
+    const onDisk = jsonc.parse(await Bun.file(path).text()) as { servers: Array<{ autoregister?: unknown }> }
+    expect(onDisk.servers[0]?.autoregister).toBeUndefined()
+  })
 })
 
 describe('Management API GET /config exposes refs-intact secrets', () => {

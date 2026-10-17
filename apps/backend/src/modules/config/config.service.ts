@@ -25,6 +25,7 @@ export class ConfigService {
   // read-modify-write + map mutation never interleave between concurrent calls.
   private queue: Promise<unknown> = Promise.resolve()
   private readonly subscribers = new Set<() => void>()
+  private readonly serverSavedListeners = new Set<(id: string) => void>()
 
   constructor(params: { path: string, raw: RawConfig, connectorManager: ConnectorManager, downloadsRepository?: DownloadsRepository }) {
     this.path = params.path
@@ -57,6 +58,26 @@ export class ConfigService {
   subscribe(subscriber: () => void): () => void {
     this.subscribers.add(subscriber)
     return () => this.subscribers.delete(subscriber)
+  }
+
+  /**
+   * Called with the connector id after a server is added or updated, so the
+   * caller can re-register jack in that *arr without a restart.
+   */
+  onServerSaved(listener: (id: string) => void): () => void {
+    this.serverSavedListeners.add(listener)
+    return () => this.serverSavedListeners.delete(listener)
+  }
+
+  private notifyServerSaved(id: string): void {
+    for (const listener of this.serverSavedListeners) {
+      try {
+        listener(id)
+      }
+      catch {
+        // A failing listener must not make a committed save look failed.
+      }
+    }
   }
 
   private notifyChanged(): void {
@@ -279,7 +300,8 @@ export class ConfigService {
     const rawServer = RawServerConfig.parse(input)
     // rethrowInitError: a server that fails its status check aborts the add (and rolls
     // the config back) so the UI can report the cause, rather than persisting a dead one.
-    return this.addEntry('servers', 'server', resolved, rawServer, () => this.connectorManager.addServerConnector(resolved, { rethrowInitError: true }))
+    await this.addEntry('servers', 'server', resolved, rawServer, () => this.connectorManager.addServerConnector(resolved, { rethrowInitError: true }))
+    this.notifyServerSaved(generateId(resolved.url))
   }
 
   async removeServer(id: string): Promise<void> {
@@ -287,12 +309,13 @@ export class ConfigService {
   }
 
   async updateServer(id: string, input: unknown): Promise<void> {
-    // NOTE: a URL change rekeys the connector but does NOT re-register the Jack
-    // indexer/download-client already bound in *arr (that needs a restart), and there
-    // is no download cascade (downloads key off peers, not servers) — so no onRekey.
+    // A URL change rekeys the connector. There is no download cascade (downloads
+    // key off peers, not servers), so no onRekey. Listeners re-register jack in
+    // the saved *arr, which applies a new indexer priority right away.
     const resolved = ServerConfig.parse(input)
     const rawServer = RawServerConfig.parse(input)
-    return this.updateEntry('servers', 'server', id, resolved, rawServer, () => this.connectorManager.addServerConnector(resolved, { rethrowInitError: true }))
+    await this.updateEntry('servers', 'server', id, resolved, rawServer, () => this.connectorManager.addServerConnector(resolved, { rethrowInitError: true }))
+    this.notifyServerSaved(generateId(resolved.url))
   }
 
   // ── Jack ───────────────────────────────────────────────────────────────────

@@ -124,7 +124,7 @@ export const RawServerConfig = z.object({
   type: ServerType,
   source: z.boolean().optional(),
   destination: z.boolean().optional(),
-  autoregister: z.object({ enable: z.boolean().optional(), priority: z.number().int().optional() }).optional(),
+  autoregister: z.object({ enable: z.boolean().optional(), priority: z.number().int().min(1).max(50).optional() }).optional(),
 })
 
 export type RawServerConfig = z.infer<typeof RawServerConfig>
