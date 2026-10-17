@@ -27,11 +27,13 @@ export function createFileStream(
   return new ReadableStream<Uint8Array>({
     // An abort (the peer disconnected) ends the transfer at once: under node:http in
     // Bun the body is neither cancelled nor stops being pulled when the client goes away.
+    // Close rather than error the stream: nobody is left to read it, and an errored
+    // body surfaces as an unhandled rejection in the server's body writer.
     start(controller) {
       hooks.signal?.addEventListener('abort', () => {
         end()
         try {
-          controller.error(hooks.signal!.reason)
+          controller.close()
         }
         catch {}
       }, { once: true })
@@ -51,7 +53,9 @@ export function createFileStream(
       }
       catch (err) {
         end()
-        controller.error(err)
+        // Aborted: the stream is already closed (see start).
+        if (!hooks.signal?.aborted)
+          controller.error(err)
       }
     },
     cancel() {

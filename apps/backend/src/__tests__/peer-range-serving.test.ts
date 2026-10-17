@@ -1,9 +1,10 @@
 import type { AddressInfo } from 'node:net'
-import { connect } from 'node:net'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
+import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import process from 'node:process'
 import { Hono } from 'hono'
 import { startPublicServer } from '../lib/public-server'
 import { createFileStream } from '../modules/peer/file-stream'
@@ -257,6 +258,10 @@ describe('file route through the node:http server', () => {
   })
 
   test('a peer that disconnects mid-file frees its upload slot and stops the reads', async () => {
+    // An errored body surfaced as an unhandled rejection; nothing may reject unobserved.
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => void unhandled.push(reason)
+    process.on('unhandledRejection', onUnhandled)
     const big = new Uint8Array(4 * 1024 * 1024).map((_, i) => i % 251)
     await Bun.write(filePath, big)
     const monitor = new TransferMonitor({ setInterval: () => 0 as any, clearInterval: () => {} })
@@ -291,9 +296,11 @@ describe('file route through the node:http server', () => {
       // No more of the file is read once the peer is gone.
       expect(taken).toBe(takenAtEnd)
       expect(taken).toBeLessThan(big.length)
+      expect(unhandled).toEqual([])
     }
     finally {
       server.close()
+      process.off('unhandledRejection', onUnhandled)
     }
   })
 })
