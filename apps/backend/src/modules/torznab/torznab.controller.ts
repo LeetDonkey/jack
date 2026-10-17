@@ -1,4 +1,4 @@
-import type { AppConfig } from '../../lib/config'
+import type { AppConfig, TorznabConfig } from '../../lib/config'
 import type { Release } from '../../lib/release'
 import type { PeerConnector } from '../../lib/servers/peer'
 import { setSpanAttribute } from '../../lib/span-attributes'
@@ -52,6 +52,8 @@ export class TorznabController {
   constructor(
     private readonly getPeers: () => PeerConnector[],
     private readonly jackConfig: NonNullable<AppConfig['jack']>,
+    // Read on every RSS request so a change in the management UI applies at once.
+    private readonly getTorznabConfig: () => TorznabConfig = () => ({ rssMaxAgeDays: 7, rssMaxItems: 100 }),
   ) {}
 
   private async fanOut(label: string, search: (peer: PeerConnector) => Promise<Release[]>, apiKey: string): Promise<TorznabItem[]> {
@@ -114,8 +116,22 @@ export class TorznabController {
     return this.fanOut(`tvdb:${tvdbId} s:${season ?? '-'} e:${episode ?? '-'}`, peer => peer.searchByTvdbId(tvdbId, season, episode), apiKey)
   }
 
-  /** Full catalog of every peer's releases — backs the torznab RSS/test query. */
-  async catalog(apiKey: string): Promise<TorznabItem[]> {
-    return this.fanOut('catalog', peer => peer.listReleases(), apiKey)
+  /**
+   * The torznab RSS feed: releases peers added within rssMaxAgeDays, newest
+   * first, at most rssMaxItems. Offering every peer's whole catalog made *arr
+   * grab every possible upgrade in a single RSS sync. Peers that understand
+   * `since` filter at the source; older ones send everything and are filtered here.
+   */
+  async catalog(apiKey: string, now = Date.now()): Promise<TorznabItem[]> {
+    const { rssMaxAgeDays, rssMaxItems } = this.getTorznabConfig()
+    const sinceMs = now - rssMaxAgeDays * 86_400_000
+    const since = new Date(sinceMs).toISOString()
+    const items = await this.fanOut('catalog', peer => peer.listReleases(since), apiKey)
+    return items
+      .map(item => ({ item, at: item.publishDate ? Date.parse(item.publishDate) : Number.NaN }))
+      .filter(({ at }) => at >= sinceMs)
+      .sort((a, b) => b.at - a.at)
+      .slice(0, rssMaxItems)
+      .map(({ item }) => item)
   }
 }

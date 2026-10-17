@@ -4,7 +4,7 @@ import { getApp } from './app'
 import { openDatabase } from './database/connection'
 import { shutdownTelemetry } from './instrumentation'
 import { registerManagedForDestination } from './lib/autoregister'
-import { DownloadsConfig, getAppConfig } from './lib/config'
+import { DownloadsConfig, getAppConfig, TorznabConfig } from './lib/config'
 import { getAppEnvs } from './lib/envs'
 import { FetchError } from './lib/errors/FetchError'
 import { startPublicServer } from './lib/public-server'
@@ -78,7 +78,8 @@ configService?.subscribe(() => {
     downloadsService.setMaxConcurrentDownloads(max)
 })
 
-const app = getApp(envs, config, connectorManager, { downloadsRepository, downloadsService, apiKeysRepository, managedKeysRepository, transfersService })
+const torznabConfig = () => configService?.getTorznab() ?? TorznabConfig.parse(config.torznab ?? {})
+const app = getApp(envs, config, connectorManager, { downloadsRepository, downloadsService, apiKeysRepository, managedKeysRepository, transfersService, torznabConfig })
 // Public server on node:http (see startPublicServer for why).
 const server = startPublicServer(app.fetch, envs.PORT)
 

@@ -43,6 +43,8 @@ export function getPeerRouter(
       tvdbId: z.string().optional(),
       season: z.coerce.number().int().optional(),
       episode: z.coerce.number().int().optional(),
+      // ISO time: with no id, return only files added since then (the RSS feed).
+      since: z.string().optional(),
     })),
     async (c) => {
       const params = c.req.valid('query')

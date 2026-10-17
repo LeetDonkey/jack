@@ -175,14 +175,18 @@ export class PeerConnector extends ServerConnector {
     })
   }
 
-  /** Full catalog of the peer's releases (no filter) — used for the RSS feed. */
+  /**
+   * The peer's catalog. With `since` (ISO time) a peer that supports it returns
+   * only files added since then; an older peer ignores it and returns everything.
+   */
   @requiresInitialization
-  async listReleases(): Promise<Release[]> {
+  async listReleases(since?: string): Promise<Release[]> {
     return withSpan('peer.catalog', {
       'peer.name': this.name,
       'peer.id': this.id,
+      'search.since': since,
     }, async (span) => {
-      const { items } = await this.fetch('/peer/search', { method: 'GET', schema: PeerSearchResponse })
+      const { items } = await this.fetch('/peer/search', { method: 'GET', ...(since ? { query: { since } } : {}), schema: PeerSearchResponse })
       setSpanAttribute(span, 'release.count', items.length)
       return items
     })

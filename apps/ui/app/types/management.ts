@@ -277,3 +277,11 @@ export interface BandwidthConfig {
 }
 
 export type BandwidthConfigPatch = Partial<Omit<BandwidthConfig, 'schedule'>> & { schedule?: BandwidthPeriod[] | null }
+
+// config.torznab with defaults applied (GET), and its PATCH body (`null` restores a default).
+export interface TorznabConfig {
+  rssMaxAgeDays: number
+  rssMaxItems: number
+}
+
+export type TorznabConfigPatch = { [K in keyof TorznabConfig]?: TorznabConfig[K] | null }

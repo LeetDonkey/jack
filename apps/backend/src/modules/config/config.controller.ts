@@ -150,4 +150,13 @@ export class ConfigController {
   updateBandwidth(input: unknown) {
     return this.mutate(s => s.updateBandwidth(input))
   }
+
+  /** Torznab feed settings with defaults applied, or null when read-only. */
+  getTorznab() {
+    return this.configService?.getTorznab() ?? null
+  }
+
+  updateTorznab(input: unknown) {
+    return this.mutate(s => s.updateTorznab(input))
+  }
 }

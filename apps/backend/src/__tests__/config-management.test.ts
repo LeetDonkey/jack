@@ -104,7 +104,7 @@ describe('Management API auth', () => {
 const mswServer = setupServer(
   http.get('http://bob.test:3000/handshake', () => HttpResponse.json({ name: 'jack', version: PROTOCOL_VERSION })),
   http.get('http://bob.test:3000/peer/search', () => HttpResponse.json({ items: [
-    { id: 'b:movie:1', title: 'Bob.Movie.1080p', filename: 'Bob.Movie.1080p.mkv', category: 2000, size: 1, imdbId: 'tt1', tmdbId: 1 },
+    { id: 'b:movie:1', title: 'Bob.Movie.1080p', filename: 'Bob.Movie.1080p.mkv', category: 2000, size: 1, imdbId: 'tt1', tmdbId: 1, publishDate: new Date().toISOString() },
   ] })),
   http.get('http://bob2.test:3000/handshake', () => HttpResponse.json({ name: 'jack', version: PROTOCOL_VERSION })),
   http.get('http://carol.test:3000/handshake', () => HttpResponse.json({ name: 'jack', version: PROTOCOL_VERSION })),

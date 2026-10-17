@@ -56,6 +56,8 @@ const peerRelease: Release = {
   imdbId: 'tt0133093',
   tmdbId: 603,
   quality: { name: 'Bluray-1080p', source: 'bluray', resolution: 1080 },
+  // Recent, so the RSS feed (releases added in the last week) includes it.
+  publishDate: new Date().toISOString(),
 }
 
 const handlers = [

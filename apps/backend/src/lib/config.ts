@@ -340,11 +340,30 @@ export const RawBandwidthConfig = z.object({
 
 export type RawBandwidthConfig = z.infer<typeof RawBandwidthConfig>
 
+// What the Torznab RSS feed offers this instance's *arr apps. A feed of every
+// peer's whole catalog lets *arr grab every possible upgrade in one RSS sync, so
+// the feed lists only releases a peer added recently, newest first.
+export const TorznabConfig = z.object({
+  rssMaxAgeDays: z.number().int().min(1).default(7),
+  rssMaxItems: z.number().int().min(1).default(100),
+})
+
+export type TorznabConfig = z.infer<typeof TorznabConfig>
+
+// PATCH body for the torznab block; `null` drops a key back to its default.
+export const RawTorznabConfig = z.object({
+  rssMaxAgeDays: z.number().int().min(1).nullish(),
+  rssMaxItems: z.number().int().min(1).nullish(),
+})
+
+export type RawTorznabConfig = z.infer<typeof RawTorznabConfig>
+
 export const AppConfig = z.object({
   version: z.number(),
   jack: JackConfig,
   downloads: DownloadsConfig.optional(),
   bandwidth: BandwidthConfig.optional(),
+  torznab: TorznabConfig.optional(),
   servers: z.array(ServerConfig).default([]),
   peers: z.array(PeerConfig).default([]),
 })

@@ -129,7 +129,7 @@ describe('TorznabController embeds the requester key in download URLs', () => {
   })
 
   test('catalog embeds the passed request key', async () => {
-    const controller = new TorznabController(() => [fakePeer([movieRelease])], jackConfig)
+    const controller = new TorznabController(() => [fakePeer([{ ...movieRelease, publishDate: new Date().toISOString() }])], jackConfig)
     const items = await controller.catalog('jack_managed_xyz')
     expect(new URL(items[0]!.downloadUrl).searchParams.get('apikey')).toBe('jack_managed_xyz')
   })
@@ -156,5 +156,48 @@ describe('releaseToTorznab', () => {
     expect(result.season).toBe(1)
     expect(result.episode).toBe(2)
     expect(result.guid).toBe('peer1:conn2:episode:7')
+  })
+})
+
+describe('TorznabController RSS feed', () => {
+  const jackConfig = { internalUrl: 'http://localhost:3000' } as any
+  const now = Date.parse('2026-10-17T12:00:00Z')
+  const daysAgo = (days: number) => new Date(now - days * 86_400_000).toISOString()
+
+  function feedPeer(releases: Release[], seen: Array<string | undefined>): PeerConnector {
+    return {
+      id: 'peer1',
+      name: 'Friend',
+      listReleases: async (since?: string) => {
+        seen.push(since)
+        return releases
+      },
+    } as unknown as PeerConnector
+  }
+
+  test('offers only releases added within rssMaxAgeDays, newest first', async () => {
+    const seen: Array<string | undefined> = []
+    const releases = [
+      { ...movieRelease, id: 'c:movie:1', publishDate: daysAgo(10) },
+      { ...movieRelease, id: 'c:movie:2', publishDate: daysAgo(1) },
+      { ...movieRelease, id: 'c:movie:3' },
+      { ...movieRelease, id: 'c:movie:4', publishDate: daysAgo(3) },
+    ]
+    const controller = new TorznabController(() => [feedPeer(releases, seen)], jackConfig, () => ({ rssMaxAgeDays: 7, rssMaxItems: 100 }))
+
+    const items = await controller.catalog('key', now)
+
+    expect(items.map(i => i.guid)).toEqual(['peer1:c:movie:2', 'peer1:c:movie:4'])
+    // The peer is asked to filter at the source too.
+    expect(seen).toEqual([daysAgo(7)])
+  })
+
+  test('caps the feed at rssMaxItems', async () => {
+    const releases = Array.from({ length: 5 }, (_, i) => ({ ...movieRelease, id: `c:movie:${i}`, publishDate: daysAgo(i) }))
+    const controller = new TorznabController(() => [feedPeer(releases, [])], jackConfig, () => ({ rssMaxAgeDays: 30, rssMaxItems: 2 }))
+
+    const items = await controller.catalog('key', now)
+
+    expect(items.map(i => i.guid)).toEqual(['peer1:c:movie:0', 'peer1:c:movie:1'])
   })
 })

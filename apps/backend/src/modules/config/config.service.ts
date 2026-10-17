@@ -4,7 +4,7 @@ import type { ConnectorManager } from '../../lib/servers'
 import type { DownloadsRepository } from '../downloads/downloads.repository'
 import { jsonc } from 'jsonc'
 import { atomicWriteFile } from '../../lib/atomic-write'
-import { BandwidthConfig, DownloadsConfig, ExternalJackConfig, JackConfig, PeerConfig, RawBandwidthConfig, RawDownloadsConfig, RawExternalJackConfig, RawJackConfig, RawPeerConfig, RawServerConfig, ServerConfig } from '../../lib/config'
+import { BandwidthConfig, DownloadsConfig, ExternalJackConfig, JackConfig, PeerConfig, RawBandwidthConfig, RawDownloadsConfig, RawExternalJackConfig, RawJackConfig, RawPeerConfig, RawServerConfig, RawTorznabConfig, ServerConfig, TorznabConfig } from '../../lib/config'
 import { BadRequestError } from '../../lib/errors/BadRequestError'
 import { ConflictError } from '../../lib/errors/ConflictError'
 import { NotFoundError } from '../../lib/errors/NotFoundError'
@@ -410,6 +410,28 @@ export class ConfigService {
       }
       BandwidthConfig.parse(merged)
       const next = { ...this.raw, bandwidth: merged } as RawConfig
+      await this.persist(next)
+      this.raw = next
+    })
+  }
+
+  // ── Torznab ────────────────────────────────────────────────────────────────
+  /** Torznab feed settings with defaults applied (an absent block means defaults). */
+  getTorznab(): TorznabConfig {
+    return TorznabConfig.parse(this.raw.torznab ?? {})
+  }
+
+  /** Patch the torznab block with the same merge rules as updateBandwidth. Applies immediately. */
+  async updateTorznab(input: unknown): Promise<void> {
+    const patch = RawTorznabConfig.parse(input)
+    return this.enqueue(async () => {
+      const merged: Record<string, unknown> = { ...(this.raw.torznab ?? {}), ...patch }
+      for (const [key, value] of Object.entries(merged)) {
+        if (value === null)
+          delete merged[key]
+      }
+      TorznabConfig.parse(merged)
+      const next = { ...this.raw, torznab: merged } as RawConfig
       await this.persist(next)
       this.raw = next
     })

@@ -295,6 +295,10 @@ async function confirmRevoke() {
 
         <USeparator />
 
+        <TorznabSection />
+
+        <USeparator />
+
         <PeersSection ref="peersSection" />
 
         <USeparator />

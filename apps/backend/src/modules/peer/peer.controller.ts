@@ -45,10 +45,32 @@ export type StreamFileResult
  * local arr sources (the `source: true` Radarr/Sonarr servers) and streams the
  * underlying files from disk.
  */
+// Every RSS poll from every peer asks for the whole catalog, and building it means
+// reading the full Radarr/Sonarr library. Peers poll every few minutes, so one
+// listing per source is shared for this long.
+const CATALOG_CACHE_MS = 5 * 60_000
+
 export class PeerController {
+  private readonly catalogCache = new WeakMap<ArrServerConnector, { at: number, releases: Promise<Release[]> }>()
+
   constructor(
     private readonly getSources: () => ArrServerConnector[],
+    private readonly now: () => number = Date.now,
   ) {}
+
+  private listReleases(source: ArrServerConnector): Promise<Release[]> {
+    const cached = this.catalogCache.get(source)
+    if (cached && this.now() - cached.at < CATALOG_CACHE_MS)
+      return cached.releases
+    const releases = source.listReleases()
+    this.catalogCache.set(source, { at: this.now(), releases })
+    // A failed listing must not be served from the cache.
+    releases.catch(() => {
+      if (this.catalogCache.get(source)?.releases === releases)
+        this.catalogCache.delete(source)
+    })
+    return releases
+  }
 
   // Sources gated by config only (`source: true`). We deliberately do NOT filter
   // by `isInitialized` here: a source that failed to connect at boot is still
@@ -58,7 +80,7 @@ export class PeerController {
     return this.getSources().filter(s => s.canSource)
   }
 
-  async search(params: { imdbId?: string, tmdbId?: string, tvdbId?: string, season?: number, episode?: number }): Promise<Release[]> {
+  async search(params: { imdbId?: string, tmdbId?: string, tvdbId?: string, season?: number, episode?: number, since?: string }): Promise<Release[]> {
     return withSpan('peer.search', {
       'search.imdb_id': params.imdbId,
       'search.tmdb_id': params.tmdbId,
@@ -91,7 +113,7 @@ export class PeerController {
                 ? await source.searchByImdbId(params.imdbId)
                 : params.tvdbId
                   ? await source.searchByTvdbId(params.tvdbId, params.season, params.episode)
-                  : await source.listReleases()
+                  : await this.listReleases(source)
             setSpanAttribute(sourceSpan, 'release.count', items.length)
             return items
           })
@@ -102,7 +124,11 @@ export class PeerController {
         }
       }))
 
-      const flat = results.flat()
+      // A catalog request with `since` (the RSS feed) only wants recently added files.
+      const sinceMs = params.since ? Date.parse(params.since) : Number.NaN
+      const flat = Number.isNaN(sinceMs) || params.tmdbId || params.imdbId || params.tvdbId
+        ? results.flat()
+        : results.flat().filter(r => r.publishDate != null && Date.parse(r.publishDate) >= sinceMs)
       setSpanAttribute(span, 'release.count', flat.length)
       return flat
     })

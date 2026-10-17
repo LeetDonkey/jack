@@ -36,6 +36,8 @@ it alone.)
 | [`downloads.manualImportBackoffBaseMs`](#downloads-manualimportbackoffbasems) | Import retry backoff base |
 | [`downloads.manualImportBackoffMaxMs`](#downloads-manualimportbackoffmaxms) | Import retry backoff cap |
 | [`downloads.unlinkImportedFiles`](#downloads-unlinkimportedfiles) | Drop jack's copy after *arr imports |
+| [`torznab.rssMaxAgeDays`](#torznab-rssmaxagedays) | Age limit for releases in the RSS feed |
+| [`torznab.rssMaxItems`](#torznab-rssmaxitems) | Size limit for the RSS feed |
 | [`servers[].name`](#servers-name) | Display name |
 | [`servers[].type`](#servers-type) | Radarr or Sonarr |
 | [`servers[].url`](#servers-url) | *arr base URL |
@@ -266,6 +268,35 @@ still references is left alone. If the unlink fails, the download stays
 
 Editable from the management UI (***Settings -> Downloads***) and applies
 immediately. Unlike the other keys in this block, it does not need a restart.
+
+## `torznab`
+
+What the Torznab RSS feed offers your Radarr/Sonarr. Optional; the defaults
+apply when the block is absent. Editable in ***Settings -> RSS feed*** and
+applies to the next RSS sync.
+
+Searches by id (a newly added movie, a request, a manual search) are not
+affected: they always look through every peer's whole library.
+
+### `torznab.rssMaxAgeDays`
+
+**Type:** `integer`\
+**Format:** days, ≥ 1\
+**Default:** `7`
+
+Only releases a peer added within this many days appear in the feed, newest
+first. *arr grabs every upgrade it finds in a feed, so a feed of every peer's
+whole library turns into one large batch of upgrades. A peer running a jack
+that understands the filter applies it before answering; an older peer sends
+its whole catalog and jack filters it.
+
+### `torznab.rssMaxItems`
+
+**Type:** `integer`\
+**Format:** ≥ 1\
+**Default:** `100`
+
+Upper bound on the number of releases in one feed. The newest are kept.
 
 ## `servers`
 

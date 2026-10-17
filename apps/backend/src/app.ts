@@ -1,4 +1,4 @@
-import type { AppConfig } from './lib/config'
+import type { AppConfig, TorznabConfig } from './lib/config'
 import type { Envs } from './lib/envs'
 import type { ConnectorManager } from './lib/servers'
 import type { ApiKeysRepository } from './modules/api-keys/api-keys.repository'
@@ -34,6 +34,8 @@ interface AppServices {
   downloadsRepository?: DownloadsRepository
   downloadsService?: DownloadsService
   transfersService?: TransfersService
+  /** Live torznab feed settings; defaults when absent. */
+  torznabConfig?: () => TorznabConfig
 }
 
 // This is the external surface, gated per audience rather than by one global key:
@@ -116,7 +118,7 @@ export function getApp(envs: Envs, config: AppConfig, connManager: { servers: Co
 
   // Torznab API — the operator's Radarr/Sonarr search through us and grab via the
   // download router. Returns empty results when there are no peers to fan out to.
-  const torznabController = new TorznabController(() => connManager.peers, config.jack)
+  const torznabController = new TorznabController(() => connManager.peers, config.jack, services.torznabConfig)
   app.use('/torznab/*', arrAuth)
   app.route('/torznab', getTorznabRouter(torznabController))
   app.route('/torznab', getDownloadRouter(() => connManager.peers))
