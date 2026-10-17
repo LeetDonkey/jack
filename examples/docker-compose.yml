@@ -1,7 +1,7 @@
 services:
   jack:
-    # Pre-built image published to GitHub Container Registry on every push to main.
-    image: ghcr.io/roziscoding/jack:main
+    # Pre-built image of the LeetDonkey/jack fork on Docker Hub (tags: latest and the commit).
+    image: leetdonkey/jack:latest
     container_name: jack
     restart: unless-stopped
     ports:
@@ -54,9 +54,9 @@ services:
     # networks:
     #   - media
 
-  # Management console. Published alongside the backend on every push to main. Open it at http://localhost:3000.
+  # Management console, published alongside the backend. Open it at http://localhost:3000.
   jack-ui:
-    image: ghcr.io/roziscoding/jack-ui:main
+    image: leetdonkey/jack-ui:latest
     container_name: jack-ui
     restart: unless-stopped
     depends_on:

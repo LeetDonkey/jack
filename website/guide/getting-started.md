@@ -7,8 +7,9 @@ description: Install jack with Docker Compose, connect Radarr or Sonarr, configu
 This guide takes you from nothing to a running jack instance: configured
 against your Radarr/Sonarr, registered there as an indexer and download
 client, with the management UI up and ready to connect to friends. Docker
-Compose is the recommended way to self-host jack. Two images are published to
-GitHub Container Registry on every push to `main`, so there's nothing to build.
+Compose is the recommended way to self-host jack. Two images are published on
+Docker Hub (`leetdonkey/jack` and `leetdonkey/jack-ui`), so there's nothing to
+build. On Unraid, follow [Installing on Unraid](/guide/unraid) instead.
 
 ## Before you start
 
@@ -55,10 +56,10 @@ Or, if you'd rather not copy-paste, fetch them:
 
 ```bash
 mkdir jack && cd jack
-curl -LO https://raw.githubusercontent.com/roziscoding/jack/main/examples/docker-compose.yml
-curl -L -o .env https://raw.githubusercontent.com/roziscoding/jack/main/examples/.env.example
+curl -LO https://raw.githubusercontent.com/LeetDonkey/jack/main/examples/docker-compose.yml
+curl -L -o .env https://raw.githubusercontent.com/LeetDonkey/jack/main/examples/.env.example
 mkdir config
-curl -L -o config/config.jsonc https://raw.githubusercontent.com/roziscoding/jack/main/examples/config.jsonc
+curl -L -o config/config.jsonc https://raw.githubusercontent.com/LeetDonkey/jack/main/examples/config.jsonc
 ```
 
 ## 2. Fill in `config.jsonc`

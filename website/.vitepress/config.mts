@@ -119,6 +119,7 @@ export default withMermaid({
           items: [
             { text: 'What is jack?', link: '/guide/what-is-jack' },
             { text: 'Getting started', link: '/guide/getting-started' },
+            { text: 'Installing on Unraid', link: '/guide/unraid' },
             { text: 'Sample files', link: '/guide/sample-files' },
             { text: 'How it works', link: '/guide/how-it-works' },
           ],

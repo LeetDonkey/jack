@@ -15,13 +15,48 @@ BitTorrent swarm, just a private peer-to-peer bridge between your media servers.
 
 Built with [Bun](https://bun.com) and [Hono](https://hono.dev).
 
-**Full documentation lives at [jack.roz.ninja](https://jack.roz.ninja).**
+## This fork
+
+This is a fork of [roziscoding/jack](https://github.com/roziscoding/jack), run by
+a small group of friends. Images: [`leetdonkey/jack`](https://hub.docker.com/r/leetdonkey/jack)
+and [`leetdonkey/jack-ui`](https://hub.docker.com/r/leetdonkey/jack-ui) on Docker
+Hub, tagged `latest` and with the commit.
+
+- **Install on Unraid**: [Installing on Unraid](website/guide/unraid.md), with
+  templates in [`unraid/`](unraid/).
+- **Install with Docker Compose**: [`examples/docker-compose.yml`](examples/docker-compose.yml)
+  uses the fork's images.
+- **Settings the fork adds** are in the [configuration reference](website/reference/configuration.md).
+
+What it adds on top of upstream:
+
+- **Downloads that survive outages**: a retry window (default 24 hours) for
+  network errors, bounded Range requests so a slow disk can't fill RAM, and a
+  retry for files a friend's jack briefly can't find.
+- **Verified downloads**: friends' jacks publish SHA-256 hashes per 16 MiB
+  piece; jack checks every download, repairs bad pieces, and continues from
+  another friend with the same file when one goes offline.
+- **Kinder to friends' servers**: the RSS feed lists only recently added
+  releases, an upgrade policy per Radarr/Sonarr, cached catalogs, upload limits
+  per friend, and bandwidth schedules.
+- **Friends page and notifications**: who is online, their version and traffic
+  per friend; Discord, ntfy or webhook notifications for failures, offline
+  friends and a daily summary.
+- **Friends of friends**: find people your friends know and connect through
+  them, end-to-end encrypted, without either side's address being shared
+  before both accept.
+- **A nicer peer catalog**: titles, posters and quality from your friends'
+  Radarr/Sonarr, no TMDB key needed.
+- **fail2ban for the public port**: temporary bans for addresses that keep
+  failing authentication.
+
+The upstream documentation at [jack.roz.ninja](https://jack.roz.ninja)
+describes upstream jack.
 
 ## Quick start (Docker Compose)
 
-Two images are published to GitHub Container Registry on every push to `main` —
-the backend (`ghcr.io/roziscoding/jack:main`) and the management UI
-(`ghcr.io/roziscoding/jack-ui:main`) — so you don't need to clone the repo. Grab
+Two images are published on Docker Hub: the backend (`leetdonkey/jack`) and the
+management UI (`leetdonkey/jack-ui`), so you don't need to clone the repo. Grab
 [`examples/docker-compose.yml`](examples/docker-compose.yml) and
 [`examples/config.jsonc`](examples/config.jsonc), drop them in a folder, then:
 
