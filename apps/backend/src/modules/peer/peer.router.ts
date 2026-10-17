@@ -137,7 +137,16 @@ export function getPeerRouter(
 
     // Track the upload and pace it through the shared upload limit. The transfer
     // ends when the stream completes, errors, or the peer disconnects.
-    const signal = c.req.raw.signal
+    // Under node:http (Bun) a client that disconnects mid-stream neither cancels the
+    // body nor aborts the request signal; only the request's 'close' tells, and
+    // without it the upload keeps reading the file into nowhere and holds its slot.
+    const disconnected = new AbortController()
+    const env = c.env as { incoming?: { once: (event: string, fn: () => void) => void }, outgoing?: { writableFinished?: boolean } } | undefined
+    env?.incoming?.once('close', () => {
+      if (!env.outgoing?.writableFinished)
+        disconnected.abort(new Error('Peer disconnected'))
+    })
+    const signal = AbortSignal.any([c.req.raw.signal, disconnected.signal])
     const upload = transfers?.monitor.start({
       direction: 'upload',
       peer: label,

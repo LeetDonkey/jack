@@ -25,6 +25,17 @@ export function createFileStream(
   }
 
   return new ReadableStream<Uint8Array>({
+    // An abort (the peer disconnected) ends the transfer at once: under node:http in
+    // Bun the body is neither cancelled nor stops being pulled when the client goes away.
+    start(controller) {
+      hooks.signal?.addEventListener('abort', () => {
+        end()
+        try {
+          controller.error(hooks.signal!.reason)
+        }
+        catch {}
+      }, { once: true })
+    },
     async pull(controller) {
       try {
         if (offset >= file.size) {
