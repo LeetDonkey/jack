@@ -24,6 +24,24 @@ export const ReleaseCategory = {
   Tv: 5000,
 } as const
 
+const HttpsUrl = z.url().max(500).refine(url => url.startsWith('https://'))
+
+// The movie or series a file belongs to, as the source *arr knows it, so a
+// catalog can show a title and poster rather than a file name. Optional (older
+// jacks don't send it), and an invalid block is dropped rather than failing the
+// whole release.
+export const ReleaseMedia = z.object({
+  title: z.string().min(1).max(300),
+  year: z.number().int().optional(),
+  overview: z.string().max(1000).optional(),
+  posterUrl: HttpsUrl.optional(),
+  backdropUrl: HttpsUrl.optional(),
+  genres: z.array(z.string().max(50)).max(10).optional(),
+  rating: z.number().min(0).max(10).optional(),
+})
+
+export type ReleaseMedia = z.infer<typeof ReleaseMedia>
+
 export const Release = z.object({
   // `${sourceConnectorId}:${kind}:${fileId}` — opaque to consumers, resolved by
   // the source jack to fetch metadata / stream the file. kind is 'movie' | 'episode'.
@@ -47,6 +65,7 @@ export const Release = z.object({
   season: z.number().optional(),
   episode: z.number().optional(),
   publishDate: z.string().optional(),
+  media: ReleaseMedia.optional().catch(undefined),
 })
 
 export type Release = z.infer<typeof Release>

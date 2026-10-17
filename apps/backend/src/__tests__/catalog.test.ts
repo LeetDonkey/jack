@@ -670,3 +670,74 @@ describe('catalogController.getTmdbStatus', () => {
     expect(await controller.getTmdbStatus()).toEqual({ configured: true, ok: false, error: 'boom' })
   })
 })
+
+describe('catalog metadata from the source *arr', () => {
+  const media = { title: 'The Matrix', year: 1999, posterUrl: 'https://image.tmdb.org/t/p/w342/m.jpg', genres: ['Action'], rating: 8.2 }
+
+  test('a release carrying media gives the title its real name, metadata and best quality', () => {
+    const [title] = groupReleasesIntoUnifiedTitles([
+      { peer: { id: 'p1', name: 'Alpha' }, releases: [
+        movie({ tmdbId: 603, title: 'The.Matrix.1999.1080p.BluRay', quality: { name: 'Bluray-1080p', resolution: 1080 }, media }),
+      ] },
+      { peer: { id: 'p2', name: 'Beta' }, releases: [
+        movie({ tmdbId: 603, title: 'The.Matrix.1999.2160p.Remux', quality: { name: 'Remux-2160p', resolution: 2160 } }),
+      ] },
+    ])
+
+    expect(title!.displayTitle).toBe('The Matrix')
+    expect(title!.quality).toBe('Remux-2160p')
+    expect(title!.metadata).toEqual({ tmdbId: 603, title: 'The Matrix', overview: null, year: 1999, rating: 8.2, posterUrl: media.posterUrl, backdropUrl: null, genres: ['Action'] })
+  })
+
+  test('takes the synopsis from whichever episode carries it', () => {
+    const series = { title: 'The Simpsons', year: 1989 }
+    const [title] = groupReleasesIntoUnifiedTitles([{ peer: { id: 'p1', name: 'Alpha' }, releases: [
+      episode({ tvdbId: 71663, season: 1, episode: 2, media: series }),
+      episode({ tvdbId: 71663, season: 1, episode: 1, media: { ...series, overview: 'Springfield.' } }),
+    ] }])
+
+    expect(title!.displayTitle).toBe('The Simpsons')
+    expect(title!.metadata?.overview).toBe('Springfield.')
+  })
+
+  test('without media the title falls back to the release name, as before', () => {
+    const [title] = groupReleasesIntoUnifiedTitles([{ peer: { id: 'p1', name: 'Alpha' }, releases: [movie({ tmdbId: 1 })] }])
+    expect(title!.displayTitle).toBe('Movie.2024.1080p')
+    expect(title!.metadata).toBeUndefined()
+  })
+})
+
+describe('catalogController.getCatalog caching', () => {
+  test('reuses a peer catalog for 15 minutes, asks again on refresh or after expiry, and keeps it if the peer drops', async () => {
+    let calls = 0
+    let fail = false
+    let now = 0
+    const peer = {
+      id: 'p1',
+      name: 'Alpha',
+      isInitialized: true,
+      listReleases: async () => {
+        calls++
+        if (fail)
+          throw new Error('down')
+        return [movie({ tmdbId: 603 })]
+      },
+    }
+    const controller = new CatalogController({ servers: [], peers: [peer] } as any, undefined, undefined, () => now)
+
+    await Promise.all([controller.getCatalog(), controller.getCatalog()])
+    now += 14 * 60_000
+    const cached = await controller.getCatalog()
+    expect(calls).toBe(1)
+    expect(cached.updatedAt).toBe(new Date(0).toISOString())
+
+    await controller.getCatalog({ refresh: true })
+    expect(calls).toBe(2)
+
+    now += 16 * 60_000
+    fail = true
+    const stale = await controller.getCatalog()
+    expect(calls).toBe(3)
+    expect(stale.titles).toHaveLength(1)
+  })
+})

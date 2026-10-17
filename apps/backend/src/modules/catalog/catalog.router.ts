@@ -46,7 +46,7 @@ export function getCatalogRouter(controller: CatalogController) {
   })
 
   // Aggregated catalog across all initialized peers.
-  app.get('/', catalogDoc('Get the aggregated catalog', 'Everything available across all initialized peers.'), async c => c.json(await controller.getCatalog()))
+  app.get('/', catalogDoc('Get the aggregated catalog', 'Everything available across all initialized peers. Each peer catalog is cached for 15 minutes; `?refresh=true` asks the peers again.'), async c => c.json(await controller.getCatalog({ refresh: c.req.query('refresh') === 'true' })))
 
   return app
 }

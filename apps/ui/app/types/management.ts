@@ -91,12 +91,14 @@ export interface CatalogTitle {
   releaseCount: number
   totalSize: number
   metadata?: TmdbMetadata | null
+  quality?: string
   peers: CatalogTitlePeer[]
 }
 
 export interface CatalogResponse {
   peers: Array<{ id: string, name: string }>
   titles: CatalogTitle[]
+  updatedAt?: string | null
 }
 
 export interface RequestServerOption {

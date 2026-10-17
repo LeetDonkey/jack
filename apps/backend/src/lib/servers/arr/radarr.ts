@@ -8,6 +8,7 @@ import { normalizeImdbId, ReleaseCategory } from '../../release'
 import { setSpanAttribute, setSpanAttributes } from '../../span-attributes'
 import { withSpan } from '../../tracing'
 import { ArrServerConnector, basename, stripExtension } from './base'
+import { releaseMedia } from './media'
 
 const CreatedId = z.object({ id: z.number().int() })
 
@@ -69,6 +70,7 @@ export class RadarrServerConnector extends ArrServerConnector {
       edition: file.edition ?? undefined,
       mediaInfo: (file.mediaInfo as Record<string, unknown> | undefined) ?? undefined,
       publishDate: file.dateAdded ?? undefined,
+      media: releaseMedia(movie, movie.ratings?.tmdb?.value ?? movie.ratings?.imdb?.value),
     }
   }
 

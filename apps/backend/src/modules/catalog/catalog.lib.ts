@@ -26,6 +26,8 @@ export interface UnifiedCatalogTitle {
   releaseCount: number
   totalSize: number
   metadata?: TmdbMetadata | null
+  // Quality name of the highest-resolution release across peers (e.g. "Remux-2160p").
+  quality?: string
   peers: CatalogTitlePeer[]
 }
 
@@ -37,6 +39,23 @@ export interface PeerReleases {
 
 function mediaTypeOf(release: Release): 'movie' | 'tv' {
   return release.category === ReleaseCategory.Tv ? 'tv' : 'movie'
+}
+
+/** Catalog metadata from the title-level block a source *arr sends with a release. */
+function metadataOf(release: Release): TmdbMetadata | undefined {
+  const media = release.media
+  if (!media)
+    return undefined
+  return {
+    tmdbId: release.tmdbId ?? 0,
+    title: media.title,
+    overview: media.overview ?? null,
+    year: media.year ?? null,
+    rating: media.rating ?? null,
+    posterUrl: media.posterUrl ?? null,
+    backdropUrl: media.backdropUrl ?? null,
+    genres: media.genres ?? [],
+  }
 }
 
 /** The strong (id-based) grouping key for a release, or null when it carries no id. */
@@ -90,6 +109,7 @@ export function groupReleasesIntoUnifiedTitles(peerReleases: PeerReleases[]): Un
     strongKey(release) ?? nameToStrongKey.get(nameKey(release)) ?? nameKey(release)
 
   const byKey = new Map<string, UnifiedCatalogTitle>()
+  const bestResolution = new Map<string, number>()
   for (const { peer, releases } of peerReleases) {
     for (const release of releases) {
       const key = keyOf(release)
@@ -102,18 +122,33 @@ export function groupReleasesIntoUnifiedTitles(peerReleases: PeerReleases[]): Un
           tmdbId: release.tmdbId,
           imdbId: release.imdbId,
           tvdbId: release.tvdbId,
-          displayTitle: mediaTypeOf(release) === 'tv' ? (release.seriesTitle ?? release.title) : release.title,
+          displayTitle: release.media?.title ?? (mediaTypeOf(release) === 'tv' ? (release.seriesTitle ?? release.title) : release.title),
+          metadata: metadataOf(release),
           releaseCount: 0,
           totalSize: 0,
           peers: [],
         }
         byKey.set(key, title)
+        bestResolution.set(key, -1)
       }
 
       // Backfill ids if a later release carries one the first lacked.
       title.tmdbId ??= release.tmdbId
       title.imdbId ??= release.imdbId
       title.tvdbId ??= release.tvdbId
+      // Take metadata from the first release that has it; the synopsis may arrive on a later one.
+      if (!title.metadata && release.media) {
+        title.metadata = metadataOf(release)
+        title.displayTitle = release.media.title
+      }
+      else if (title.metadata && !title.metadata.overview && release.media?.overview) {
+        title.metadata.overview = release.media.overview
+      }
+      const resolution = release.quality?.resolution ?? 0
+      if (release.quality?.name && resolution > bestResolution.get(key)!) {
+        bestResolution.set(key, resolution)
+        title.quality = release.quality.name
+      }
       title.releaseCount += 1
       title.totalSize += release.size
 

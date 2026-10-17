@@ -9,6 +9,7 @@ import { Semaphore } from '../../semaphore'
 import { setSpanAttributes } from '../../span-attributes'
 import { withSpan } from '../../tracing'
 import { ArrServerConnector, basename, PermanentManualImportError, stripExtension } from './base'
+import { releaseMedia } from './media'
 
 type SeriesWithId = SeriesResource & { id: number }
 
@@ -77,6 +78,7 @@ export class SonarrServerConnector extends ArrServerConnector {
       releaseGroup: file.releaseGroup ?? undefined,
       mediaInfo: (file.mediaInfo as Record<string, unknown> | undefined) ?? undefined,
       seriesTitle: series?.title ?? undefined,
+      media: series ? releaseMedia(series, series.ratings?.value) : undefined,
       season: episode.seasonNumber ?? undefined,
       episode: episode.episodeNumber ?? undefined,
       publishDate: file.dateAdded ?? undefined,
@@ -112,6 +114,9 @@ export class SonarrServerConnector extends ArrServerConnector {
       .filter(e => e.hasFile && (!filter || filter(e)))
       .map(e => this.buildRelease(e, series, e.episodeFile))
       .filter((r): r is Release => r != null)
+      // The series synopsis rides on the first episode only; a catalog with thousands
+      // of episodes would otherwise repeat it on every one.
+      .map((r, i) => (i === 0 || !r.media?.overview ? r : { ...r, media: { ...r.media, overview: undefined } }))
   }
 
   private async releasesForManySeries(series: SeriesWithId[]): Promise<Release[]> {

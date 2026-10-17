@@ -1,3 +1,4 @@
+import type { Release } from '../../lib/release'
 import type { ArrServerConnector } from '../../lib/servers/arr/base'
 import type { PeerConnector } from '../../lib/servers/peer'
 import type { TmdbClient, TmdbMediaType, TmdbMetadata } from '../../lib/tmdb/client'
@@ -7,10 +8,14 @@ import { BadRequestError } from '../../lib/errors/BadRequestError'
 import { NotFoundError } from '../../lib/errors/NotFoundError'
 import { groupReleasesIntoUnifiedTitles, pickBestPerEpisode, pickBestRelease } from './catalog.lib'
 
+const CATALOG_CACHE_MS = 15 * 60_000
+
 export interface CatalogResponse {
   // Peers that responded and contributed to this catalog.
   peers: Array<{ id: string, name: string }>
   titles: UnifiedCatalogTitle[]
+  // When the oldest peer catalog in this answer was fetched (they are cached).
+  updatedAt: string | null
 }
 
 export interface TmdbStatus {
@@ -41,6 +46,7 @@ export class CatalogController {
     private readonly connectors: { servers: ArrServerConnector[], peers: PeerConnector[] },
     private readonly tmdb?: TmdbClient,
     private readonly downloads?: DownloadsService,
+    private readonly now: () => number = Date.now,
   ) {}
 
   private requirePeer(peerId: string): PeerConnector {
@@ -50,23 +56,46 @@ export class CatalogController {
     return peer
   }
 
-  async getCatalog(): Promise<CatalogResponse> {
+  // A peer's catalog is the whole library (thousands of releases), so opening the
+  // catalog page reuses it for a while instead of asking the peer every time.
+  private readonly peerCatalogs = new Map<string, { at: number, releases: Release[] }>()
+  private readonly inFlight = new Map<string, Promise<Release[]>>()
+
+  private async peerCatalog(peer: PeerConnector, refresh: boolean): Promise<{ at: number, releases: Release[] } | null> {
+    const cached = this.peerCatalogs.get(peer.id)
+    if (cached && !refresh && this.now() - cached.at < CATALOG_CACHE_MS)
+      return cached
+    let pending = this.inFlight.get(peer.id)
+    if (!pending) {
+      pending = peer.listReleases()
+      this.inFlight.set(peer.id, pending)
+      void pending.finally(() => this.inFlight.delete(peer.id)).catch(() => {})
+    }
+    try {
+      const fresh = { at: this.now(), releases: await pending }
+      this.peerCatalogs.set(peer.id, fresh)
+      return fresh
+    }
+    catch {
+      // Unreachable right now: show what we had, if anything.
+      return cached ?? null
+    }
+  }
+
+  async getCatalog({ refresh = false }: { refresh?: boolean } = {}): Promise<CatalogResponse> {
     // Fan out to every initialized peer. A peer that can't serve its catalog is
     // skipped (partial results) rather than failing the whole aggregate.
     const peers = this.connectors.peers.filter(p => p.isInitialized)
-    const results = await Promise.all(peers.map(async (peer): Promise<PeerReleases | null> => {
-      try {
-        const releases = await peer.listReleases()
-        return { peer: { id: peer.id, name: peer.name }, releases }
-      }
-      catch {
-        return null
-      }
+    const results = await Promise.all(peers.map(async (peer): Promise<(PeerReleases & { at: number }) | null> => {
+      const catalog = await this.peerCatalog(peer, refresh)
+      return catalog ? { peer: { id: peer.id, name: peer.name }, releases: catalog.releases, at: catalog.at } : null
     }))
-    const responded = results.filter((r): r is PeerReleases => r !== null)
+    const responded = results.filter((r): r is PeerReleases & { at: number } => r !== null)
+    const oldest = responded.length ? Math.min(...responded.map(r => r.at)) : null
     return {
       peers: responded.map(r => r.peer),
       titles: groupReleasesIntoUnifiedTitles(responded),
+      updatedAt: oldest == null ? null : new Date(oldest).toISOString(),
     }
   }
 

@@ -6,7 +6,8 @@ defineEmits<{ select: [] }>()
 
 const { load, entryFor } = useCatalogMetadata()
 const entry = computed(() => entryFor(props.title))
-const metadata = computed(() => entry.value?.data ?? props.title.metadata ?? null)
+// Metadata from the peer's *arr comes with the catalog; TMDB only fills in what's missing.
+const metadata = computed(() => props.title.metadata ?? entry.value?.data ?? null)
 
 // Three visual states: the lookup is in flight, it finished with nothing (or there
 // was no id to look up), or we have metadata.
@@ -45,7 +46,8 @@ onMounted(() => {
   observer = new IntersectionObserver((entries) => {
     if (!entries.some(entry => entry.isIntersecting))
       return
-    load(props.title)
+    if (!props.title.metadata)
+      load(props.title)
     observer?.disconnect()
     observer = null
   }, { rootMargin: '300px' })
@@ -86,6 +88,13 @@ onBeforeUnmount(() => observer?.disconnect())
       <div v-else class="flex size-full items-center justify-center">
         <UIcon :name="mediaIcon" class="size-8 text-dimmed" />
       </div>
+      <UBadge
+        v-if="title.quality"
+        :label="title.quality"
+        variant="solid"
+        size="sm"
+        class="absolute left-1.5 top-1.5 max-w-[60%] bg-black/65 font-medium text-white ring-1 ring-white/10 backdrop-blur"
+      />
       <UBadge
         v-if="rating"
         :label="rating.toFixed(1)"

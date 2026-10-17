@@ -12,6 +12,21 @@ const { data, pending, error } = useLazyAsyncData(
   () => request<CatalogResponse>('catalog'),
 )
 
+// Peer catalogs are cached on the server for 15 minutes; this asks the peers again.
+const refreshing = ref(false)
+async function refreshCatalog() {
+  refreshing.value = true
+  try {
+    data.value = await request<CatalogResponse>('catalog?refresh=true')
+  }
+  catch (err) {
+    toast.add({ color: 'error', title: extractError(err, 'Could not refresh the catalog.') })
+  }
+  finally {
+    refreshing.value = false
+  }
+}
+
 // Distinct, view-consistent peer colors from the shared settings store. Provided so
 // the poster badges and detail cards resolve the same color for a given peer.
 const { settings } = useSettings()
@@ -24,7 +39,7 @@ const titles = computed(() => {
 })
 
 function titleName(title: CatalogTitle): string {
-  return entryFor(title)?.data?.title ?? title.metadata?.title ?? title.displayTitle
+  return title.metadata?.title ?? entryFor(title)?.data?.title ?? title.displayTitle
 }
 
 const selected = ref<CatalogTitle | null>(null)
@@ -82,6 +97,8 @@ async function onConfirm(payload: CatalogRequestPayload) {
     <template #header>
       <UDashboardNavbar title="Peer Catalog">
         <template #right>
+          <span v-if="data?.updatedAt" class="hidden text-xs text-muted sm:inline">Updated {{ formatAgo(data.updatedAt) }}</span>
+          <UButton icon="i-ph-arrows-clockwise" size="sm" color="neutral" variant="ghost" aria-label="Refresh the catalog" :loading="refreshing" @click="refreshCatalog" />
           <UTabs
             v-model="typeFilter"
             size="sm"
