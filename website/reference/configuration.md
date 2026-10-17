@@ -40,6 +40,7 @@ it alone.)
 | [`torznab.rssMaxItems`](#torznab-rssmaxitems) | Size limit for the RSS feed |
 | [`bandwidth`](#bandwidth) | Speed limits, upload slots and per-friend limits |
 | [`notifications`](#notifications) | Webhooks for failures, offline friends and a daily summary |
+| [`discovery`](#discovery) | Meeting friends of friends |
 | [`servers[].name`](#servers-name) | Display name |
 | [`servers[].type`](#servers-type) | Radarr or Sonarr |
 | [`servers[].url`](#servers-url) | *arr base URL |
@@ -313,6 +314,37 @@ a message to every webhook.
 - **`dailySummaryAt`**: `HH:MM` (server time) for a daily message with GB
   downloaded from and uploaded to each friend that day, and how many downloads
   finished, failed or are still running. Absent means no summary.
+
+## `discovery`
+
+Lets two jacks that share a friend find each other and connect. Optional;
+edited in ***Settings -> Friends of friends*** and applies right away. People
+to meet and requests are on the ***Friends*** page.
+
+- **`publicName`**: the name friends of friends see. Defaults to
+  [`jack.external.instanceName`](#jack-external-instancename).
+- **`discoverable`** (default `false`): let friends of friends see that name and
+  ask to connect.
+- **`introduce`** (default `true`): list the friends who chose to be found to
+  your other friends, and carry their requests and messages.
+
+Each jack has a random identity id and an X25519 key pair. A friend that
+introduces lists only the id, public name and public key of each friend who is
+discoverable. Requests, answers and messages are end-to-end encrypted
+(X25519, HKDF-SHA256, AES-256-GCM, with the routing fields authenticated) and
+travel through the friend you have in common: every jack exchanges this mail
+with each of its peers once a minute, in the direction it already connects.
+The friend in between sees who writes to whom, not what.
+
+Nothing that locates either side is sent until both have said yes: asking is
+the requester's yes, accepting is the other side's. Then each issues an API key
+for the other and sends it with its [`jack.external`](#jack-external) URL and
+headers, encrypted for the other side alone, and both add each other as a
+peer. Both sides therefore need a public name and quick linking set up.
+
+The friend in between carries the public keys, so it could in principle swap
+them. Both sides see the same safety code for a request; comparing it outside
+jack rules that out.
 
 ## `torznab`
 

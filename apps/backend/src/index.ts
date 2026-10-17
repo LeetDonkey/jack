@@ -12,12 +12,15 @@ import { ConnectorManager } from './lib/servers'
 import { PROTOCOL_VERSION } from './lib/version'
 import { logger } from './logger'
 import { getManagementApp } from './management-app'
+import { ApiKeysController } from './modules/api-keys/api-keys.controller'
 import { ApiKeysRepository } from './modules/api-keys/api-keys.repository'
 import { ConfigService } from './modules/config/config.service'
 import { DownloadsRepository } from './modules/downloads/downloads.repository'
 import { DownloadsService } from './modules/downloads/downloads.service'
 import { ImportWatcher } from './modules/downloads/import-watcher'
 import { PeerHealthMonitor } from './modules/friends/peer-health'
+import { IntroStore } from './modules/introductions/intro-store'
+import { IntroductionsService } from './modules/introductions/introductions.service'
 import { ManagedKeysRepository } from './modules/managed-keys/managed-keys.repository'
 import { ManagedApiKeys } from './modules/managed-keys/managed-keys.service'
 import { buildDailySummary } from './modules/notifications/daily-summary'
@@ -86,7 +89,33 @@ configService?.subscribe(() => {
 
 const torznabConfig = () => configService?.getTorznab() ?? TorznabConfig.parse(config.torznab ?? {})
 const pieceHasher = new PieceHasher(database.sqlite)
-const app = getApp(envs, config, connectorManager, { downloadsRepository, downloadsService, apiKeysRepository, managedKeysRepository, transfersService, torznabConfig, pieceHasher })
+
+// Meeting friends of friends. Needs the management API's config service, since
+// accepting adds a peer to the config file.
+const apiKeysController = new ApiKeysController(apiKeysRepository)
+const introductions = configService
+  ? new IntroductionsService({
+      store: new IntroStore(database.sqlite),
+      discovery: () => configService.getDiscovery(),
+      external: () => {
+        try {
+          return configService.getResolvedExternalJack()
+        }
+        catch {
+          return null
+        }
+      },
+      peers: () => connectorManager.peers,
+      issueKey: (name, description) => {
+        const created = apiKeysController.create({ name, description })
+        return { id: created.id, key: created.key }
+      },
+      apiKeyName: id => apiKeysRepository.get(id)?.name ?? null,
+      addPeer: peer => configService.addPeer(peer, { force: true }),
+    })
+  : undefined
+introductions?.start()
+const app = getApp(envs, config, connectorManager, { downloadsRepository, downloadsService, apiKeysRepository, managedKeysRepository, transfersService, torznabConfig, pieceHasher, introductions })
 // Public server on node:http (see startPublicServer for why).
 const server = startPublicServer(app.fetch, envs.PORT)
 
@@ -162,6 +191,7 @@ function startManagementServer() {
     tmdbApiKey: config.jack.tmdbApiKey,
     peerHealth,
     notifications,
+    introductions,
   })
   const instance = Bun.serve({ port: envs.MANAGEMENT_PORT, fetch: managementApp.fetch, idleTimeout: 60 })
   logger.info({ port: instance.port }, 'Management API listening')
@@ -244,6 +274,7 @@ process.on('SIGINT', async () => {
   importWatcher?.stop()
   peerHealth.stop()
   notifications.stop()
+  introductions?.stop()
   // Before database.close(): stopping flushes the traffic counts.
   transfersService.stop()
   database.close()
@@ -258,6 +289,7 @@ process.on('SIGTERM', async () => {
   importWatcher?.stop()
   peerHealth.stop()
   notifications.stop()
+  introductions?.stop()
   // Before database.close(): stopping flushes the traffic counts.
   transfersService.stop()
   database.close()

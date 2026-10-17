@@ -409,6 +409,28 @@ export const RawNotificationsConfig = z.object({
 
 export type RawNotificationsConfig = z.infer<typeof RawNotificationsConfig>
 
+// Meeting friends of friends. Nothing that locates this jack (URL, address,
+// headers) is shared until both sides have accepted.
+export const DiscoveryConfig = z.object({
+  // The name friends' friends see. Defaults to jack.external.instanceName.
+  publicName: z.string().trim().min(1).max(60).nullish(),
+  // Let friends' friends see that name and ask to connect.
+  discoverable: z.boolean().default(false),
+  // List the friends who opted in to your other friends, and carry their
+  // (end-to-end encrypted) requests and messages.
+  introduce: z.boolean().default(true),
+})
+
+export type DiscoveryConfig = z.infer<typeof DiscoveryConfig>
+
+export const RawDiscoveryConfig = z.object({
+  publicName: z.string().trim().min(1).max(60).nullish(),
+  discoverable: z.boolean().nullish(),
+  introduce: z.boolean().nullish(),
+})
+
+export type RawDiscoveryConfig = z.infer<typeof RawDiscoveryConfig>
+
 export const AppConfig = z.object({
   version: z.number(),
   jack: JackConfig,
@@ -416,6 +438,7 @@ export const AppConfig = z.object({
   bandwidth: BandwidthConfig.optional(),
   torznab: TorznabConfig.optional(),
   notifications: NotificationsConfig.optional(),
+  discovery: DiscoveryConfig.optional(),
   servers: z.array(ServerConfig).default([]),
   peers: z.array(PeerConfig).default([]),
 })

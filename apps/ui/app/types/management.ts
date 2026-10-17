@@ -338,3 +338,45 @@ export interface NotificationsConfig {
   peerOfflineMinutes?: number | null
   dailySummaryAt?: string | null
 }
+
+// config.discovery with defaults applied.
+export interface DiscoveryConfig {
+  publicName?: string | null
+  discoverable: boolean
+  introduce: boolean
+}
+
+export type DiscoveryConfigPatch = { [K in keyof DiscoveryConfig]?: DiscoveryConfig[K] | null }
+
+// GET /introductions
+export interface IntroThreadMessage {
+  from: 'me' | 'them' | 'system'
+  text: string
+  at: string
+}
+
+export interface IntroThread {
+  requestId: string
+  direction: 'outgoing' | 'incoming'
+  peerId: string
+  peerName: string
+  viaName: string
+  state: 'pending' | 'accepted' | 'connected' | 'declined'
+  messages: IntroThreadMessage[]
+  safetyCode: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface IntroPerson {
+  id: string
+  name: string
+  via: Array<{ peerId: string, name: string }>
+  status: 'available' | 'requested' | 'connected'
+}
+
+export interface IntroductionsOverview {
+  me: { id: string, name: string | null, discoverable: boolean, introduce: boolean, ready: boolean, missing: string[] }
+  people: IntroPerson[]
+  threads: IntroThread[]
+}

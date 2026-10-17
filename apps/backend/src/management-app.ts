@@ -5,6 +5,7 @@ import type { DownloadsRepository } from './modules/downloads/downloads.reposito
 import type { DownloadsService } from './modules/downloads/downloads.service'
 import type { ImportWatcher } from './modules/downloads/import-watcher'
 import type { PeerHealthMonitor } from './modules/friends/peer-health'
+import type { IntroductionsService } from './modules/introductions/introductions.service'
 import type { NotificationsService } from './modules/notifications/notifications.service'
 import type { TransfersService } from './modules/transfers/transfers.service'
 import { Hono } from 'hono'
@@ -24,6 +25,7 @@ import { getConfigRouter } from './modules/config/config.router'
 import { DownloadsManagementController } from './modules/downloads/downloads.controller'
 import { getDownloadsManagementRouter } from './modules/downloads/downloads.router'
 import { getFriendsRouter } from './modules/friends/friends.router'
+import { getIntroductionsRouter } from './modules/introductions/introductions.router'
 import { logHub } from './modules/logging/log-store'
 import { LogsController } from './modules/logging/logs.controller'
 import { getLogsRouter } from './modules/logging/logs.router'
@@ -48,6 +50,7 @@ export function getManagementApp(params: {
   tmdbApiKey?: string
   peerHealth?: PeerHealthMonitor
   notifications?: NotificationsService
+  introductions?: IntroductionsService
 }) {
   const app = new Hono()
 
@@ -104,6 +107,9 @@ export function getManagementApp(params: {
 
   if (params.notifications)
     app.route('/notifications', getNotificationsRouter(params.notifications))
+
+  if (params.introductions)
+    app.route('/introductions', getIntroductionsRouter(params.introductions))
 
   const tmdbClient = params.tmdbApiKey ? new TmdbClient(params.tmdbApiKey) : undefined
   const catalogController = new CatalogController(params.connectors, tmdbClient, params.downloadsService)

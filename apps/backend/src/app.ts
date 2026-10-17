@@ -4,6 +4,7 @@ import type { ConnectorManager } from './lib/servers'
 import type { ApiKeysRepository } from './modules/api-keys/api-keys.repository'
 import type { DownloadsRepository } from './modules/downloads/downloads.repository'
 import type { DownloadsService } from './modules/downloads/downloads.service'
+import type { IntroductionsService } from './modules/introductions/introductions.service'
 import type { ManagedKeysRepository } from './modules/managed-keys/managed-keys.repository'
 import type { PieceHasher } from './modules/peer/piece-hasher'
 import type { TransfersService } from './modules/transfers/transfers.service'
@@ -18,6 +19,7 @@ import { PROTOCOL_VERSION } from './lib/version'
 import { handleError } from './middleware/handle-error'
 import { logRequests } from './middleware/log-requests'
 import { requireApiKey } from './middleware/require-auth'
+import { getIntroPeerRouter } from './modules/introductions/introductions.router'
 import { PeerController } from './modules/peer/peer.controller'
 import { getPeerRouter } from './modules/peer/peer.router'
 import { QbittorrentController } from './modules/qbittorrent/qbittorrent.controller'
@@ -39,6 +41,8 @@ interface AppServices {
   torznabConfig?: () => TorznabConfig
   /** Piece hashes of shared files, for peers that verify or compare them. */
   pieceHasher?: PieceHasher
+  /** Friends-of-friends introductions (peer side). */
+  introductions?: IntroductionsService
 }
 
 // This is the external surface, gated per audience rather than by one global key:
@@ -117,6 +121,8 @@ export function getApp(envs: Envs, config: AppConfig, connManager: { servers: Co
   // Peer API — other Jacks talk to us to search and download. Serves empty results
   // when there's no local source to read from.
   app.use('/peer/*', peerAuth)
+  if (services.introductions)
+    app.route('/peer/intro', getIntroPeerRouter(services.introductions))
   app.route('/peer', getPeerRouter(peerController, services.transfersService, services.pieceHasher))
 
   // Torznab API — the operator's Radarr/Sonarr search through us and grab via the

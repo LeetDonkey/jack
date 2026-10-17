@@ -1,5 +1,6 @@
 import type { PieceList } from '../../modules/peer/piece-hasher'
 import type { ConnectorHeadersConfig } from '../config'
+import type { IntroMailRequest } from '../introductions/wire'
 import { Buffer } from 'node:buffer'
 import { open, rename, unlink } from 'node:fs/promises'
 import z from 'zod'
@@ -11,6 +12,7 @@ import { IncompatiblePeerError } from '../errors/IncompatiblePeerError'
 import { IncompleteDownloadError } from '../errors/IncompleteDownloadError'
 import { PeerFileMissingError } from '../errors/PeerFileMissingError'
 import { UnknownSizeError } from '../errors/UnknownSizeError'
+import { IntroDirectory, IntroMailResponse, IntroProfile } from '../introductions/wire'
 import { normalizeImdbId, Release } from '../release'
 import { setSpanAttribute, setSpanAttributes } from '../span-attributes'
 import { withSpan } from '../tracing'
@@ -226,6 +228,43 @@ export class PeerConnector extends ServerConnector {
         && (episode == null || r.episode === episode))
       setSpanAttributes(span, { 'release.returned_count': items.length, 'release.matched_count': matched.length })
       return matched
+    })
+  }
+
+  /** The peer's introduction profile, or null when it doesn't speak the protocol (an older jack). */
+  @requiresInitialization
+  async introProfile(): Promise<IntroProfile | null> {
+    try {
+      return await this.fetch('/peer/intro/profile', { method: 'GET', schema: IntroProfile })
+    }
+    catch (err) {
+      if (err instanceof FetchError && err.response.status === 404)
+        return null
+      throw err
+    }
+  }
+
+  /** The friends this peer can introduce us to, or null when it doesn't introduce. */
+  @requiresInitialization
+  async introDirectory(): Promise<IntroDirectory | null> {
+    try {
+      return await this.fetch('/peer/intro/directory', { method: 'GET', schema: IntroDirectory })
+    }
+    catch (err) {
+      if (err instanceof FetchError && err.response.status === 404)
+        return null
+      throw err
+    }
+  }
+
+  /** Hand over introduction mail for (or through) this peer, and receive what waits for us. */
+  @requiresInitialization
+  async introMail(body: IntroMailRequest): Promise<{ messages: unknown[] }> {
+    return this.fetch('/peer/intro/mail', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      schema: IntroMailResponse,
     })
   }
 

@@ -169,4 +169,13 @@ export class ConfigController {
   updateNotifications(input: unknown) {
     return this.mutate(s => s.updateNotifications(input))
   }
+
+  /** Friends-of-friends settings with defaults applied, or null when read-only. */
+  getDiscovery() {
+    return this.configService?.getDiscovery() ?? null
+  }
+
+  updateDiscovery(input: unknown) {
+    return this.mutate(s => s.updateDiscovery(input))
+  }
 }

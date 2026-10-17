@@ -103,6 +103,8 @@ const limitsText = computed(() => {
           </UCard>
         </section>
 
+        <IntroductionsPanel />
+
         <p class="text-xs text-muted">
           Reachability is checked every 5 minutes. Traffic is counted per server day and kept from the moment this jack started counting.
         </p>

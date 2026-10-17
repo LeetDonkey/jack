@@ -4,7 +4,7 @@ import type { ConnectorManager } from '../../lib/servers'
 import type { DownloadsRepository } from '../downloads/downloads.repository'
 import { jsonc } from 'jsonc'
 import { atomicWriteFile } from '../../lib/atomic-write'
-import { BandwidthConfig, DownloadsConfig, ExternalJackConfig, JackConfig, NotificationsConfig, PeerConfig, RawBandwidthConfig, RawDownloadsConfig, RawExternalJackConfig, RawJackConfig, RawNotificationsConfig, RawPeerConfig, RawServerConfig, RawTorznabConfig, ServerConfig, TorznabConfig } from '../../lib/config'
+import { BandwidthConfig, DiscoveryConfig, DownloadsConfig, ExternalJackConfig, JackConfig, NotificationsConfig, PeerConfig, RawBandwidthConfig, RawDiscoveryConfig, RawDownloadsConfig, RawExternalJackConfig, RawJackConfig, RawNotificationsConfig, RawPeerConfig, RawServerConfig, RawTorznabConfig, ServerConfig, TorznabConfig } from '../../lib/config'
 import { BadRequestError } from '../../lib/errors/BadRequestError'
 import { ConflictError } from '../../lib/errors/ConflictError'
 import { NotFoundError } from '../../lib/errors/NotFoundError'
@@ -463,6 +463,28 @@ export class ConfigService {
       }
       NotificationsConfig.parse(merged)
       const next = { ...this.raw, notifications: merged } as RawConfig
+      await this.persist(next)
+      this.raw = next
+    })
+  }
+
+  // ── Discovery ──────────────────────────────────────────────────────────────
+  /** Friends-of-friends settings with defaults applied. */
+  getDiscovery(): DiscoveryConfig {
+    return DiscoveryConfig.parse(this.raw.discovery ?? {})
+  }
+
+  /** Patch the discovery block: `null` restores a default. Applies immediately. */
+  async updateDiscovery(input: unknown): Promise<void> {
+    const patch = RawDiscoveryConfig.parse(input)
+    return this.enqueue(async () => {
+      const merged: Record<string, unknown> = { ...(this.raw.discovery ?? {}), ...patch }
+      for (const [key, value] of Object.entries(merged)) {
+        if (value === null)
+          delete merged[key]
+      }
+      DiscoveryConfig.parse(merged)
+      const next = { ...this.raw, discovery: merged } as RawConfig
       await this.persist(next)
       this.raw = next
     })
