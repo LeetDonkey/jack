@@ -495,7 +495,9 @@ export class DownloadsService {
       // The .part file is preserved by downloadFile on failure, so a later
       // restart re-enqueue can resume from it.
       repo?.markFailed(record.id, message)
-      logger.error({ torrentFilename: record.torrentFilename, filename: record.filename, error: message }, 'Download failed')
+      // The stack is what pins down an unexpected error (e.g. a RangeError from a dependency).
+      const stack = err instanceof Error ? err.stack : undefined
+      logger.error({ torrentFilename: record.torrentFilename, filename: record.filename, error: message, stack }, 'Download failed')
     }
   }
 }

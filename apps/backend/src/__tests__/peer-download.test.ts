@@ -666,3 +666,103 @@ describe('PeerConnector.downloadFile resume', () => {
     }
   })
 })
+
+describe('PeerConnector.downloadFile windows', () => {
+  const FILE = Array.from({ length: 10 }, (_, i) => i)
+
+  // A peer that serves byte ranges of FILE, or the whole file without a Range header.
+  function rangePeer(ranges: string[], override?: (range: string | null, index: number) => Response | undefined) {
+    server.use(
+      http.get(`${PEER_JACK_URL}/peer/items/:itemId/file`, ({ request }) => {
+        const range = request.headers.get('Range')
+        ranges.push(range ?? 'none')
+        const custom = override?.(range, ranges.length - 1)
+        if (custom)
+          return custom
+        if (!range)
+          return new Response(streamOf(FILE), { status: 200, headers: { 'Content-Length': String(FILE.length) } })
+        const [, from, to] = /bytes=(\d+)-(\d*)/.exec(range)!
+        const start = Number(from)
+        const end = to ? Math.min(Number(to), FILE.length - 1) : FILE.length - 1
+        return new Response(streamOf(FILE.slice(start, end + 1)), {
+          status: 206,
+          headers: { 'Content-Length': String(end - start + 1), 'Content-Range': `bytes ${start}-${end}/${FILE.length}` },
+        })
+      }),
+    )
+  }
+
+  async function withDir(run: (paths: { destPath: string, partPath: string }) => Promise<void>) {
+    const dir = await mkdtemp(join(tmpdir(), 'jack-window-'))
+    const destPath = join(dir, 'Movie.mkv')
+    try {
+      await run({ destPath, partPath: `${destPath}.part` })
+    }
+    finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }
+
+  const peer = () => markInitialized(new PeerConnector({ url: PEER_JACK_URL, apiKey: 'peer-api-key', name: 'Friend Jack' }))
+
+  test('fetches a file larger than the window in bounded Range requests', async () => {
+    const ranges: string[] = []
+    rangePeer(ranges)
+    const events: PeerDownloadProgressEvent[] = []
+    await withDir(async ({ destPath, partPath }) => {
+      await peer().downloadFile('remote1:movie:99', destPath, { partPath, releaseSize: 10, windowBytes: 4, onProgress: (e) => { events.push(e) } })
+
+      expect(ranges).toEqual(['bytes=0-3', 'bytes=4-7', 'bytes=8-9'])
+      expect(new Uint8Array(await Bun.file(destPath).arrayBuffer())).toEqual(new Uint8Array(FILE))
+      expect(events).toContainEqual({ type: 'headers', expectedBytes: 10, expectedBytesSource: 'content_range', expectedBytesMismatch: false })
+      expect(events).toContainEqual({ type: 'completed', downloadedBytes: 10, expectedBytes: 10 })
+    })
+  })
+
+  test('resumes from an existing .part one window at a time', async () => {
+    const ranges: string[] = []
+    rangePeer(ranges)
+    await withDir(async ({ destPath, partPath }) => {
+      await writeFile(partPath, new Uint8Array(FILE.slice(0, 3)))
+      await peer().downloadFile('remote1:movie:99', destPath, { partPath, releaseSize: 10, windowBytes: 4 })
+
+      expect(ranges).toEqual(['bytes=3-6', 'bytes=7-9'])
+      expect(new Uint8Array(await Bun.file(destPath).arrayBuffer())).toEqual(new Uint8Array(FILE))
+    })
+  })
+
+  test('takes the whole file from one response when the peer ignores Range', async () => {
+    const ranges: string[] = []
+    rangePeer(ranges, () => new Response(streamOf(FILE), { status: 200, headers: { 'Content-Length': String(FILE.length) } }))
+    await withDir(async ({ destPath, partPath }) => {
+      await peer().downloadFile('remote1:movie:99', destPath, { partPath, releaseSize: 10, windowBytes: 4 })
+
+      expect(ranges).toEqual(['bytes=0-3'])
+      expect(new Uint8Array(await Bun.file(destPath).arrayBuffer())).toEqual(new Uint8Array(FILE))
+    })
+  })
+
+  test('a later window with the wrong Content-Range fails as incomplete and keeps the .part', async () => {
+    const ranges: string[] = []
+    rangePeer(ranges, (_range, index) => index === 1
+      ? new Response(streamOf([9, 9]), { status: 206, headers: { 'Content-Length': '2', 'Content-Range': 'bytes 6-7/10' } })
+      : undefined)
+    await withDir(async ({ destPath, partPath }) => {
+      const download = peer().downloadFile('remote1:movie:99', destPath, { partPath, releaseSize: 10, windowBytes: 4 })
+
+      await expect(download).rejects.toThrow('Peer answered the window at byte 4 with 206 bytes 6-7/10')
+      expect(new Uint8Array(await Bun.file(partPath).arrayBuffer())).toEqual(new Uint8Array(FILE.slice(0, 4)))
+    })
+  })
+
+  test('a later window that is refused rejects with its HTTP status', async () => {
+    const ranges: string[] = []
+    rangePeer(ranges, (_range, index) => index === 1 ? new Response('busy', { status: 503, statusText: 'Service Unavailable' }) : undefined)
+    await withDir(async ({ destPath, partPath }) => {
+      const download = peer().downloadFile('remote1:movie:99', destPath, { partPath, releaseSize: 10, windowBytes: 4 })
+
+      await expect(download).rejects.toMatchObject({ response: { status: 503 } })
+      expect(Bun.file(partPath).size).toBe(4)
+    })
+  })
+})

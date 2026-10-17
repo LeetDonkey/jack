@@ -19,6 +19,11 @@ const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024 * 1024 // 100GB
 const DOWNLOAD_PROGRESS_INTERVAL_MS = 10_000
 const DOWNLOAD_PROGRESS_BYTES = 64 * 1024 * 1024
 const CONTENT_RANGE_PATTERN = /^bytes (\d+)-(\d+)\/(\d+)$/
+// A file larger than this is fetched in bounded Range requests. Bun's fetch
+// buffers a response body in memory when the reader falls behind (a slow disk),
+// so one request for a whole 30 GB file can pile gigabytes into RAM. Each window
+// caps that at its own size.
+export const DOWNLOAD_WINDOW_BYTES = 64 * 1024 * 1024
 
 export type PeerDownloadProgressEvent
   = | { type: 'headers', expectedBytes: number | null, expectedBytesSource: 'content_length' | 'content_range' | 'release_size' | null, expectedBytesMismatch: boolean }
@@ -39,6 +44,8 @@ export interface PeerDownloadOptions {
    * backpressure slows the peer). It runs outside the idle timer.
    */
   onChunk?: (bytes: number) => void | Promise<void>
+  /** Size of each Range request for a file larger than this. Defaults to DOWNLOAD_WINDOW_BYTES. */
+  windowBytes?: number
 }
 
 function parseContentLength(headers: Headers): number | null {
@@ -250,12 +257,20 @@ export class PeerConnector extends ServerConnector {
       const partFile = Bun.file(partPath)
       let existingBytes = await partFile.exists() ? partFile.size : 0
 
-      const doFetch = async (withRange: boolean): Promise<Response> => {
+      const windowBytes = options.windowBytes ?? DOWNLOAD_WINDOW_BYTES
+      const releaseSize = options.releaseSize
+      // Only a file of known size can be windowed: each window's end is clamped to it.
+      let windowed = releaseSize != null && releaseSize > windowBytes
+      const rangeHeader = (start: number) => windowed
+        ? `bytes=${start}-${Math.min(start + windowBytes, releaseSize!) - 1}`
+        : `bytes=${start}-`
+
+      const doFetch = async (rangeStart: number | null): Promise<Response> => {
         signal.throwIfAborted()
         armIdle()
         try {
           return await fetch(url, {
-            headers: withRange ? { ...baseHeaders, Range: `bytes=${existingBytes}-` } : baseHeaders,
+            headers: rangeStart != null ? { ...baseHeaders, Range: rangeHeader(rangeStart) } : baseHeaders,
             signal,
           })
         }
@@ -288,7 +303,7 @@ export class PeerConnector extends ServerConnector {
         await unlink(partPath).catch(() => {})
         existingBytes = 0
         await emitRestart(reason, discardedBytes)
-        return doFetch(false)
+        return doFetch(windowed ? 0 : null)
       }
 
       // Resume sanity vs the known release size (available before the request):
@@ -312,7 +327,7 @@ export class PeerConnector extends ServerConnector {
         }
       }
 
-      let response = await doFetch(existingBytes > 0)
+      let response = await doFetch(existingBytes > 0 || windowed ? existingBytes : null)
       setSpanAttribute(span, 'http.response.status_code', response.status)
 
       if (existingBytes > 0) {
@@ -338,6 +353,7 @@ export class PeerConnector extends ServerConnector {
           const discarded = existingBytes
           await unlink(partPath).catch(() => {})
           existingBytes = 0
+          windowed = false
           await emitRestart('range_ignored', discarded)
         }
       }
@@ -347,7 +363,18 @@ export class PeerConnector extends ServerConnector {
       if (resuming) {
         // We only reach here with a 206 that was already validated above.
       }
+      else if (windowed && response.status === 206) {
+        // First window of a fresh download: it must start at 0 and describe the file we expect.
+        const cr = parseContentRange(response.headers.get('Content-Range'))
+        if (cr == null || cr.start !== 0 || cr.total !== releaseSize) {
+          void response.body?.cancel().catch(() => {})
+          throw new Error(`Peer returned an unexpected Content-Range for the first window: ${response.headers.get('Content-Range')}`)
+        }
+      }
       else {
+        // A peer that ignores Range streams the whole file in one response.
+        if (windowed && response.status === 200)
+          windowed = false
         // Fresh download: require a clean 200. A 206 here is untrustworthy — we
         // did not send a satisfiable Range, so a partial body must not be
         // treated as the whole file (it would rename a truncated file into place).
@@ -363,7 +390,8 @@ export class PeerConnector extends ServerConnector {
       // Expected total size: the transfer header (Content-Range total on resume,
       // else Content-Length), falling back to the *arr release size. Fail-fast if
       // none is known — we never import a file we can't size-check.
-      const transferSize = resuming
+      const ranged = response.status === 206
+      const transferSize = ranged
         ? parseContentRange(response.headers.get('Content-Range'))?.total ?? null
         : parseContentLength(response.headers)
       const expectedBytes = transferSize ?? options.releaseSize ?? null
@@ -371,7 +399,7 @@ export class PeerConnector extends ServerConnector {
       // (206), else Content-Length; 'release_size' means it came only from *arr
       // metadata (the peer advertised no size).
       const expectedBytesSource: 'content_length' | 'content_range' | 'release_size' | null
-        = transferSize != null ? (resuming ? 'content_range' : 'content_length') : (expectedBytes != null ? 'release_size' : null)
+        = transferSize != null ? (ranged ? 'content_range' : 'content_length') : (expectedBytes != null ? 'release_size' : null)
       const expectedBytesMismatch = transferSize != null && options.releaseSize != null && transferSize !== options.releaseSize
       setSpanAttributes(span, {
         'download.resuming': resuming,
@@ -435,6 +463,21 @@ export class PeerConnector extends ServerConnector {
           }
           finally {
             clearIdle()
+          }
+          if (done && windowed && ranged && downloadedBytes < expectedBytes) {
+            // This window is written; ask for the next one.
+            reader.releaseLock()
+            const next = await doFetch(downloadedBytes)
+            const cr = parseContentRange(next.headers.get('Content-Range'))
+            if (next.status !== 206 || !next.body || cr == null || cr.start !== downloadedBytes || cr.total !== expectedBytes) {
+              void next.body?.cancel().catch(() => {})
+              if (!next.ok)
+                throw new FetchError(`Failed to continue download from peer: ${next.statusText}`, next)
+              // Transient: the retry resumes from the .part through the validated resume path.
+              throw new IncompleteDownloadError(`Peer answered the window at byte ${downloadedBytes} with ${next.status} ${next.headers.get('Content-Range') ?? ''}`.trim())
+            }
+            reader = next.body.getReader() as ReadableStreamDefaultReader<Uint8Array>
+            continue
           }
           if (done)
             break
