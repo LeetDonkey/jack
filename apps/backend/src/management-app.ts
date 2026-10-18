@@ -1,3 +1,4 @@
+import type { VersionInfo } from './lib/build'
 import type { ConnectorManager } from './lib/servers'
 import type { ApiKeyMeta } from './modules/api-keys/api-key-meta'
 import type { ApiKeysRepository } from './modules/api-keys/api-keys.repository'
@@ -16,6 +17,7 @@ import { Hono } from 'hono'
 import { describeRoute, openAPIRouteHandler, resolver } from 'hono-openapi'
 import { secureHeaders } from 'hono/secure-headers'
 import z from 'zod'
+import { versionInfo } from './lib/build'
 import { managementDocumentation } from './lib/openapi'
 import { TmdbClient } from './lib/tmdb/client'
 import { handleError } from './middleware/handle-error'
@@ -26,6 +28,8 @@ import { CatalogController } from './modules/catalog/catalog.controller'
 import { getCatalogRouter } from './modules/catalog/catalog.router'
 import { ConfigController } from './modules/config/config.controller'
 import { getConfigRouter } from './modules/config/config.router'
+import { getDiagnosticsRouter } from './modules/diagnostics/diagnostics.router'
+import { FolderCheck } from './modules/diagnostics/folder-check'
 import { DownloadsManagementController } from './modules/downloads/downloads.controller'
 import { getDownloadsManagementRouter } from './modules/downloads/downloads.router'
 import { getFriendsRouter } from './modules/friends/friends.router'
@@ -39,6 +43,10 @@ import { getQuickLinksRouter } from './modules/quick-links/quick-links.router'
 import { getSecurityRouter } from './modules/security/security.router'
 import { StatusController } from './modules/status/status.controller'
 import { getStatusRouter } from './modules/status/status.router'
+import { BuildIdentitySchema } from './modules/status/status.schema'
+import { configSecrets } from './modules/support/support-bundle'
+import { getSupportRouter } from './modules/support/support.router'
+import { TransferPauses } from './modules/transfers/transfer-pauses'
 import { getTransfersRouter } from './modules/transfers/transfers.router'
 
 export function getManagementApp(params: {
@@ -65,6 +73,10 @@ export function getManagementApp(params: {
   registrationWaitMs?: number
   /** overview.system: boot time and settings waiting for a restart. */
   system?: () => SystemStatus
+  /** GET /version; defaults to this process's build (lib/build.ts). */
+  version?: () => VersionInfo
+  /** downloads.completedPath as stored now, for the folder check; null when downloads are off. */
+  completedPath?: () => string | null
 }) {
   const app = new Hono()
 
@@ -90,6 +102,26 @@ export function getManagementApp(params: {
     },
   }), c => c.json({ ok: true }))
 
+  const version = params.version ?? (() => versionInfo())
+  app.get('/version', describeRoute({
+    tags: ['System'],
+    summary: 'jack version and build',
+    description: '`version` is the peer-protocol version (the same on every build). `revision` is the git commit the image was built from and `buildDate` when (ISO 8601); both are null for an image built without the REVISION and BUILD_DATE build args, or when jack runs from source.',
+    security: [{ 'X-Management-Key': [] }],
+    responses: {
+      200: { description: 'Version and build', content: { 'application/json': { schema: resolver(BuildIdentitySchema.extend({ version: z.string() })) } } },
+    },
+  }), c => c.json(version()))
+
+  // Whether catalog requests can start downloads now: the queue and /api/v2 run
+  // only when downloads were set up at boot (see restartPending).
+  const downloadsInactiveReason = () => {
+    const configured = params.configService ? Boolean(params.configService.getRawDownloads()) : Boolean(params.downloadsService)
+    if (!configured)
+      return 'off' as const
+    return params.downloadsService ? null : 'restartPending' as const
+  }
+
   const configController = new ConfigController(params.connectors, params.configService, params.registrations, { registrationWaitMs: params.registrationWaitMs })
   app.route('/config', getConfigRouter(configController))
 
@@ -98,6 +130,8 @@ export function getManagementApp(params: {
     registrations: params.registrations,
     system: params.system,
     health: params.peerHealth,
+    downloadPhases: params.downloadsService,
+    traffic: params.transfersService?.ledger,
     // restartPending changes with every config save.
     subscriptions: configService ? [subscriber => configService.subscribe(subscriber)] : [],
   })
@@ -113,8 +147,32 @@ export function getManagementApp(params: {
   // instance), so this exposes the running process's own logs.
   app.route('/logs', getLogsRouter(new LogsController(logHub)))
 
-  if (params.transfersService)
-    app.route('/transfers', getTransfersRouter(params.transfersService))
+  if (params.transfersService) {
+    const pauses = configService ? new TransferPauses(configService, params.transfersService) : undefined
+    app.route('/transfers', getTransfersRouter(params.transfersService, pauses))
+  }
+
+  app.route('/diagnostics', getDiagnosticsRouter(new FolderCheck({
+    servers: () => params.connectors.servers,
+    completedPath: params.completedPath ?? (() => null),
+  })))
+
+  app.route('/support-bundle', getSupportRouter({
+    version,
+    internalUrl: () => configService?.getInternalUrl() ?? null,
+    externalConfigured: () => Boolean(configService?.getRaw().jack?.external),
+    downloads: () => ({ configured: downloadsInactiveReason() !== 'off', active: downloadsInactiveReason() === null }),
+    restartPending: () => params.system?.().restartPending ?? [],
+    paused: params.transfersService ? () => ({ uploads: params.transfersService!.pauseState('uploads'), downloads: params.transfersService!.pauseState('downloads') }) : undefined,
+    servers: () => params.connectors.servers,
+    registrations: params.registrations,
+    peers: () => params.connectors.peers,
+    health: params.peerHealth,
+    apiKeys: params.apiKeysRepository,
+    keyMeta: params.apiKeyMeta,
+    logs: (lines, minLevel) => logHub.backfill({ lines, minLevel }),
+    secrets: () => [params.managementKey, ...configSecrets(configService?.getRaw() ?? null)],
+  }))
 
   if (params.peerHealth) {
     app.route('/friends', getFriendsRouter({
@@ -138,7 +196,10 @@ export function getManagementApp(params: {
     app.route('/security', getSecurityRouter(params.bans))
 
   const tmdbClient = params.tmdbApiKey ? new TmdbClient(params.tmdbApiKey) : undefined
-  const catalogController = new CatalogController(params.connectors, tmdbClient, params.downloadsService)
+  const catalogController = new CatalogController(params.connectors, tmdbClient, params.downloadsService, undefined, {
+    health: params.peerHealth,
+    downloadsInactiveReason,
+  })
   app.route('/catalog', getCatalogRouter(catalogController))
 
   if (params.apiKeysRepository) {

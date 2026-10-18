@@ -4,7 +4,9 @@ import type { ServerConnector } from '../../lib/servers/base'
 import type { PeerConnector } from '../../lib/servers/peer'
 import type { DestinationRegistration, RegistrationService, RegistrationStatus } from '../registration/registration.service'
 import type { ConfigService } from './config.service'
+import type { ExternalCheckOptions, ExternalCheckResult } from './external-check'
 import { z } from 'zod'
+import { ExternalJackConfig, RawExternalJackConfig } from '../../lib/config'
 import { BadRequestError } from '../../lib/errors/BadRequestError'
 import { ConnectorInitializationError } from '../../lib/errors/ConnectorInitializationError'
 import { NotFoundError } from '../../lib/errors/NotFoundError'
@@ -12,6 +14,7 @@ import { PeerConnectionError } from '../../lib/errors/PeerConnectionError'
 import { classifyPeerError, peerErrorStatus } from '../../lib/net/peer-errors'
 import { ValidationError } from '../../lib/validation'
 import { serverRegistrationFields } from '../registration/registration.service'
+import { checkExternalUrl } from './external-check'
 
 // How long a save or a register request waits for the registration. The *arr's
 // tests can take up to 45 s, and a run can wait behind others; a longer wait would
@@ -26,6 +29,8 @@ export interface ConfigControllerOptions {
   registrationWaitMs?: number
   /** Classifies a failed peer handshake (default: classifyPeerError, which may look up the host). */
   classifyPeerError?: (error: unknown, url: string) => Promise<PeerErrorCode>
+  /** Fetch and timeout for POST /config/jack/external/test (tests). */
+  externalCheck?: ExternalCheckOptions
 }
 
 /** A registration a request waited for, or `registrationPending` when it took too long. */
@@ -235,6 +240,22 @@ export class ConfigController {
 
   updateJackExternal(input: unknown) {
     return this.mutate(s => s.updateJackExternal(input))
+  }
+
+  /**
+   * Fetch <external url>/ping with the external headers. Checks the address and
+   * headers in `input` when it has a url (before saving them), else the saved ones.
+   */
+  testExternal(input: unknown): Promise<ExternalCheckResult> {
+    return this.run(async (service) => {
+      const hasUrl = typeof input === 'object' && input !== null && 'url' in input
+      const external = hasUrl
+        ? ExternalJackConfig.parse(RawExternalJackConfig.parse(input))
+        : service.getResolvedExternalJack()
+      if (!external)
+        throw ValidationError.forField('url', 'Save the address friends use first, or send it in the body')
+      return checkExternalUrl(external, this.options.externalCheck)
+    })
   }
 
   updateDownloads(input: unknown) {

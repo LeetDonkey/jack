@@ -100,6 +100,30 @@ export class TrafficLedger {
     return (row?.bytes ?? 0) + (this.pending.get(`${day}|${direction}|${party}`)?.bytes ?? 0)
   }
 
+  /**
+   * Bytes moved in each direction since the table was created, unflushed counts
+   * included, and the first day counted (YYYY-MM-DD; null before any traffic).
+   */
+  lifetime(): { in: number, out: number, since: string | null } {
+    const rows = this.sqlite.query<{ direction: TrafficDirection, bytes: number, since: string }, []>(
+      'select direction, sum(bytes) as bytes, min(day) as since from peer_traffic group by direction',
+    ).all()
+    const totals = { in: 0, out: 0, since: null as string | null }
+    const counted = (day: string) => {
+      if (totals.since === null || day < totals.since)
+        totals.since = day
+    }
+    for (const row of rows) {
+      totals[row.direction] += row.bytes
+      counted(row.since)
+    }
+    for (const entry of this.pending.values()) {
+      totals[entry.direction] += entry.bytes
+      counted(entry.day)
+    }
+    return totals
+  }
+
   /** Totals per party from `fromDay` (inclusive, YYYY-MM-DD) through today. */
   totalsSince(fromDay: string): TrafficTotal[] {
     this.flush()

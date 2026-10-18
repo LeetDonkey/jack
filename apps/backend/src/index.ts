@@ -29,6 +29,7 @@ import { RegistrationService } from './modules/registration/registration.service
 import { BanList } from './modules/security/ban-list'
 import { pendingRestart } from './modules/status/restart-pending'
 import { localDay, TrafficLedger } from './modules/transfers/traffic-ledger'
+import { followDownloadsPause } from './modules/transfers/transfer-pauses'
 import { TransfersService } from './modules/transfers/transfers.service'
 
 logger.debug('Loading environment variables')
@@ -90,13 +91,22 @@ if (configService)
 const transfersService = new TransfersService(
   () => configService?.getBandwidth() ?? config.bandwidth,
   currentMaxConcurrentDownloads,
-  { ledger: new TrafficLedger(database.sqlite) },
+  {
+    ledger: new TrafficLedger(database.sqlite),
+    // Read live, like the bandwidth block: pausing is a config write.
+    downloadsPausedUntil: () => configService ? configService.getRawDownloads()?.pausedUntil : config.downloads?.pausedUntil,
+  },
 )
 transfersService.start()
 
 const downloadsService = config.downloads
   ? new DownloadsService(config.downloads, connectorManager, downloadsRepository, undefined, transfersService)
   : undefined
+
+// Paused downloads take no slot until the pause ends (also at boot, for a pause
+// saved before a restart); running transfers finish.
+if (downloadsService)
+  followDownloadsPause(transfersService, downloadsService)
 
 // Apply live-editable settings after every config write.
 configService?.subscribe(() => {
@@ -251,6 +261,7 @@ function startManagementServer() {
       bootedAt,
       restartPending: configService ? pendingRestart(bootRaw, configService.getRaw()) : [],
     }),
+    completedPath: () => configService ? configService.getRawDownloads()?.completedPath ?? null : config.downloads?.completedPath ?? null,
   })
   const instance = Bun.serve({ port: envs.MANAGEMENT_PORT, fetch: managementApp.fetch, idleTimeout: 60 })
   logger.info({ port: instance.port }, 'Management API listening')

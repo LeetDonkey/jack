@@ -22,6 +22,11 @@ export const SystemStatusSchema = z.object({
 
 const DownloadRow = z.record(z.string(), z.unknown())
 
+export const BuildIdentitySchema = z.object({
+  revision: z.string().nullable().describe('Git commit the image was built from'),
+  buildDate: z.string().nullable().describe('When the image was built (ISO 8601)'),
+})
+
 export const PeerHealthSchema = z.object({
   online: z.boolean().nullable().describe('Whether the last health check (every 5 minutes, and right after the peer is saved) passed; null before the first check'),
   offlineSince: z.string().nullable().describe('When the checks started failing (ISO 8601); null while online'),
@@ -36,7 +41,12 @@ export const OverviewSchema = z.object({
     total: z.number(),
     initialized: z.number().describe('Peers whose connector connected since boot (it does not notice a peer that went down later; use `online`)'),
     online: z.number().describe('Peers whose last health check passed'),
-    items: z.array(ConnectorFields.extend({ type: z.literal('jack'), version: z.string().nullable(), health: PeerHealthSchema })),
+    items: z.array(ConnectorFields.extend({
+      type: z.literal('jack'),
+      version: z.string().nullable(),
+      build: BuildIdentitySchema.nullable().describe('The build the peer reported in its last handshake; null when it reports none (an older jack, or not checked yet)'),
+      health: PeerHealthSchema,
+    })),
   }),
   servers: z.object({
     total: z.number(),
@@ -50,11 +60,22 @@ export const OverviewSchema = z.object({
   system: SystemStatusSchema,
   downloads: z.object({
     total: z.number(),
-    byStatus: z.record(z.string(), z.number()),
+    byStatus: z.record(z.string(), z.number()).describe('Rows per status. A download the user cancelled is not counted as `failed`; see `cancelled`'),
+    cancelled: z.number().describe('Rows the user cancelled (stored as `failed`, with `cancelledByUser: true`)'),
+    byPhase: z.object({
+      queued: z.number(),
+      transferring: z.number(),
+      retry_wait: z.number(),
+    }).describe('Running downloads per phase: waiting for a slot, transferring, waiting to retry'),
     bytesMoved: z.number(),
     mismatched: z.number(),
     active: z.array(DownloadRow),
     importQueued: z.array(DownloadRow),
-    failed: z.array(DownloadRow),
+    failed: z.array(DownloadRow).describe('Failed rows, without the ones the user cancelled'),
+  }),
+  lifetime: z.object({
+    downloadedBytes: z.number().describe('Bytes downloaded from friends since counting started'),
+    uploadedBytes: z.number().describe('Bytes friends downloaded from you since counting started'),
+    since: z.string().nullable().describe('The first day counted (YYYY-MM-DD, server time); null before any traffic'),
   }),
 })

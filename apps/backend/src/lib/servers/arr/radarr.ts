@@ -7,7 +7,7 @@ import { BadRequestError } from '../../errors/BadRequestError'
 import { normalizeImdbId, ReleaseCategory } from '../../release'
 import { setSpanAttribute, setSpanAttributes } from '../../span-attributes'
 import { withSpan } from '../../tracing'
-import { ArrServerConnector, basename, stripExtension } from './base'
+import { ArrServerConnector, basename, pickSamples, stripExtension } from './base'
 import { releaseMedia } from './media'
 
 const CreatedId = z.object({ id: z.number().int() })
@@ -164,6 +164,14 @@ export class RadarrServerConnector extends ArrServerConnector {
   protected override async doGetFilePath(id: string): Promise<string | null> {
     const movie = await this.getMovie(id)
     return (movie?.movieFile as MovieFileResource | undefined)?.path ?? null
+  }
+
+  protected override async doSampleFilePaths(limit: number, timeoutMs?: number): Promise<string[]> {
+    const movies = await this.fetch('/api/v3/movie', { method: 'GET', timeoutMs }) as MovieResource[]
+    return pickSamples(
+      (Array.isArray(movies) ? movies : []).map(m => ({ root: m.rootFolderPath ?? null, value: m.hasFile ? m.movieFile?.path ?? null : null })),
+      limit,
+    )
   }
 
   protected override async doAdd(params: AddParams): Promise<number> {

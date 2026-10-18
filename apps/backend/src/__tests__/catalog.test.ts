@@ -166,7 +166,7 @@ describe('catalogController.getCatalog', () => {
 
     const result = await controller.getCatalog()
 
-    expect(result.peers).toEqual([{ id: 'p1', name: 'Alpha' }, { id: 'p2', name: 'Beta' }])
+    expect(result.peers.map(p => ({ id: p.id, name: p.name }))).toEqual([{ id: 'p1', name: 'Alpha' }, { id: 'p2', name: 'Beta' }])
     expect(result.titles).toHaveLength(1)
     expect(result.titles[0]!.releaseCount).toBe(2)
     expect(result.titles[0]!.peers).toHaveLength(2)
@@ -186,7 +186,8 @@ describe('catalogController.getCatalog', () => {
 
     const result = await controller.getCatalog()
 
-    expect(result.peers).toEqual([{ id: 'p2', name: 'Healthy' }])
+    expect(result.peers.map(p => p.id)).toEqual(['p2'])
+    expect(result.unavailable).toEqual([{ id: 'p1', name: 'Broken', online: null, error: 'unreachable' }])
     expect(result.titles).toHaveLength(1)
   })
 

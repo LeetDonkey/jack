@@ -4,6 +4,7 @@ import type { DownloadRecord } from '../modules/downloads/downloads.repository'
 import type { PeerHealth, PeerHealthEvent } from '../modules/friends/peer-health'
 import { describe, expect, test } from 'bun:test'
 import { NotificationsConfig as NotificationsSchema } from '../lib/config'
+import { DOWNLOAD_CANCELLED_MESSAGE } from '../modules/downloads/download-state'
 import { friendsSnapshot } from '../modules/friends/friends.router'
 import { PeerHealthMonitor, peerHealthNotification } from '../modules/friends/peer-health'
 import { buildDailySummary } from '../modules/notifications/daily-summary'
@@ -170,7 +171,7 @@ describe('PeerHealthMonitor', () => {
 })
 
 describe('peerHealthNotification', () => {
-  const peer = (lastErrorCode: PeerHealth['lastErrorCode'], version: string | null = null): PeerHealth => ({ id: 'p1', name: 'Alice', url: 'https://a.test', online: false, version, lastSeenAt: null, offlineSince: null, lastError: 'boom', lastErrorCode, checkedAt: null })
+  const peer = (lastErrorCode: PeerHealth['lastErrorCode'], version: string | null = null): PeerHealth => ({ id: 'p1', name: 'Alice', url: 'https://a.test', online: false, version, build: null, lastSeenAt: null, offlineSince: null, lastError: 'boom', lastErrorCode, checkedAt: null })
 
   test('says what kind of failure it is, and keeps "hasn\'t reached" for an unreachable peer', () => {
     const offline = (code: PeerHealth['lastErrorCode'], version?: string) => peerHealthNotification({ type: 'offline', peer: peer(code, version), offlineMinutes: 60 })
@@ -271,13 +272,24 @@ describe('buildDailySummary', () => {
       'Downloads: 1 finished, 1 failed, 1 still running',
     ].join('\n'))
   })
+
+  test('leaves downloads the user cancelled out of the failed count', () => {
+    const now = new Date(2026, 9, 17, 20, 0)
+    const today = new Date(2026, 9, 17, 12, 0).toISOString()
+    const downloads = [
+      { status: 'failed', lastOperation: 'transfer', error: 'Peer download stalled', completedAt: null, updatedAt: today },
+      { status: 'failed', lastOperation: 'transfer', error: DOWNLOAD_CANCELLED_MESSAGE, completedAt: null, updatedAt: today },
+    ] as DownloadRecord[]
+
+    expect(buildDailySummary([], downloads, now).message).toContain('Downloads: 0 finished, 1 failed, 0 still running')
+  })
 })
 
 describe('friendsSnapshot', () => {
   test('joins reachability with traffic per window and the per-friend limits', () => {
     const now = new Date(2026, 9, 17, 12, 0)
     const snapshot = friendsSnapshot({
-      health: { list: () => [{ id: 'a', name: 'Nicklas', url: 'u', online: true, version: '0.1.0', lastSeenAt: null, offlineSince: null, lastError: null, lastErrorCode: null, checkedAt: null }] },
+      health: { list: () => [{ id: 'a', name: 'Nicklas', url: 'u', online: true, version: '0.1.0', build: null, lastSeenAt: null, offlineSince: null, lastError: null, lastErrorCode: null, checkedAt: null }] },
       ledger: { totalsSince: (day: string) => day === '2026-10-17' ? [{ direction: 'in', party: 'peer:a', label: 'Nicklas', bytes: 5 }] : [{ direction: 'in', party: 'peer:a', label: 'Nicklas', bytes: 50 }, { direction: 'out', party: 'key:1', label: 'Nicklas', bytes: 7 }] },
       monitor: { activeCount: (_d: string, party?: string) => (party === 'key:1' ? 2 : 0) } as any,
       apiKeys: { list: () => [{ id: 1, name: 'Nicklas', expiresAt: null, createdAt: '2026-10-01T09:00:00.000Z' } as any] },
@@ -295,7 +307,7 @@ describe('friendsSnapshot', () => {
 
   test('links keys to peers by explicit link and by identity, with last use from the key metadata', () => {
     const now = new Date('2026-10-18T12:00:00Z')
-    const health = (id: string, name: string) => ({ id, name, url: `https://${id}.test`, online: true, version: '0.1.0', lastSeenAt: null, offlineSince: null, lastError: null, lastErrorCode: null, checkedAt: null })
+    const health = (id: string, name: string) => ({ id, name, url: `https://${id}.test`, online: true, version: '0.1.0', build: null, lastSeenAt: null, offlineSince: null, lastError: null, lastErrorCode: null, checkedAt: null })
     const snapshot = friendsSnapshot({
       health: { list: () => [health('a', 'Alice'), health('b', 'Bob')] },
       apiKeys: { list: () => [{ id: 1, name: 'Alice', expiresAt: null, createdAt: '2026-10-18T11:00:00.000Z' }, { id: 2, name: 'bob-key', expiresAt: null, createdAt: '2026-10-01T11:00:00.000Z' }] as any },

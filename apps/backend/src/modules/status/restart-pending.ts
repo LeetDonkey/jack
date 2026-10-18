@@ -12,7 +12,7 @@ export const RESTART_REASONS = ['downloads', 'downloads.completedPath', 'downloa
 export type RestartReason = typeof RESTART_REASONS[number]
 
 // Downloads keys that apply without a restart.
-const LIVE_DOWNLOAD_KEYS = new Set(['unlinkImportedFiles', 'maxConcurrentDownloads'])
+const LIVE_DOWNLOAD_KEYS = new Set(['unlinkImportedFiles', 'maxConcurrentDownloads', 'pausedUntil'])
 
 interface RawConfigLike {
   jack?: { apiKey?: unknown, tmdbApiKey?: unknown } | null

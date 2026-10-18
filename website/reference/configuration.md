@@ -36,6 +36,7 @@ it alone.)
 | [`downloads.manualImportBackoffBaseMs`](#downloads-manualimportbackoffbasems) | Import retry backoff base |
 | [`downloads.manualImportBackoffMaxMs`](#downloads-manualimportbackoffmaxms) | Import retry backoff cap |
 | [`downloads.unlinkImportedFiles`](#downloads-unlinkimportedfiles) | Drop jack's copy after *arr imports |
+| [`downloads.pausedUntil`](#downloads-pauseduntil) | Hold new downloads until a time |
 | [`torznab.rssMaxAgeDays`](#torznab-rssmaxagedays) | Age limit for releases in the RSS feed |
 | [`torznab.rssMaxItems`](#torznab-rssmaxitems) | Size limit for the RSS feed |
 | [`bandwidth`](#bandwidth) | Speed limits, upload slots and per-friend limits |
@@ -149,8 +150,9 @@ downloads folder there.
 Every key here is also editable from the management UI
 (***Settings -> Downloads***).
 Clearing a field there removes the key from the file, so the default below
-applies again. `unlinkImportedFiles` and `maxConcurrentDownloads` take effect
-immediately; the rest are read at startup, so restart jack after changing them.
+applies again. `unlinkImportedFiles`, `maxConcurrentDownloads` and
+`pausedUntil` take effect immediately; the rest are read at startup, so
+restart jack after changing them.
 Adding the block in the management UI registers jack in your *arr apps right
 away, but grabs only work after the restart.
 
@@ -291,6 +293,23 @@ still references is left alone. If the unlink fails, the download stays
 Editable from the management UI (***Settings -> Downloads***) and applies
 immediately. Like `maxConcurrentDownloads`, it does not need a restart.
 
+### `downloads.pausedUntil`
+
+**Type:** `string`\
+**Format:** ISO 8601 time with a UTC offset, or `"indefinite"`\
+**Default:** absent (not paused)
+
+While this time is in the future, no download takes a slot: downloads already
+transferring finish, and new ones and retries wait as `queued`. They start by
+themselves at that time. `"indefinite"` holds them until you resume. A time in
+the past means not paused.
+
+Set it with
+[`POST /transfers/pause`](/reference/management-api/postTransfersPause) and
+clear it with
+[`POST /transfers/resume`](/reference/management-api/postTransfersResume)
+rather than by hand; both apply without a restart.
+
 ## `bandwidth`
 
 Limits on what jack moves to and from peers. Optional; every key applies
@@ -310,6 +329,14 @@ right away when edited in ***Settings -> Bandwidth***.
   `downloadLimitKiBps` / `uploadLimitKiBps`) that override the limits above.
   The first matching period wins; a period with `end` before `start` runs past
   midnight. Times follow the container's `TZ`.
+- **`pausedUntil`**: pauses sharing until this time (ISO 8601 with a UTC
+  offset), or until resumed with `"indefinite"`. Friends asking for a file get
+  a 503 "Sharing is paused" with `Retry-After` set to the seconds left, at most
+  60. Uploads already running finish, also when a friend's jack fetches the
+  file in 64 MiB parts. A friend's jack keeps retrying for about 24 hours (its
+  [`downloads.retryWindowMs`](#downloads-retrywindowms)), then gives up. Set
+  it with
+  [`POST /transfers/pause`](/reference/management-api/postTransfersPause).
 
 ## `notifications`
 

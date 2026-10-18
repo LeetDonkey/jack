@@ -267,6 +267,14 @@ export const RawJackConfigPatch = z.object({
 
 export type RawJackConfigPatch = z.infer<typeof RawJackConfigPatch>
 
+// Until when sharing (bandwidth.pausedUntil) or downloading (downloads.pausedUntil)
+// is paused: an ISO 8601 time with a UTC offset, or 'indefinite' (until resumed).
+// A time in the past means not paused. Set through POST /transfers/pause.
+export const PAUSE_INDEFINITE = 'indefinite'
+export const PausedUntil = z.union([z.literal(PAUSE_INDEFINITE), z.iso.datetime({ offset: true })])
+
+export type PausedUntil = z.infer<typeof PausedUntil>
+
 export const DownloadsConfig = z.object({
   completedPath: z.string().min(1),
   maxConcurrentDownloads: z.number().int().min(1).default(3),
@@ -294,6 +302,8 @@ export const DownloadsConfig = z.object({
   // library's link) or copied it. Enabling this unlinks jack's directory entry —
   // never a recursive delete — right after a row flips to `imported`.
   unlinkImportedFiles: z.boolean().default(false),
+  // New downloads wait (running ones finish) until this time; see PausedUntil.
+  pausedUntil: PausedUntil.nullish(),
 })
 
 export type DownloadsConfig = z.infer<typeof DownloadsConfig>
@@ -319,6 +329,7 @@ export const RawDownloadsConfig = z.object({
   manualImportBackoffBaseMs: z.number().int().min(0).nullish(),
   manualImportBackoffMaxMs: z.number().int().min(0).nullish(),
   unlinkImportedFiles: z.boolean().nullish(),
+  pausedUntil: PausedUntil.nullish(),
 })
 
 export type RawDownloadsConfig = z.infer<typeof RawDownloadsConfig>
@@ -355,6 +366,8 @@ export const BandwidthConfig = z.object({
   // transfers get a 429 with Retry-After until midnight. Absent means no cap.
   dailyUploadLimitGiBPerPeer: z.number().positive().nullish(),
   schedule: z.array(BandwidthPeriod).default([]),
+  // Friends asking for a file get a 503 "Sharing is paused" until this time; see PausedUntil.
+  pausedUntil: PausedUntil.nullish(),
 })
 
 export type BandwidthConfig = z.infer<typeof BandwidthConfig>
@@ -368,6 +381,7 @@ export const RawBandwidthConfig = z.object({
   maxConcurrentUploadsPerPeer: z.number().int().min(1).nullish(),
   dailyUploadLimitGiBPerPeer: z.number().positive().nullish(),
   schedule: z.array(BandwidthPeriod).nullish(),
+  pausedUntil: PausedUntil.nullish(),
 })
 
 export type RawBandwidthConfig = z.infer<typeof RawBandwidthConfig>

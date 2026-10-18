@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { API_KEY_ORIGINS } from '../api-keys/api-key-meta'
-import { PeerHealthSchema } from '../status/status.schema'
+import { BuildIdentitySchema, PeerHealthSchema } from '../status/status.schema'
 import { FRIEND_STATES } from './friend-links'
 
 // Response shape of GET /friends and POST /friends/check, for the OpenAPI docs
@@ -17,6 +17,7 @@ export const FriendPeerSchema = z.object({
   name: z.string(),
   url: z.string(),
   version: z.string().nullable().describe('The jack version the peer last reported'),
+  build: BuildIdentitySchema.nullable().describe('The build (git revision and date) the peer reported in its last handshake; null when it reports none'),
 })
   .extend(PeerHealthSchema.shape)
   .extend({

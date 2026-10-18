@@ -1,6 +1,8 @@
+import type { BuildIdentity } from '../../lib/build'
 import type { PeerErrorCode } from '../../lib/net/peer-errors'
 import type { PeerConnector } from '../../lib/servers/peer'
 import type { Notification } from '../notifications/notifications.service'
+import { handshakeBuild } from '../../lib/build'
 import { IncompatiblePeerError } from '../../lib/errors/IncompatiblePeerError'
 import { classifyPeerError } from '../../lib/net/peer-errors'
 import { isPeerVersionCompatible, MIN_PEER_PROTOCOL_VERSION } from '../../lib/version'
@@ -13,6 +15,8 @@ export interface PeerHealth {
   /** null until the first check. */
   online: boolean | null
   version: string | null
+  /** The build the peer reported in its last handshake (git revision and date); null when it reports none. */
+  build: BuildIdentity | null
   lastSeenAt: string | null
   offlineSince: string | null
   lastError: string | null
@@ -142,7 +146,7 @@ export class PeerHealthMonitor {
   }
 
   private blank(peer: Pick<CheckedPeer, 'id' | 'name' | 'url'>): PeerHealth {
-    return { id: peer.id, name: peer.name ?? peer.url, url: peer.url, online: null, version: null, lastSeenAt: null, offlineSince: null, lastError: null, lastErrorCode: null, checkedAt: null }
+    return { id: peer.id, name: peer.name ?? peer.url, url: peer.url, online: null, version: null, build: null, lastSeenAt: null, offlineSince: null, lastError: null, lastErrorCode: null, checkedAt: null }
   }
 
   // One check per peer at a time: a running check of the same connector is
@@ -170,13 +174,16 @@ export class PeerHealthMonitor {
     health.name = peer.name ?? peer.url
     health.checkedAt = now.toISOString()
     let version: string | null = null
+    let build: BuildIdentity | null = null
     try {
       const handshake = await peer.ping() as { version?: unknown } | null
       version = typeof handshake?.version === 'string' ? handshake.version : null
+      build = handshakeBuild(handshake)
       if (!version || !isPeerVersionCompatible(version))
         throw new IncompatiblePeerError(`${health.name} runs jack ${version ?? 'without a version'}; jack needs ${MIN_PEER_PROTOCOL_VERSION} or newer`)
       const wasOffline = health.offlineSince
       health.version = version
+      health.build = build
       health.online = true
       health.lastSeenAt = now.toISOString()
       health.lastError = null

@@ -8,7 +8,7 @@ import { ReleaseCategory } from '../../release'
 import { Semaphore } from '../../semaphore'
 import { setSpanAttributes } from '../../span-attributes'
 import { withSpan } from '../../tracing'
-import { ArrServerConnector, basename, PermanentManualImportError, stripExtension } from './base'
+import { ArrServerConnector, basename, PermanentManualImportError, pickSamples, stripExtension } from './base'
 import { releaseMedia } from './media'
 
 type SeriesWithId = SeriesResource & { id: number }
@@ -206,6 +206,25 @@ export class SonarrServerConnector extends ArrServerConnector {
   protected override async doGetFilePath(id: string): Promise<string | null> {
     const bundle = await this.fetchEpisodeBundle(id)
     return bundle?.file?.path ?? null
+  }
+
+  protected override async doSampleFilePaths(limit: number, timeoutMs?: number): Promise<string[]> {
+    const series = (await this.fetch('/api/v3/series', { method: 'GET', timeoutMs }) as SeriesResource[] | null) ?? []
+    // One series per root folder first; its episode files are one request each.
+    const picked = pickSamples(
+      (Array.isArray(series) ? series : [])
+        .filter(s => s.id != null && (s.statistics?.episodeFileCount ?? 0) > 0)
+        .map(s => ({ root: s.rootFolderPath ?? null, value: String(s.id) })),
+      limit,
+    )
+    const paths: string[] = []
+    for (const seriesId of picked) {
+      const files = await this.fetch('/api/v3/episodefile', { method: 'GET', query: { seriesId }, timeoutMs }) as EpisodeFileResource[] | null
+      const path = (Array.isArray(files) ? files : []).find(f => typeof f.path === 'string')?.path
+      if (path)
+        paths.push(path)
+    }
+    return paths
   }
 
   protected override async doAdd(params: AddParams): Promise<number> {

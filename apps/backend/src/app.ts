@@ -14,6 +14,7 @@ import { Hono } from 'hono'
 import { describeRoute, openAPIRouteHandler, resolver } from 'hono-openapi'
 import { secureHeaders } from 'hono/secure-headers'
 import z from 'zod'
+import { buildIdentity } from './lib/build'
 import { getAppEnvs, isOtelEnabled } from './lib/envs'
 import { peerDocumentation } from './lib/openapi'
 import { PROTOCOL_VERSION } from './lib/version'
@@ -123,15 +124,23 @@ export function getApp(envs: Envs, config: AppConfig, connManager: { servers: Co
   // protocol version, then check it against their minimum compatible version.
   // Authenticated so a bad API key still fails loudly at connect time, unlike the
   // unauthenticated /ping health check.
+  // `build` is optional: older jacks and builds without a revision leave it out,
+  // and peers ignore fields they don't know.
+  const build = buildIdentity()
+  const handshake = { name: 'jack', version: PROTOCOL_VERSION, ...(build.revision ? { build } : {}) }
   app.get('/handshake', describeRoute({
     tags: ['System'],
     summary: 'Peer handshake',
-    description: 'Identity and protocol version. Peers probe this at init and check the version against their minimum compatible version.',
+    description: 'Identity and protocol version. Peers probe this at init and check the version against their minimum compatible version. `build` (`{ revision, buildDate }`, the git commit and build time of the image) is present only when the image was built with a revision.',
     security: [{ 'X-Api-Key': [] }],
     responses: {
-      200: { description: 'Identity and protocol version', content: { 'application/json': { schema: resolver(z.object({ name: z.string(), version: z.string() })) } } },
+      200: { description: 'Identity and protocol version', content: { 'application/json': { schema: resolver(z.object({
+        name: z.string(),
+        version: z.string(),
+        build: z.object({ revision: z.string().nullable(), buildDate: z.string().nullable() }).optional(),
+      })) } } },
     },
-  }), peerAuth, c => c.json({ name: 'jack', version: PROTOCOL_VERSION }, 200))
+  }), peerAuth, c => c.json(handshake, 200))
 
   // Peer API — other Jacks talk to us to search and download. Serves empty results
   // when there's no local source to read from.
