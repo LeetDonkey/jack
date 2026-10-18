@@ -28,6 +28,9 @@ export interface UnifiedCatalogTitle {
   metadata?: TmdbMetadata | null
   // Quality name of the highest-resolution release across peers (e.g. "Remux-2160p").
   quality?: string
+  // When the newest release of this title was added at its peer (max publishDate,
+  // ISO 8601); null when no release says.
+  addedAt: string | null
   peers: CatalogTitlePeer[]
 }
 
@@ -126,6 +129,7 @@ export function groupReleasesIntoUnifiedTitles(peerReleases: PeerReleases[]): Un
           metadata: metadataOf(release),
           releaseCount: 0,
           totalSize: 0,
+          addedAt: null,
           peers: [],
         }
         byKey.set(key, title)
@@ -149,6 +153,9 @@ export function groupReleasesIntoUnifiedTitles(peerReleases: PeerReleases[]): Un
         bestResolution.set(key, resolution)
         title.quality = release.quality.name
       }
+      const added = release.publishDate ? Date.parse(release.publishDate) : Number.NaN
+      if (!Number.isNaN(added) && (title.addedAt === null || added > Date.parse(title.addedAt)))
+        title.addedAt = new Date(added).toISOString()
       title.releaseCount += 1
       title.totalSize += release.size
 

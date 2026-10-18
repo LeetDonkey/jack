@@ -1,9 +1,10 @@
 import type { LogRecord } from './log-hub'
 import type { LogsController } from './logs.controller'
 import { Hono } from 'hono'
-import { describeRoute, validator as zValidator } from 'hono-openapi'
+import { describeRoute } from 'hono-openapi'
 import { streamSSE } from 'hono/streaming'
 import { z } from 'zod'
+import { validator as zValidator } from '../../lib/validation'
 
 const LEVEL = z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal'])
 

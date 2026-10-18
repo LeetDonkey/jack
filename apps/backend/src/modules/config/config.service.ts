@@ -11,6 +11,7 @@ import { ConflictError } from '../../lib/errors/ConflictError'
 import { NotFoundError } from '../../lib/errors/NotFoundError'
 import { isWritableDirectory } from '../../lib/fs-checks'
 import { generateId } from '../../lib/servers/base'
+import { ValidationError } from '../../lib/validation'
 
 type RawConfig = z.input<typeof AppConfig>
 // Both peers and servers carry a plain-string `url` + `name` in their raw form —
@@ -20,6 +21,8 @@ type Slice = 'peers' | 'servers'
 
 /** Re-registers jack in the saved server; resolves to the result, or null when it isn't registrable. */
 export type ServerSavedListener = (id: string) => Promise<DestinationRegistration | null> | void
+/** Called with the saved peer's id, and its id before the save (null for a new peer; differs when the url changed). */
+export type PeerSavedListener = (id: string, previousId: string | null) => void
 export type JackSavedListener = (previous: RawJackConfig | null, next: RawJackConfig) => void
 export type DownloadsSavedListener = (previous: RawDownloadsConfig | null, next: RawDownloadsConfig) => void
 
@@ -34,6 +37,8 @@ export class ConfigService {
   private queue: Promise<unknown> = Promise.resolve()
   private readonly subscribers = new Set<() => void>()
   private readonly serverSavedListeners = new Set<ServerSavedListener>()
+  private readonly peerSavedListeners = new Set<PeerSavedListener>()
+  private readonly peerRemovedListeners = new Set<(id: string) => void>()
   private readonly jackSavedListeners = new Set<JackSavedListener>()
   private readonly downloadsSavedListeners = new Set<DownloadsSavedListener>()
 
@@ -79,6 +84,21 @@ export class ConfigService {
   onServerSaved(listener: ServerSavedListener): () => void {
     this.serverSavedListeners.add(listener)
     return () => this.serverSavedListeners.delete(listener)
+  }
+
+  /**
+   * Called after a peer is added or updated (also when `force` kept a peer whose
+   * handshake failed), so the caller can check its health at once.
+   */
+  onPeerSaved(listener: PeerSavedListener): () => void {
+    this.peerSavedListeners.add(listener)
+    return () => this.peerSavedListeners.delete(listener)
+  }
+
+  /** Called with a peer's id after it is removed, so what jack stored about it can go too. */
+  onPeerRemoved(listener: (id: string) => void): () => void {
+    this.peerRemovedListeners.add(listener)
+    return () => this.peerRemovedListeners.delete(listener)
   }
 
   /** Called after the jack block is saved, with the stored block before and after. */
@@ -329,17 +349,19 @@ export class ConfigService {
     // config back) so the UI can report the cause, rather than persisting a dead peer.
     // `force` flips this off: keep the peer even when it can't connect — it stays
     // resident and auto-retries lazily (init() is retry-aware).
-    return this.addEntry('peers', 'peer', resolved, rawPeer, () => this.connectorManager.addPeerConnector(resolved, { rethrowInitError: !force }))
+    await this.addEntry('peers', 'peer', resolved, rawPeer, () => this.connectorManager.addPeerConnector(resolved, { rethrowInitError: !force }))
+    this.notifyListeners(this.peerSavedListeners, generateId(resolved.url), null)
   }
 
   async removePeer(id: string): Promise<void> {
-    return this.removeEntry('peers', 'peer', id)
+    await this.removeEntry('peers', 'peer', id)
+    this.notifyListeners(this.peerRemovedListeners, id)
   }
 
   async updatePeer(id: string, input: unknown, { force = false }: { force?: boolean } = {}): Promise<void> {
     const resolved = PeerConfig.parse(input)
     const rawPeer = RawPeerConfig.parse(input)
-    return this.updateEntry(
+    await this.updateEntry(
       'peers',
       'peer',
       id,
@@ -348,6 +370,7 @@ export class ConfigService {
       () => this.connectorManager.addPeerConnector(resolved, { rethrowInitError: !force }),
       (oldId, newId) => this.downloadsRepository?.reassignPeerId(oldId, newId),
     )
+    this.notifyListeners(this.peerSavedListeners, generateId(resolved.url), id)
   }
 
   // ── Servers ──────────────────────────────────────────────────────────────────
@@ -463,7 +486,7 @@ export class ConfigService {
       // would bake every default into the file.
       const parsed = DownloadsConfig.parse(merged)
       if (patch.completedPath !== undefined && !(await this.isWritable(parsed.completedPath)))
-        throw new BadRequestError(`jack can't write to ${parsed.completedPath}. Check the Downloads path in the jack template.`)
+        throw ValidationError.forField('completedPath', `jack can't write to ${parsed.completedPath}. Check the Downloads path in the jack template.`)
       const nextRaw = { ...this.raw, downloads: merged } as RawConfig
       await this.persist(nextRaw)
       this.raw = nextRaw

@@ -6,11 +6,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { Hono } from 'hono'
+import { BandwidthConfig } from '../lib/config'
 import { startPublicServer } from '../lib/public-server'
 import { createFileStream } from '../modules/peer/file-stream'
 import { parseRangeHeader, PeerController } from '../modules/peer/peer.controller'
 import { getPeerRouter } from '../modules/peer/peer.router'
 import { TransferMonitor } from '../modules/transfers/transfer-monitor'
+import { TransfersService } from '../modules/transfers/transfers.service'
 
 describe('parseRangeHeader', () => {
   test('returns null for absent or malformed headers', () => {
@@ -204,6 +206,33 @@ describe('GET /peer/items/:id/file upload tracking and limits', () => {
     // Ended: it no longer holds a slot (a ranged upload stays listed briefly for its next window).
     expect(monitor.activeCount('upload')).toBe(0)
     expect(taken.reduce((sum, n) => sum + n, 0)).toBe(6)
+  })
+
+  test('while sharing is paused, serves the next Range window of a running upload and refuses new ones', async () => {
+    let bandwidth: BandwidthConfig | undefined
+    const monitor = new TransferMonitor({ setInterval: () => 0 as any, clearInterval: () => {} })
+    const service = new TransfersService(() => bandwidth, () => null, { monitor })
+    const app = new Hono<{ Variables: { apiKeyName?: string, apiKeyId?: number } }>()
+    app.use('*', async (c, next) => {
+      c.set('apiKeyName', 'Nicklas')
+      c.set('apiKeyId', 7)
+      await next()
+    })
+    app.route('/peer', getPeerRouter(controllerForFile(), service))
+
+    const first = await app.request('/peer/items/remote1:movie:1/file', { headers: { Range: 'bytes=0-4' } })
+    expect(await bodyBytes(await first.blob())).toEqual([0, 1, 2, 3, 4])
+    bandwidth = BandwidthConfig.parse({ pausedUntil: 'indefinite' })
+
+    const next = await app.request('/peer/items/remote1:movie:1/file', { headers: { Range: 'bytes=5-9' } })
+    expect(next.status).toBe(206)
+    expect(await bodyBytes(await next.blob())).toEqual([5, 6, 7, 8, 9])
+
+    const fresh = await app.request('/peer/items/remote1:movie:1/file')
+    expect(fresh.status).toBe(503)
+    expect(await fresh.json()).toEqual({ error: 'Sharing is paused' })
+    const otherFile = await app.request('/peer/items/remote1:movie:2/file', { headers: { Range: 'bytes=0-4' } })
+    expect(otherFile.status).toBe(503)
   })
 })
 

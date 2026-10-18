@@ -15,6 +15,7 @@ import { Hono } from 'hono'
 import { describeRoute, openAPIRouteHandler, resolver } from 'hono-openapi'
 import { secureHeaders } from 'hono/secure-headers'
 import z from 'zod'
+import { buildIdentity } from './lib/build'
 import { getAppEnvs, isOtelEnabled } from './lib/envs'
 import { peerDocumentation } from './lib/openapi'
 import { PROTOCOL_VERSION } from './lib/version'
@@ -58,6 +59,8 @@ interface AppServices {
   internalUrl?: () => string
   /** Called with the destination id whenever its Radarr/Sonarr authenticates (Torznab or qBittorrent). */
   onArrContact?: (destinationId: string) => void
+  /** Called with the api_key id whenever a friend's jack authenticates with it (/handshake, /peer/*). */
+  onPeerKeyUsed?: (apiKeyId: number) => void
 }
 
 // This is the external surface, gated per audience rather than by one global key:
@@ -122,22 +125,30 @@ export function getApp(envs: Envs, config: AppConfig, connManager: { servers: Co
   const masterKey = config.jack.apiKey ?? ''
   // Peer scope: other Jacks present regular api_keys. *arr scope: the operator's
   // Radarr/Sonarr present the managed key Jack registered with them.
-  const peerAuth = requireApiKey(masterKey, { type: 'api_key', repository: services.apiKeysRepository })
+  const peerAuth = requireApiKey(masterKey, { type: 'api_key', repository: services.apiKeysRepository, onAuthenticated: services.onPeerKeyUsed })
   const arrAuth = requireApiKey(masterKey, { type: 'managed_key', repository: services.managedKeysRepository, onAuthenticated: services.onArrContact })
 
   // Peer handshake — other Jacks probe this at init to read our identity and
   // protocol version, then check it against their minimum compatible version.
   // Authenticated so a bad API key still fails loudly at connect time, unlike the
   // unauthenticated /ping health check.
+  // `build` is optional: older jacks and builds without a revision leave it out,
+  // and peers ignore fields they don't know.
+  const build = buildIdentity()
+  const handshake = { name: 'jack', version: PROTOCOL_VERSION, ...(build.revision ? { build } : {}) }
   app.get('/handshake', describeRoute({
     tags: ['System'],
     summary: 'Peer handshake',
-    description: 'Identity and protocol version. Peers probe this at init and check the version against their minimum compatible version.',
+    description: 'Identity and protocol version. Peers probe this at init and check the version against their minimum compatible version. `build` (`{ revision, buildDate }`, the git commit and build time of the image) is present only when the image was built with a revision.',
     security: [{ 'X-Api-Key': [] }],
     responses: {
-      200: { description: 'Identity and protocol version', content: { 'application/json': { schema: resolver(z.object({ name: z.string(), version: z.string() })) } } },
+      200: { description: 'Identity and protocol version', content: { 'application/json': { schema: resolver(z.object({
+        name: z.string(),
+        version: z.string(),
+        build: z.object({ revision: z.string().nullable(), buildDate: z.string().nullable() }).optional(),
+      })) } } },
     },
-  }), peerAuth, c => c.json({ name: 'jack', version: PROTOCOL_VERSION }, 200))
+  }), peerAuth, c => c.json(handshake, 200))
 
   // Peer API — other Jacks talk to us to search and download. Serves empty results
   // when there's no local source to read from.

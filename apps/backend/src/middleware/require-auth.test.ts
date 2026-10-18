@@ -101,6 +101,21 @@ describe('requireApiKey', () => {
       expect(((await res.json()) as SuccessResponse).keyName).toBe('Test Key')
     })
 
+    test('reports the key id of every request it lets through, never the master key', async () => {
+      const key = generateApiKey()
+      const row = apiRepo.create({ keyHash: hashKey(key), name: 'Friend' })
+      const used: number[] = []
+      const app = new Hono<{ Variables: AuthVariables }>()
+      app.use('*', requireApiKey(masterKey, { type: 'api_key', repository: apiRepo, onAuthenticated: id => used.push(id) }))
+      app.get('/test', c => c.json({ ok: true }))
+      app.onError(handleError('test', { exposeDetails: true }))
+
+      expect((await app.request('/test', { headers: { 'X-Api-Key': key } })).status).toBe(200)
+      expect((await app.request('/test', { headers: { 'X-Api-Key': masterKey } })).status).toBe(200)
+      expect((await app.request('/test', { headers: { 'X-Api-Key': generateApiKey() } })).status).toBe(401)
+      expect(used).toEqual([row.id])
+    })
+
     test('a valid jack_ key without a name sets "unnamed"', async () => {
       const key = generateApiKey()
       apiRepo.create({ keyHash: hashKey(key) })

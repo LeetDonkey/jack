@@ -35,6 +35,10 @@ describe('pendingRestart', () => {
   test('writing a default value explicitly is not a change', () => {
     expect(pendingRestart(boot, { ...boot, downloads: { ...boot.downloads, maxDownloadAttempts: 13 } })).toEqual([])
   })
+
+  test('pausing downloads applies at once', () => {
+    expect(pendingRestart(boot, { ...boot, downloads: { ...boot.downloads, pausedUntil: 'indefinite' } })).toEqual([])
+  })
 })
 
 describe('stableStringify', () => {

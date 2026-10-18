@@ -17,6 +17,8 @@ variables, see [`apps/ui/README.md`](https://github.com/roziscoding/jack/blob/ma
 | [`APP_CONFIG_PATH`](#app-config-path) | Config file location |
 | [`JACK_INTERNAL_URL`](#jack-internal-url) | Internal URL for a new config file |
 | [`HTTP_TIMEOUT_MS`](#http-timeout-ms) | Outbound request timeout |
+| [`JACK_BUILD_REVISION`](#jack-build-revision) | Git commit of the image |
+| [`JACK_BUILD_DATE`](#jack-build-date) | When the image was built |
 | [`JACK_MANAGEMENT_KEY`](#jack-management-key) | Enables + guards the management API |
 | [`MANAGEMENT_PORT`](#management-port) | Management listener port |
 | [`LOG_LEVEL`](#log-level) | Minimum level to log |
@@ -74,6 +76,27 @@ logged and ignored.
 
 Timeout for every outbound HTTP request to a connector (*arr or peer). Bounds a
 hung host so it can't stall a search indefinitely.
+
+### `JACK_BUILD_REVISION`
+
+**Type:** `string`\
+**Format:** up to 64 letters, digits, `.`, `_` or `-`
+
+The git commit the image was built from. The Dockerfile sets it from the
+`REVISION` build arg
+(`docker build --build-arg REVISION=$(git rev-parse HEAD)`). jack reports it
+in [`GET /version`](/reference/management-api/getVersion), in
+[`GET /support-bundle`](/reference/management-api/getSupportBundle) and to
+peers in its handshake. Unset, jack reports no build.
+
+### `JACK_BUILD_DATE`
+
+**Type:** `string`\
+**Format:** ISO 8601 time
+
+When the image was built, from the `BUILD_DATE` build arg
+(`--build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)`). Reported next to
+[`JACK_BUILD_REVISION`](#jack-build-revision).
 
 ## Management API
 

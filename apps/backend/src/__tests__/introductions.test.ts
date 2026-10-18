@@ -1,5 +1,5 @@
 import type { DiscoveryConfig } from '../lib/config'
-import type { IntroPeer } from '../modules/introductions/introductions.service'
+import type { IntroductionsDeps, IntroPeer } from '../modules/introductions/introductions.service'
 import { Database } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
 import { Hono } from 'hono'
@@ -23,7 +23,7 @@ interface Jack {
 // Everything that crosses a wire, to check what the jack in the middle could read.
 const wire: string[] = []
 
-function makeJack(name: string, discovery: Partial<DiscoveryConfig>, external: string | null): Jack {
+function makeJack(name: string, discovery: Partial<DiscoveryConfig>, external: string | null, extra: Partial<IntroductionsDeps> = {}): Jack {
   const store = new IntroStore(new Database(':memory:'))
   const jack = { name, store, peers: [] as IntroPeer[], added: [], issued: [], discovery: { introduce: true, discoverable: false, ...discovery } } as unknown as Jack
   let keys = 0
@@ -41,6 +41,7 @@ function makeJack(name: string, discovery: Partial<DiscoveryConfig>, external: s
     addPeer: async (peer) => {
       jack.added.push({ name: peer.name, url: peer.url, apiKey: peer.apiKey })
     },
+    ...extra,
   })
   const app = new Hono<any>()
   app.onError((err, c) => c.json({ error: err.message }, err instanceof ConflictError ? 409 : 500))
@@ -232,6 +233,114 @@ describe('introductions between friends of friends', () => {
     const body = { self: { id: mallory.store.identity().id, publicKey: mallory.store.identity().publicKey }, messages: [] }
     const res = await bob.app.request('/peer/intro/mail', { method: 'POST', headers: { 'x-key': '1', 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     expect(res.status).toBe(409)
+  })
+
+  test('a connection links each side\'s key to the new peer, and removing that peer ends it', async () => {
+    const links: Record<string, Array<[number, string]>> = { Alice: [], Carol: [] }
+    const linkKey = (name: string) => (apiKeyId: number, url: string) => links[name]!.push([apiKeyId, url])
+    const alice = makeJack('Alice', { publicName: 'Alice' }, 'https://alice.example', { linkKey: linkKey('Alice') })
+    const bob = makeJack('Bob', { publicName: 'Bob' }, 'https://bob.example')
+    const carol = makeJack('Carol', { publicName: 'Carol', discoverable: true }, 'https://carol.example', { linkKey: linkKey('Carol') })
+    connect(alice, bob, 1)
+    connect(bob, carol, 2)
+
+    const [person] = (await alice.service.overview()).people
+    const request = await alice.service.request(person!.id, 'conn-Bob')
+    await syncAll(alice, bob)
+    await carol.service.accept(request.requestId)
+    await syncAll(bob, alice)
+    await syncAll(alice, bob)
+
+    // Each side's issued key belongs to the peer the other side's card added.
+    expect(links).toEqual({ Alice: [[1, 'https://carol.example']], Carol: [[1, 'https://alice.example']] })
+
+    // Alice now downloads from Carol: Carol is no longer offered, the thread is live.
+    connect(alice, carol, 1)
+    let overview = await alice.service.overview()
+    expect(overview.people).toEqual([])
+    expect(overview.threads[0]).toMatchObject({ state: 'connected', ended: false })
+    await expect(alice.service.request(person!.id, 'conn-Bob')).rejects.toThrow('already have a request')
+
+    // Alice removes Carol: she can ask to connect again.
+    alice.peers = alice.peers.filter(p => p.id !== 'conn-Carol')
+    overview = await alice.service.overview()
+    expect(overview.people).toMatchObject([{ name: 'Carol', status: 'available' }])
+    expect(overview.threads[0]).toMatchObject({ state: 'connected', ended: true })
+    expect((await alice.service.request(person!.id, 'conn-Bob')).state).toBe('pending')
+  })
+
+  test('a connected thread stays live while the key is linked to a current peer, even an offline one', async () => {
+    const linked = new Map<number, string>([[7, 'offline-peer']])
+    const jack = makeJack('Alice', { publicName: 'Alice' }, 'https://alice.example', { keyPeerId: id => linked.get(id) ?? null })
+    const carol = new IntroStore(new Database(':memory:')).identity()
+    jack.store.createThread({ requestId: 'r1', direction: 'incoming', peerId: carol.id, peerName: 'Carol', peerKey: carol.publicKey, viaId: 'x', viaName: 'Bob', state: 'pending', messages: [] })
+    jack.store.updateThread('r1', { state: 'connected', apiKeyId: 7 })
+    const unreachable = async () => {
+      throw new Error('offline')
+    }
+    jack.peers.push({ id: 'offline-peer', name: 'Carol', url: 'https://carol.example', introProfile: unreachable, introDirectory: unreachable, introMail: unreachable })
+
+    expect((await jack.service.overview()).threads[0]!.ended).toBe(false)
+    linked.clear()
+    expect((await jack.service.overview()).threads[0]!.ended).toBe(true)
+  })
+
+  test('forgetting a revoked key drops its identity binding', async () => {
+    const bob = makeJack('Bob', { publicName: 'Bob' }, null)
+    const alice = makeJack('Alice', { publicName: 'Alice' }, null)
+    connect(alice, bob, 1)
+    await alice.service.sync()
+    expect(bob.service.keyBindings()).toMatchObject([{ apiKeyId: 1, identityId: alice.store.identity().id }])
+
+    bob.service.forgetKey(1)
+    expect(bob.service.keyBindings()).toEqual([])
+    expect(alice.service.peerIdentity('conn-Bob')).toBe(bob.store.identity().id)
+  })
+
+  test('a peer\'s identity survives a restart while that peer is down', async () => {
+    const sqlite = new Database(':memory:')
+    const carol = new IntroStore(new Database(':memory:')).identity()
+    const carolProfile = { id: carol.id, publicKey: carol.publicKey, name: 'Carol', discoverable: true }
+    // A jack whose only peer is Carol, on the same database each time (a restart).
+    const boot = (introProfile: IntroPeer['introProfile'], peerId = 'carol-peer') => new IntroductionsService({
+      store: new IntroStore(sqlite),
+      discovery: () => ({ publicName: 'Alice', introduce: true, discoverable: false }),
+      external: () => ({ url: 'https://alice.example', headers: {} }),
+      peers: () => [{ id: peerId, name: 'Carol', url: 'https://carol.example', introProfile, introDirectory: async () => null, introMail: async () => ({ messages: [] }) }],
+      issueKey: () => ({ id: 1, key: 'k' }),
+      apiKeyName: () => null,
+      addPeer: async () => {},
+    })
+    // Connected before key links existed: only the identity ties the thread to Carol's peer.
+    const store = new IntroStore(sqlite)
+    store.createThread({ requestId: 'r1', direction: 'outgoing', peerId: carol.id, peerName: 'Carol', peerKey: carol.publicKey, viaId: 'x', viaName: 'Bob', state: 'pending', messages: [] })
+    store.updateThread('r1', { state: 'connected', apiKeyId: 7 })
+
+    const before = boot(async () => carolProfile)
+    await before.sync()
+    expect(before.peerIdentity('carol-peer')).toBe(carol.id)
+
+    const down = async () => {
+      throw new Error('Unable to connect')
+    }
+    const after = boot(down)
+    expect(after.peerIdentity('carol-peer')).toBe(carol.id)
+    expect((await after.overview()).threads[0]!.ended).toBe(false)
+    await expect(after.request(carol.id, 'carol-peer')).rejects.toThrow('already have a request')
+
+    // A new url (new id) keeps it; removing the peer forgets it.
+    after.movePeer('carol-peer', 'carol-new')
+    expect(after.peerIdentity('carol-new')).toBe(carol.id)
+    expect(boot(down, 'carol-new').peerIdentity('carol-peer')).toBeNull()
+    after.forgetPeer('carol-new')
+    expect(after.peerIdentity('carol-new')).toBeNull()
+
+    // A peer that answers without introductions has no identity any more.
+    const before2 = boot(async () => carolProfile)
+    await before2.sync()
+    const upstream = boot(async () => null)
+    await upstream.sync()
+    expect(upstream.peerIdentity('carol-peer')).toBeNull()
   })
 })
 

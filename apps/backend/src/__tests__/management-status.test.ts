@@ -14,6 +14,7 @@ import { PeerConnector } from '../lib/servers/peer'
 import { getManagementApp } from '../management-app'
 import { ConfigService } from '../modules/config/config.service'
 import { DownloadsRepository } from '../modules/downloads/downloads.repository'
+import { PeerHealthMonitor } from '../modules/friends/peer-health'
 import { ManagedKeysRepository } from '../modules/managed-keys/managed-keys.repository'
 import { ManagedApiKeys } from '../modules/managed-keys/managed-keys.service'
 import { RegistrationService } from '../modules/registration/registration.service'
@@ -102,6 +103,66 @@ describe('Management status endpoints', () => {
     expect(body.downloads.total).toBe(1)
     expect(body.downloads.byStatus.downloading).toBe(1)
     expect(body.downloads.active).toHaveLength(1)
+  })
+
+  test('GET /overview carries each peer\'s health, counts the online ones, and the stream follows the checks', async () => {
+    const manager = new ConnectorManager([], [])
+    const peer = makePeer()
+    ;(manager as any)._peerMap.set(peer.id, peer)
+    let up = true
+    const checked = {
+      id: peer.id,
+      name: peer.name,
+      url: peer.url,
+      isInitialized: true,
+      init: () => {},
+      ping: async () => {
+        if (!up)
+          throw new Error('The operation timed out.')
+        return { name: 'jack', version: '0.1.0' }
+      },
+    }
+    const health = new PeerHealthMonitor(() => [checked as any], () => 60 * 60_000, () => new Date('2026-10-18T10:00:00Z'), { classify: async () => 'timeout' })
+    const app = getManagementApp({ environment: 'test', managementKey: 'mgmt-secret', connectors: manager, peerHealth: health })
+
+    let body = await (await app.request('/overview', { headers: KEY })).json() as any
+    expect(body.peers).toMatchObject({ total: 1, initialized: 1, online: 0 })
+    expect(body.peers.items[0].health).toEqual({ online: null, offlineSince: null, lastSeenAt: null, lastError: null, lastErrorCode: null, checkedAt: null })
+
+    await health.checkAll()
+    body = await (await app.request('/overview', { headers: KEY })).json() as any
+    expect(body.peers.online).toBe(1)
+    expect(body.peers.items[0].health).toMatchObject({ online: true, lastSeenAt: '2026-10-18T10:00:00.000Z', lastErrorCode: null })
+
+    const ac = new AbortController()
+    const res = await app.request('/overview/stream', { headers: KEY, signal: ac.signal })
+    const reader = res.body!.getReader() as unknown as ReadableStreamDefaultReader<Uint8Array>
+    try {
+      expect(await readUntil(reader, '"online":1')).toContain('"online":1')
+      up = false
+      await health.checkAll()
+      const update = await readUntil(reader, '"lastErrorCode":"timeout"')
+      expect(update).toContain('"online":0')
+      expect(update).toContain('"offlineSince":"2026-10-18T10:00:00.000Z"')
+    }
+    finally {
+      await reader.cancel().catch(() => {})
+      ac.abort()
+    }
+  })
+
+  test('POST /friends/check runs the health check now and answers with the snapshot', async () => {
+    const manager = new ConnectorManager([], [])
+    const checked = { id: 'p1', name: 'Alice', url: 'https://alice.test', isInitialized: true, init: () => {}, ping: async () => ({ version: '0.1.0' }) }
+    const health = new PeerHealthMonitor(() => [checked as any], () => 60 * 60_000, () => new Date('2026-10-18T10:00:00Z'))
+    const app = getManagementApp({ environment: 'test', managementKey: 'mgmt-secret', connectors: manager, peerHealth: health })
+
+    expect(((await (await app.request('/friends', { headers: KEY })).json()) as any).peers[0].online).toBeNull()
+    const res = await app.request('/friends/check', { method: 'POST', headers: KEY })
+    expect(res.status).toBe(200)
+    const body = await res.json() as any
+    expect(body.peers[0]).toMatchObject({ id: 'p1', online: true, lastSeenAt: '2026-10-18T10:00:00.000Z' })
+    expect(body.friends).toMatchObject([{ key: 'peer:p1', name: 'Alice', state: 'noKey', keys: [] }])
   })
 
   test('GET /overview surfaces import-queued, failed and bytes moved', async () => {

@@ -262,9 +262,11 @@ describe('Management API addPeer', () => {
     })
     // The connectivity check failed → the add is rejected, not a silent 201.
     expect(res.status).toBe(502)
-    const body = await res.json() as { ok: boolean, error: { message: string } }
+    const body = await res.json() as { ok: boolean, error: { message: string, code: string, reason: string, upstreamStatus: number | null } }
     expect(body.ok).toBe(false)
     expect(body.error.message).toContain('Dead')
+    // The failure is classified for the UI; the code stays what it was.
+    expect(body.error).toMatchObject({ code: 'CONNECTOR_INITIALIZATION_FAILED', reason: 'unauthorized', upstreamStatus: 401 })
 
     // Rolled back: nothing on disk, nothing resident in the connector map.
     const onDisk = jsonc.parse(await Bun.file(path).text()) as { peers: unknown[] }
@@ -295,6 +297,44 @@ describe('Management API addPeer', () => {
     const { app } = await makeMutableApp()
     const res = await app.request('/config/peers', { method: 'POST', headers: { ...KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'NoUrl' }) })
     expect(res.status).toBe(400)
+    const body = await res.json() as { ok: boolean, error: { code: string, field: string, message: string } }
+    expect(body.ok).toBe(false)
+    expect(body.error).toMatchObject({ code: 'VALIDATION_ERROR', field: 'url' })
+    expect(body.error.message).toStartWith('url: ')
+  })
+
+  test('a body that isn\'t valid JSON answers 400 in the same format', async () => {
+    const { app } = await makeMutableApp()
+    const res = await app.request('/config/peers', { method: 'POST', headers: { ...KEY, 'Content-Type': 'application/json' }, body: '{' })
+    expect(res.status).toBe(400)
+    const body = await res.json() as { ok: boolean, error: { code: string, field: string | null, issues: unknown[] } }
+    expect(body.ok).toBe(false)
+    expect(body.error).toMatchObject({ code: 'VALIDATION_ERROR', field: null, issues: [{ field: null, message: 'Malformed JSON in request body' }] })
+  })
+
+  test('a failed handshake with a peer that never answers is classified too', async () => {
+    const { app } = await makeMutableApp()
+    // Port 1 on localhost refuses at once; an IP literal needs no DNS lookup.
+    const res = await app.request('/config/peers', { method: 'POST', headers: { ...KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Nobody', url: 'http://127.0.0.1:1', apiKey: 'k' }) })
+    expect(res.status).toBe(502)
+    expect((await res.json() as any).error).toMatchObject({ reason: 'refused', upstreamStatus: null })
+  })
+
+  test('tells listeners about every saved peer, with its id before the save', async () => {
+    const { app, configService } = await makeMutableApp()
+    const saved: Array<[string, string | null]> = []
+    configService.onPeerSaved((id, previousId) => saved.push([id, previousId]))
+    const post = (path: string, method: string, body: unknown) => app.request(path, { method, headers: { ...KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+
+    expect((await post('/config/peers', 'POST', { name: 'Bob', url: 'http://bob.test:3000', apiKey: 'k' })).status).toBe(201)
+    expect((await post(`/config/peers/${generateId('http://bob.test:3000')}`, 'PATCH', { name: 'Bob', url: 'http://bob2.test:3000', apiKey: 'k' })).status).toBe(200)
+    // A failed save tells nobody.
+    expect((await post('/config/peers', 'POST', { name: 'Dead', url: 'http://dead.test:3000', apiKey: 'k' })).status).toBe(502)
+
+    expect(saved).toEqual([
+      [generateId('http://bob.test:3000'), null],
+      [generateId('http://bob2.test:3000'), generateId('http://bob.test:3000')],
+    ])
   })
 
   test('serializes concurrent adds without losing an update', async () => {
@@ -391,6 +431,18 @@ describe('Management API servers', () => {
     expect(onDisk.servers).toHaveLength(1)
     expect(connectorManager.servers.some(s => s.id === serverId)).toBe(true)
     expect(connectorManager.sources.some(s => s.id === serverId)).toBe(true)
+  })
+
+  test('a key the service rejects answers in the same format as the route validator', async () => {
+    const { app, connectorManager } = await makeMutableApp()
+    const res = await app.request('/config/servers', { method: 'POST', headers: { ...KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ ...SERVER, apiKey: 'not-a-radarr-key' }) })
+    expect(res.status).toBe(400)
+    const body = await res.json() as { ok: boolean, error: { code: string, field: string, message: string, issues: Array<{ field: string }> } }
+    expect(body.error).toMatchObject({ code: 'VALIDATION_ERROR', field: 'apiKey' })
+    expect(body.error.message).toStartWith('apiKey: ')
+    expect(body.error.message).not.toContain('✖')
+    expect(body.error.issues.every(issue => issue.field === 'apiKey')).toBe(true)
+    expect(connectorManager.servers).toHaveLength(0)
   })
 
   test('removes a server', async () => {
@@ -1073,8 +1125,9 @@ describe('Management API downloads config', () => {
       body: JSON.stringify({ completedPath: missing }),
     })
     expect(res.status).toBe(400)
-    const body = await res.json() as { error: { message: string } }
-    expect(body.error.message).toBe(`jack can't write to ${missing}. Check the Downloads path in the jack template.`)
+    const body = await res.json() as { error: { code: string, field: string, issues: Array<{ field: string, message: string }> } }
+    expect(body.error).toMatchObject({ code: 'VALIDATION_ERROR', field: 'completedPath' })
+    expect(body.error.issues).toEqual([{ field: 'completedPath', message: `jack can't write to ${missing}. Check the Downloads path in the jack template.` }])
     expect((jsonc.parse(await Bun.file(path).text()) as { downloads?: unknown }).downloads).toBeUndefined()
   })
 

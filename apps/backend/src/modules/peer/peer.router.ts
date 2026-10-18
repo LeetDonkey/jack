@@ -104,22 +104,25 @@ export function getPeerRouter(
       404: { description: 'No item with this id, or its file is missing on disk' },
       416: { description: 'Unsatisfiable Range request' },
       429: { description: 'This friend\'s daily upload limit is reached; retry after the Retry-After delay (local midnight)' },
-      503: { description: 'Every upload slot (or every slot for this friend) is in use; retry after the Retry-After delay' },
+      503: { description: 'Every upload slot (or every slot for this friend) is in use, or the owner paused sharing (`error: "Sharing is paused"`); retry after the Retry-After delay. While sharing is paused, the next Range window of an upload that was already running is still served.' },
     },
   }), async (c) => {
     // Limits are per friend: one api key is one friend. The master key has none.
     const apiKeyId = c.get('apiKeyId')
     const party = apiKeyId != null ? `key:${apiKeyId}` : undefined
     const label = c.get('apiKeyName') ?? 'unknown peer'
-    const refusal = transfers?.uploadRefusal(party)
+    const { itemId } = c.req.param()
+    const range = c.req.header('Range')
+    // A peer fetching in Range windows stays one transfer across its requests.
+    const resumeKey = `${party ?? 'master'}:${itemId}`
+    const refusal = transfers?.uploadRefusal(party, range ? resumeKey : undefined)
     if (refusal) {
       return c.json({ error: refusal.message }, refusal.status, {
         'Retry-After': String(refusal.retryAfterSeconds),
       })
     }
 
-    const { itemId } = c.req.param()
-    const result = await controller.streamFile(itemId, c.req.header('Range'))
+    const result = await controller.streamFile(itemId, range)
 
     if (!result) {
       return c.json({ error: 'File not found' }, 404)
@@ -154,8 +157,7 @@ export function getPeerRouter(
       totalBytes: result.type === 'partial' ? result.totalSize : result.size,
       offsetBytes: result.type === 'partial' ? result.start : 0,
       party,
-      // A peer fetching in Range windows stays one entry in the transfers view.
-      resumeKey: result.type === 'partial' ? `${party ?? 'master'}:${itemId}` : undefined,
+      resumeKey: result.type === 'partial' ? resumeKey : undefined,
     })
     const body = createFileStream(result.body, {
       onChunk: async (bytes) => {

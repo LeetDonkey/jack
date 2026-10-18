@@ -1,6 +1,7 @@
 import type { DownloadRecord } from '../downloads/downloads.repository'
 import type { TrafficTotal } from '../transfers/traffic-ledger'
 import type { Notification } from './notifications.service'
+import { isCancelledByUser } from '../downloads/download-state'
 import { localDay } from '../transfers/traffic-ledger'
 
 const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1)} GB`
@@ -10,7 +11,7 @@ export function buildDailySummary(totals: TrafficTotal[], downloads: DownloadRec
   const today = localDay(now)
   const on = (iso: string | null) => iso != null && localDay(new Date(iso)) === today
   const finished = downloads.filter(d => on(d.completedAt)).length
-  const failed = downloads.filter(d => d.status === 'failed' && on(d.updatedAt)).length
+  const failed = downloads.filter(d => d.status === 'failed' && !isCancelledByUser(d) && on(d.updatedAt)).length
   const running = downloads.filter(d => d.status === 'downloading').length
 
   const lines = [

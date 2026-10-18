@@ -77,4 +77,13 @@ USER bun
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD wget -q -O /dev/null "http://localhost:${PORT}/ping" || exit 1
 
+# Build identity for GET /version on the management API and the peer
+# handshake. Pass --build-arg REVISION=$(git rev-parse HEAD) and
+# --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ); without them jack
+# reports no build. Last, so a new revision rebuilds only this layer.
+ARG REVISION=""
+ARG BUILD_DATE=""
+ENV JACK_BUILD_REVISION=$REVISION \
+    JACK_BUILD_DATE=$BUILD_DATE
+
 CMD ["bun", "apps/backend/src/index.ts"]

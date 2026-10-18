@@ -28,3 +28,21 @@ describe('TrafficLedger', () => {
     ])
   })
 })
+
+describe('TrafficLedger lifetime', () => {
+  test('sums each direction over every day, unflushed bytes included, from the first day counted', () => {
+    const sqlite = new Database(':memory:')
+    let now = new Date(2026, 9, 16, 12, 0, 0)
+    const ledger = new TrafficLedger(sqlite, () => now)
+    expect(ledger.lifetime()).toEqual({ in: 0, out: 0, since: null })
+
+    ledger.add('out', 'key:1', 'Alice', 100)
+    ledger.add('out', 'master', 'unknown peer', 5)
+    ledger.flush()
+    now = new Date(2026, 9, 18, 12, 0, 0)
+    ledger.add('out', 'key:2', 'Bob', 50)
+    ledger.add('in', 'peer:a', 'Alice', 7)
+
+    expect(ledger.lifetime()).toEqual({ in: 7, out: 155, since: '2026-10-16' })
+  })
+})

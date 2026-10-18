@@ -1,7 +1,8 @@
 import type { CatalogController } from './catalog.controller'
 import { Hono } from 'hono'
-import { describeRoute, validator as zValidator } from 'hono-openapi'
+import { describeRoute } from 'hono-openapi'
 import { z } from 'zod'
+import { validator as zValidator } from '../../lib/validation'
 
 const tmdbParam = z.object({
   mediaType: z.enum(['movie', 'tv']),
@@ -39,14 +40,17 @@ export function getCatalogRouter(controller: CatalogController) {
     return c.json(await controller.getTitleMetadata(mediaType, tmdbId))
   })
 
-  app.get('/request-options', catalogDoc('List request targets', 'Destination servers (with root folders) a catalog item can be requested into.'), async c => c.json({ servers: await controller.getRequestOptions() }))
+  app.get('/request-options', catalogDoc('List request targets', 'Destination servers (with root folders) a catalog item can be requested into, as `servers`. A destination that is down or can\'t list its root folders is left out. `downloadsActive` says whether a request can start downloads now; when it can\'t, `downloadsInactiveReason` says why: `off` (downloads aren\'t set up) or `restartPending` (they were set up after jack started, and start with the next restart of the jack container).'), async (c) => {
+    const reason = controller.downloadsInactiveReason()
+    return c.json({ servers: await controller.getRequestOptions(), downloadsActive: reason === null, downloadsInactiveReason: reason })
+  })
 
   app.post('/request', catalogDoc('Request a download', 'Grabs a peer\'s catalog item into one of the local destination servers.'), zValidator('json', requestBody), async (c) => {
     return c.json(await controller.requestDownload(c.req.valid('json')))
   })
 
   // Aggregated catalog across all initialized peers.
-  app.get('/', catalogDoc('Get the aggregated catalog', 'Everything available across all initialized peers. Each peer catalog is cached for 15 minutes; `?refresh=true` asks the peers again.'), async c => c.json(await controller.getCatalog({ refresh: c.req.query('refresh') === 'true' })))
+  app.get('/', catalogDoc('Get the aggregated catalog', 'Everything available across all initialized peers. Each peer catalog is cached for 15 minutes; `?refresh=true` asks the peers again. `peers` lists the peers in the answer, each `{ id, name, online, fetchedAt, ageSeconds, stale }`: `online` is the last health check (null before the first), `fetchedAt` and `ageSeconds` say how old its catalog is, and `stale` is true when jack just failed to fetch a newer one and shows the cached one. `unavailable` lists configured peers with nothing in the answer, each `{ id, name, online, error }`. Each title has `addedAt`: when its newest release was added at the peer (ISO 8601), or null.'), async c => c.json(await controller.getCatalog({ refresh: c.req.query('refresh') === 'true' })))
 
   return app
 }
