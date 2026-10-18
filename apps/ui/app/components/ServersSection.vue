@@ -21,6 +21,14 @@ const confirmOpen = computed({
   },
 })
 
+// Kept after the dialog closes so its text doesn't change while it animates out.
+const lastConfirm = ref<ServerItem | null>(null)
+watch(confirmTarget, (server) => {
+  if (server)
+    lastConfirm.value = server
+})
+const confirmArr = computed(() => arrName(lastConfirm.value?.type ?? 'radarr'))
+
 function closeConfirm() {
   confirmTarget.value = null
   deleteError.value = null
@@ -40,6 +48,7 @@ function openEdit(server: ServerItem) {
 async function submit(input: ServerInput) {
   submitting.value = true
   formError.value = null
+  const arr = arrName(input.type)
   try {
     if (editTarget.value)
       await request(`config/servers/${editTarget.value.id}`, { method: 'PATCH', body: input })
@@ -49,7 +58,7 @@ async function submit(input: ServerInput) {
     await reload()
   }
   catch (err) {
-    formError.value = extractError(err, 'Could not save the server.')
+    formError.value = extractError(err, `Could not save this ${arr}.`)
   }
   finally {
     submitting.value = false
@@ -59,6 +68,7 @@ async function submit(input: ServerInput) {
 async function confirmDelete() {
   if (!confirmTarget.value)
     return
+  const arr = arrName(confirmTarget.value.type)
   deleting.value = true
   deleteError.value = null
   try {
@@ -67,16 +77,11 @@ async function confirmDelete() {
     await reload()
   }
   catch (err) {
-    deleteError.value = extractError(err, 'Could not remove the server.')
+    deleteError.value = extractError(err, `Could not remove this ${arr}.`)
   }
   finally {
     deleting.value = false
   }
-}
-
-function roleLabel(server: ServerItem): string {
-  const roles = [server.source && 'source', server.destination && 'destination'].filter(Boolean)
-  return roles.length ? roles.join(' · ') : 'disabled'
 }
 
 function upgradesLabel(server: ServerItem): string {
@@ -110,12 +115,16 @@ const destinations = computed(() => servers.value.filter(s => s.destination).len
 </script>
 
 <template>
-  <SettingsSection title="Servers" description="Radarr / Sonarr instances jack reads from and pushes to.">
+  <SettingsSection
+    id="servers"
+    title="Radarr & Sonarr"
+    description="Each Radarr or Sonarr can share its library with friends, receive downloads from them, or both."
+  >
     <template #aside>
-      <UButton label="Add server" icon="i-ph-plus" @click="openAdd" />
+      <UButton label="Connect Radarr or Sonarr" icon="i-ph-plus" @click="openAdd" />
     </template>
 
-    <UAlert v-if="error && !settings" color="error" variant="soft" icon="i-ph-warning" title="Failed to load servers." />
+    <UAlert v-if="error && !settings" color="error" variant="soft" icon="i-ph-warning" title="Failed to load Radarr and Sonarr." />
 
     <p v-else-if="pending && !settings" class="flex items-center gap-2 text-sm text-muted">
       <UIcon name="i-ph-circle-notch" class="size-4 animate-spin" />
@@ -126,9 +135,10 @@ const destinations = computed(() => servers.value.filter(s => s.destination).len
       <div class="flex flex-col items-center gap-3 py-6 text-center">
         <UIcon name="i-ph-hard-drives" class="size-8 text-dimmed" />
         <p class="text-sm text-muted">
-          No servers yet. Add a Radarr or Sonarr instance for jack to read from and push to.
+          No Radarr or Sonarr yet. Connect one to share its library with friends or to download
+          from them into it.
         </p>
-        <UButton label="Add server" icon="i-ph-plus" @click="openAdd" />
+        <UButton label="Connect Radarr or Sonarr" icon="i-ph-plus" @click="openAdd" />
       </div>
     </UCard>
 
@@ -137,8 +147,8 @@ const destinations = computed(() => servers.value.filter(s => s.destination).len
         {{ connected }} of {{ servers.length }} connected<template v-if="unreachable">
           · <span class="text-error">{{ unreachable }} unreachable</span>
         </template>
-        · {{ sources }} {{ sources === 1 ? 'source' : 'sources' }}
-        · {{ destinations }} {{ destinations === 1 ? 'destination' : 'destinations' }}
+        · {{ sources }} {{ sources === 1 ? 'shares' : 'share' }} with friends
+        · {{ destinations }} {{ destinations === 1 ? 'receives' : 'receive' }} downloads
       </p>
 
       <div class="space-y-2">
@@ -154,16 +164,19 @@ const destinations = computed(() => servers.value.filter(s => s.destination).len
           @remove="confirmTarget = server"
         >
           <template #badge>
-            <UBadge color="neutral" variant="subtle" size="sm" class="capitalize" :label="server.type" />
+            <UBadge color="neutral" variant="subtle" size="sm" :label="arrName(server.type)" />
           </template>
           <template #meta>
             <div class="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 pl-8 text-xs text-muted">
-              <span>{{ roleLabel(server) }}</span>
-              <span class="text-dimmed">·</span>
-              <span v-if="server.autoregister.enable">auto-registers with priority {{ server.autoregister.priority }}</span>
-              <span v-else>manual registration</span>
-              <span class="text-dimmed">·</span>
-              <span>{{ upgradesLabel(server) }}</span>
+              <span>{{ serverRoleLabel(server) }}</span>
+              <!-- Registration and upgrades only happen for a server that receives downloads. -->
+              <template v-if="server.destination">
+                <span class="text-dimmed">·</span>
+                <span v-if="server.autoregister.enable">auto-registers with priority {{ server.autoregister.priority }}</span>
+                <span v-else>manual registration</span>
+                <span class="text-dimmed">·</span>
+                <span>{{ upgradesLabel(server) }}</span>
+              </template>
             </div>
           </template>
         </ConnectorCard>
@@ -171,7 +184,7 @@ const destinations = computed(() => servers.value.filter(s => s.destination).len
     </div>
   </SettingsSection>
 
-  <UModal v-model:open="showForm" :title="editTarget ? 'Edit server' : 'Add server'">
+  <UModal v-model:open="showForm" :title="editTarget ? `Edit ${editTarget.name}` : 'Connect Radarr or Sonarr'">
     <template #body>
       <ServerForm
         :initial="editTarget"
@@ -183,11 +196,15 @@ const destinations = computed(() => servers.value.filter(s => s.destination).len
     </template>
   </UModal>
 
-  <UModal v-model:open="confirmOpen" title="Remove server" :ui="{ footer: 'justify-end' }">
+  <UModal v-model:open="confirmOpen" :title="`Remove ${lastConfirm?.name}?`" :ui="{ footer: 'justify-end' }">
     <template #body>
       <p class="text-sm text-default">
-        Remove <strong>{{ confirmTarget?.name }}</strong>? jack stops reading from / pushing to it.
-        The indexer/client already registered inside *arr is not removed automatically.
+        Remove <strong>{{ lastConfirm?.name }}</strong> from jack?<template v-if="lastConfirm?.source">
+          Friends no longer see its library.
+        </template><template v-if="lastConfirm?.destination">
+          jack stops sending downloads to it. jack's indexer and download client stay in
+          {{ confirmArr }} until you delete them there.
+        </template>
       </p>
       <UAlert v-if="deleteError" class="mt-3" color="error" variant="soft" icon="i-ph-warning" :title="deleteError" />
     </template>

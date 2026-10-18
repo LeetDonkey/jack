@@ -490,8 +490,8 @@ already has a file for. Releases for missing items are always offered.
 
 To tell, jack looks the item up in the destination when it answers a search or
 RSS sync, and reuses each answer for 10 minutes. When the lookup fails the
-release is left out of that answer. Editable in the server form under
-***Settings -> Servers*** and applies right away.
+release is left out of that answer. Editable in the Radarr/Sonarr form under
+***Settings -> Radarr & Sonarr*** and applies right away.
 
 ## `peers`
 

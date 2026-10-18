@@ -113,39 +113,63 @@ management key in each new browser session.
 
 ## 5. Connect Radarr and Sonarr
 
-In jack-ui, open ***Settings***. Set up jack itself and its downloads first:
-both are read when jack starts, and saving a server registers jack's download
-client in your *arr only once downloads are set up.
+Open jack-ui. Until jack is set up, the ***Dashboard*** shows a setup card,
+***Finish setting up jack***, with steps 1, 2 and 4 below, in order. Each step
+has a button that opens its section of ***Settings***, and the card ticks the
+step off once it's done. When every step is done, the card reads ***jack is set
+up*** and offers ***Hide***. A second card, ***Share with friends***, points to
+steps 6 and 7 and is optional.
 
-1. **Internal URL.** Under ***Jack***, set ***Internal URL*** to
-   `http://<your-server-ip>:5225` and save. This is the address jack registers
-   in your Radarr/Sonarr; the default `http://jack:5225` only works if they run
-   on the jack network too.
-2. **Downloads.** Under ***Downloads***, click ***Set up downloads***, set
-   ***Completed folder*** to the *Container Path* of your downloads mount
-   (`/data/jack`), turn on ***Unlink imported files***, and click ***Save
-   changes***. With unlink on, jack removes its own copy once Radarr/Sonarr
-   confirm the import: if they copied the file (the usual case when downloads
-   and library are separate mounts in their container) that saves the space of
-   a second copy; if they hardlinked it, only jack's extra link goes away.
-3. **Restart** the jack container (Docker tab -> jack -> ***Restart***).
-4. **Servers.** Under ***Servers***, click ***Add server*** for each *arr:
+Set up jack's address and downloads before you connect Radarr and Sonarr: jack
+reads both when it starts, and it adds its download client to Radarr/Sonarr
+only once downloads are on.
+
+1. **jack's address.** Under ***Settings -> jack***, set ***Address
+   Radarr/Sonarr use to reach jack*** to `http://<your-server-ip>:5225` and
+   click ***Save***. If you opened jack-ui by IP address, the button ***Use
+   http://...:5225 (if you kept port 5225)*** under the field fills in that
+   address. This is the address jack registers in your Radarr/Sonarr. The
+   default `http://jack:5225` only works if they run on the jack network too;
+   in that case keep it and click ***Yes, on the jack network*** on the setup
+   card.
+2. **Downloads.** Under ***Settings -> Downloads***, click ***Turn on
+   downloads***. Check that ***Completed folder*** is the *Container Path* of
+   your downloads mount (`/data/jack`, filled in for you), turn on ***Remove
+   jack's copy after Radarr/Sonarr import it***, and click ***Save changes***.
+   With it on, jack removes its own copy once Radarr/Sonarr confirm the import:
+   if they copied the file (the usual case when downloads and library are
+   separate mounts in their container) that saves the space of a second copy;
+   if they hardlinked it, only jack's extra link goes away.
+
+   If you only want to share your library, click ***I only share*** on the
+   setup card instead and skip this step.
+3. **Restart** the jack container (Docker tab -> jack -> ***Restart***). jack-ui
+   doesn't need a restart.
+4. **Radarr & Sonarr.** Under ***Settings -> Radarr & Sonarr***, click
+   ***Connect Radarr or Sonarr*** once for each of them:
    - ***Name***: e.g. `Radarr` or `Sonarr`.
    - ***URL***: e.g. `http://<your-server-ip>:7878` for Radarr, `:8989` for
      Sonarr.
    - ***Type***: ***Radarr*** or ***Sonarr***. It defaults to Radarr, so change
-     it when you add Sonarr.
-   - ***API key***: from the *arr's ***Settings -> General***.
-   - ***Source***: share this library with your friends.
-   - ***Destination***: download from your friends into this *arr.
-   - ***Indexer priority*** (shown while ***Auto-register jack in this \*arr***
-     is ticked, which it is by default): 1 is the highest and 50 the lowest.
-     With 50, your other indexers win when two releases are otherwise equal.
-   - ***Releases from friends***: whether friends' copies of movies or episodes
-     you already have are offered as upgrades. ***Offer upgrades up to a
-     size*** keeps a friend's 60 GB remux from replacing your 10 GB file.
+     it when you add Sonarr. The labels below name the type you pick.
+   - ***API key***: from ***Settings -> General -> API Key*** in that Radarr or
+     Sonarr.
+   - ***Share this Radarr's library with friends***: friends can see and
+     download what it has. On by default.
+   - ***Download from friends into this Radarr***: jack becomes an indexer and
+     download client there. On by default. While it is on, the form also
+     shows:
+     - ***Auto-register jack in this Radarr***, ticked by default, with its
+       ***Indexer priority***: 1 is the most preferred and 50 the least. The
+       form starts at 50, so your other indexers win when two releases are
+       otherwise equal.
+     - ***Releases from friends***: whether friends' copies of movies or
+       episodes you already have are offered as upgrades. ***Offer upgrades up
+       to a size*** keeps a friend's 60 GB remux from replacing your 10 GB
+       file.
 
-   Saving registers jack in that *arr: you'll find ***Jack*** under
+   Click ***Connect Radarr*** (or ***Connect Sonarr***). With auto-register
+   ticked, jack registers itself there right away: you'll find ***Jack*** under
    ***Settings -> Indexers*** and under ***Settings -> Download Clients*** in
    Radarr or Sonarr.
 
@@ -178,9 +202,9 @@ In Nginx Proxy Manager, add a ***Proxy Host***:
   proxy_request_buffering off;
   ```
 
-  Without this, nginx reads up to a gigabyte ahead from jack. Transfers then
-  show the wrong speed, upload limits are off, and nginx writes large temporary
-  files.
+  Without this, nginx reads up to a gigabyte ahead from jack. ***Live
+  traffic*** then shows the wrong speed, upload limits are off, and nginx
+  writes large temporary files.
 
 Your friends only need `/ping`, `/handshake` and `/peer/`. The Torznab
 (`/torznab`) and qBittorrent (`/api/v2`) paths are for your own Radarr/Sonarr on
@@ -194,21 +218,23 @@ and click ***Save***.
 ## 7. Connect to a friend
 
 A quick link carries everything a friend's jack needs to reach yours: your
-external URL and an API key made for them.
+external URL and an access key made for them.
 
-1. ***Settings -> Quick linking -> Generate quick link***. Leave ***Suggested
-   peer name*** as your own name, set ***Key name*** to your friend's name (so
-   you can revoke their access later), click ***Generate link***, then ***Copy
-   quick link*** and send them the `jack-link:` text. The link is shown only
-   once, so send it before closing the dialog.
+1. ***Settings -> Quick linking -> Generate quick link***. Fill in ***Who is
+   this link for?*** with your friend's name (so you can limit or revoke their
+   access later), click ***Generate link***, then ***Copy quick link*** and
+   send them the `jack-link:` text. The link is shown only once, so send it
+   before closing the dialog.
 2. They do the same and send you theirs. Click ***Settings -> Quick linking ->
-   Add via quick link***, paste it, click ***Review peer***, check the name and
-   click ***Save***. Saving connects to their jack, so their reverse proxy must
-   already work; shift-click ***Save*** to add them anyway and let jack retry.
-3. ***Settings -> Peers*** shows them as connected right away. The ***Friends***
-   page shows them as online after its next check, within five minutes. Their
-   library appears under ***Peer Catalog*** (the first load can take a minute
-   while their Radarr/Sonarr list everything).
+   Add via quick link***, paste it, click ***Continue***, check the name and
+   click ***Add friend***. Saving connects to their jack, so their reverse
+   proxy must already work. If their jack can't be reached yet, click ***Add
+   anyway, keep trying*** and jack keeps retrying.
+3. ***Settings -> Friends you download from*** shows them as connected right
+   away. The ***Friends*** page shows them as online after its next check,
+   within five minutes. Their library appears under ***Friends' library***
+   (the first load can take a minute while their Radarr/Sonarr list
+   everything).
 
 From then on, your Radarr/Sonarr find your friends' releases through the Jack
 indexer, and grabs download through jack.
@@ -226,8 +252,8 @@ links: see ***Settings -> Friends of friends***.
   keys.
 - ***Settings -> RSS feed***: how far back friends' new releases show up in
   your *arr's RSS sync.
-- ***Transfers*** shows what's moving right now; ***Downloads*** shows history
-  and lets you retry or cancel.
+- ***Live traffic*** shows what's moving right now; ***Downloads*** shows
+  history and lets you retry or cancel.
 
 ## Updating and backups
 
@@ -247,12 +273,15 @@ links: see ***Settings -> Friends of friends***.
   start jack again. (Unraid creates missing folders with the right owner.)
 - **jack-ui says it can't reach jack**: both containers must be on the `jack`
   network, and the management key must be identical in both.
-- **Radarr says it can't reach jack, or grabs never start**: the ***Internal
-  URL*** is wrong. It must be an address your Radarr container can reach,
-  usually `http://<your-server-ip>:5225` (see the tip in step 5 for `br0`).
-- **No Jack download client in Radarr/Sonarr**: downloads weren't set up when
-  jack started. Set up ***Downloads*** and restart jack; it registers the
-  download client on startup.
+- **Radarr says it can't reach jack, or grabs never start**: ***Address
+  Radarr/Sonarr use to reach jack*** (***Settings -> jack***) is wrong. It must
+  be an address your Radarr container can reach, usually
+  `http://<your-server-ip>:5225` (see the tip in step 5 for `br0`). Restart the
+  jack container after you change it.
+- **No Jack download client in Radarr/Sonarr**: downloads were off when jack
+  started. Click ***Turn on downloads*** under ***Settings -> Downloads***,
+  save, and restart the jack container; jack adds the download client when it
+  starts.
 - **Downloads finish but Radarr doesn't import them**: the downloads folder
   doesn't match. jack's ***Completed folder***, its downloads *Container Path*
   and the path your Radarr sees must all be the same.

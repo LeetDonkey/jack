@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { ButtonProps } from '@nuxt/ui'
 import type { IntroductionsOverview, IntroPerson, IntroThread } from '~/types/management'
 
 const { request, extractError } = useManagement()
@@ -86,6 +87,22 @@ const threads = computed(() => [...(data.value?.threads ?? [])].sort((a, b) => {
   const rank = (t: IntroThread) => (t.direction === 'incoming' && t.state === 'pending' ? 0 : t.state === 'connected' || t.state === 'declined' ? 2 : 1)
   return rank(a) - rank(b) || b.updatedAt.localeCompare(a.updatedAt)
 }))
+
+// One button per missing piece, to the setting that fixes it. The public name
+// falls back to the quick-linking instance name, so `me.name` is null exactly
+// when the name is missing; any other entry is the external URL.
+const setupActions = computed<ButtonProps[]>(() => {
+  const me = data.value?.me
+  if (!me)
+    return []
+  const needsName = !me.name
+  const needsAddress = me.missing.length > (needsName ? 1 : 0)
+  const action = { color: 'warning', variant: 'outline' } as const
+  return [
+    ...(needsName ? [{ ...action, label: 'Set a public name', to: settingsLink('friends-of-friends') }] : []),
+    ...(needsAddress ? [{ ...action, label: 'Set your external URL', to: settingsLink('public-address') }] : []),
+  ]
+})
 </script>
 
 <template>
@@ -97,7 +114,7 @@ const threads = computed(() => [...(data.value?.threads ?? [])].sort((a, b) => {
       <UButton label="Check now" icon="i-ph-arrows-clockwise" size="xs" color="neutral" variant="ghost" :loading="busy === 'sync'" @click="act('sync', 'introductions/sync')" />
     </div>
 
-    <UAlert v-if="error" color="error" variant="soft" icon="i-ph-warning" title="Failed to load friends of friends." />
+    <UAlert v-if="error && !data" color="error" variant="soft" icon="i-ph-warning" title="Failed to load friends of friends." />
 
     <template v-else-if="data">
       <UAlert
@@ -106,7 +123,7 @@ const threads = computed(() => [...(data.value?.threads ?? [])].sort((a, b) => {
         variant="soft"
         icon="i-ph-info"
         :title="`To ask or accept, set up ${data.me.missing.join(' and ')}.`"
-        description="Under Settings: Friends of friends (public name) and Quick linking (external URL)."
+        :actions="setupActions"
       />
       <p class="text-xs text-muted">
         <template v-if="data.me.discoverable && data.me.name">
@@ -115,7 +132,7 @@ const threads = computed(() => [...(data.value?.threads ?? [])].sort((a, b) => {
         <template v-else>
           You are not visible to friends of friends.
         </template>
-        <ULink to="/settings" class="underline">
+        <ULink :to="settingsLink('friends-of-friends')" class="underline">
           Change
         </ULink>
       </p>
@@ -154,7 +171,7 @@ const threads = computed(() => [...(data.value?.threads ?? [])].sort((a, b) => {
         <p class="text-[11px] text-dimmed">
           Safety code {{ thread.safetyCode }}. The same code at {{ thread.peerName }} proves nobody in between swapped your keys.
           <template v-if="thread.state === 'connected'">
-            {{ thread.peerName }} is now one of your peers.
+            {{ thread.peerName }} is now one of your friends.
           </template>
         </p>
       </UCard>

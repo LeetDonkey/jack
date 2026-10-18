@@ -262,11 +262,15 @@ curl http://localhost:5225/ping
 (The Docker image also wires `/ping` up as its `HEALTHCHECK`, so `docker ps`
 reports container health automatically.)
 
-Then open the management UI at **http://localhost:3000**. The Overview page
-shows your servers and whether each connector initialized cleanly. In
-Radarr/Sonarr, you'll find a new **Jack** indexer under ***Settings ->
-Indexers*** and a **Jack** download client under ***Settings -> Download
-Clients***. Both tests should pass.
+Then open the management UI at **http://localhost:3000**. The ***Dashboard***
+lists your servers under ***Radarr & Sonarr*** and whether each one connected.
+Above it, a ***Finish setting up jack*** card stays until setup is complete. It
+flags ***Tell jack how Radarr/Sonarr reach it*** while `jack.internalUrl` is the
+default `http://jack:5225`; with this compose file Radarr and Sonarr are on the
+jack network, so click ***Yes, on the jack network***. In Radarr/Sonarr, you'll
+find a new **Jack** indexer under ***Settings -> Indexers*** and a **Jack**
+download client under ***Settings -> Download Clients***. Both tests should
+pass.
 
 If something's off, the [troubleshooting guide](/guide/troubleshooting) covers
 the common failures.
@@ -276,12 +280,13 @@ the common failures.
 jack is useful once you're peered with someone who also runs jack (send them
 this page). Peering is symmetric and takes one exchange in each direction:
 
-1. In the management UI, go to ***API keys*** and issue a key named after your
-   friend. Send them that key plus the URL where your peer API is reachable
-   from the internet: a reverse-proxied `https://` address, not
-   `jack.internalUrl`.
-2. They do the same for you, and you add them under ***Peers*** in your UI with
-   the URL and key they sent.
+1. In the management UI, go to ***Settings -> Friend access keys***, click
+   ***Create key*** and name it after your friend. Send them that key plus the
+   URL where your peer API is reachable from the internet: a reverse-proxied
+   `https://` address, not `jack.internalUrl`.
+2. They do the same for you, and you click ***Add a friend*** under
+   ***Settings -> Friends you download from*** in your UI and enter the
+   ***Address*** and ***Access key*** they sent.
 
 See [API keys & peering](/guide/peering) for how the keys are scoped and why
 each peer gets their own.

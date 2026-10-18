@@ -1,5 +1,5 @@
 ---
-description: Manage jack servers, peers, API keys, downloads, catalog requests, and logs from the self-hosted web management console, with live updates over Server-Sent Events.
+description: Manage Radarr and Sonarr, friends, access keys, downloads, requests from friends' libraries, and logs from jack's self-hosted web console, with live updates over Server-Sent Events.
 ---
 
 # Management UI
@@ -10,22 +10,45 @@ instance without hand-editing `config.jsonc`. With the
 `jack-ui` service at **http://localhost:3000**, and it's the easiest way to
 operate jack day to day:
 
-- ***Overview***: your configured servers and peers, and whether each one
-  initialized cleanly, with transfer activity updating live.
-- ***Catalog***: browse everything your peers share, and request titles into
-  your library.
+- ***Dashboard***: a setup checklist until jack is ready, then your
+  Radarr/Sonarr and friends and whether each one connected, with download
+  activity updating live.
+- ***Friends' library***: browse everything your friends share, and request
+  titles into your library.
 - ***Downloads***: inspect, cancel, retry, and delete in-flight or finished
   grabs, updating live as they progress.
-- ***Peers*** and ***Servers***: add, edit, and remove your friends and your
-  Radarr/Sonarr connectors.
-- ***Settings -> Downloads***: the whole
-  [`downloads`](/reference/configuration#downloads) block, covering where
-  finished files land, how many transfers run at once, whether jack drops its
-  copy after an import, and the retry and import-watcher tuning.
-- ***Settings -> Quick linking***: how peers reach this instance, plus the
-  buttons that generate and import [quick links](/guide/quick-links).
-- ***API keys***: issue and revoke the keys you hand to peers.
+- ***Live traffic***: what is moving right now, in both directions.
+- ***Friends***: who you download from, who can download from you, their
+  traffic, and friends of friends.
 - ***Logs***: live-tail the backend's logs.
+- ***Settings***: one page, with these sections in this order:
+  - ***jack***: ***Address Radarr/Sonarr use to reach jack***
+    ([`jack.internalUrl`](/reference/configuration#jack-internalurl)), and the
+    optional [TMDB API key](/reference/configuration#jack-tmdbapikey) under
+    ***Extras***. Both apply after you restart the jack container.
+  - ***Downloads***: the whole
+    [`downloads`](/reference/configuration#downloads) block, covering where
+    finished files land, how many downloads run at once, whether jack drops its
+    copy after an import, and the retry and import-watcher tuning.
+  - ***Radarr & Sonarr***: add, edit, and remove your Radarr/Sonarr
+    connections.
+  - ***Quick linking***: how friends reach this instance, plus the buttons that
+    generate and import [quick links](/guide/quick-links).
+  - ***Friends you download from***: add, edit, and remove the friends whose
+    libraries you download from.
+  - ***Friend access keys***: issue and revoke the keys you hand to friends.
+  - ***Friends of friends***: the
+    [`discovery`](/reference/configuration#discovery) block.
+  - ***Bandwidth***: the [`bandwidth`](/reference/configuration#bandwidth)
+    block.
+  - ***RSS feed***: the [`torznab`](/reference/configuration#torznab) block.
+  - ***Notifications***: the
+    [`notifications`](/reference/configuration#notifications) block.
+  - ***Security***: the [`security`](/reference/configuration#security) block.
+  - ***About***: jack's version and the TMDB attribution.
+
+Links to a setting from elsewhere in the UI, such as the setup card on the
+***Dashboard***, open ***Settings*** scrolled to that section.
 
 Don't want it? Delete the `jack-ui` service and the backend's
 `JACK_MANAGEMENT_KEY` line to run jack headless.
@@ -36,34 +59,40 @@ The whole [`downloads`](/reference/configuration#downloads) block is editable
 here, so there's no reason to hand-edit `config.jsonc` for it:
 
 - The settings you actually choose sit at the top: ***Completed folder***,
-  ***simultaneous transfers***, and the
-  **[drop imported files](/reference/configuration#downloads-unlinkimportedfiles)**
+  ***Downloads at once***, and the
+  ***[Remove jack's copy after Radarr/Sonarr import it](/reference/configuration#downloads-unlinkimportedfiles)***
   switch.
-- ***Transfer retries*** and ***import watcher*** tuning are collapsed below,
-  each labelled with how many of its values you've moved off jack's defaults.
+- ***Download retries*** and ***Handing files to Radarr/Sonarr*** are collapsed
+  below, each labelled with how many of its values you've moved off jack's
+  defaults.
 
 Every field's placeholder is jack's default, and **clearing a field means "use
 the default"**: jack drops the key from the config file rather than storing a
 blank. `completedPath` is the exception, since it has no default and so can't be
-cleared. If your config has no `downloads` block at all, the page offers to set
-one up.
+cleared. If your config has no `downloads` block at all, the section offers
+***Turn on downloads***. It prefills ***Completed folder*** with `/data/jack`,
+the folder the Unraid template mounts; with the compose file from
+[Getting started](/guide/getting-started), change it to a path under
+`/data/torrents`.
 
-One ***Save*** covers the form and only lights up once something changed;
-***Revert*** discards your edits. `unlinkImportedFiles` takes effect the moment
-you save. **Every other key here is read at startup, so restart jack** to apply
-it.
+One ***Save changes*** covers the form and only lights up once something
+changed; ***Revert*** discards your edits. ***Downloads at once*** and
+***Remove jack's copy*** take effect the moment you save. **Every other key
+here is read at startup, so restart the jack container** to apply it.
 
 ## Settings -> Quick linking
 
 This section holds the [`jack.external`](/reference/configuration#jack-external)
-profile, meaning the instance name, external URL, and any proxy headers a peer
-needs to reach you, along with the two buttons that use it:
+profile, meaning the ***Instance name***, ***External URL***, and any ***Proxy
+headers*** a friend's jack needs to reach you, along with the two buttons that
+use it:
 
 - ***Generate quick link*** issues a fresh peer API key and encodes it, together
   with the profile, into a single shareable string. It's enabled only once the
-  profile is saved, and the link is revealed exactly once.
+  profile is saved, with a line under the button saying what is missing until
+  then. The link is revealed exactly once.
 - ***Add via quick link*** decodes a link a friend sent you and opens the
-  ***Add peer*** form prefilled, for you to review before saving.
+  ***Add a friend*** form prefilled, for you to review before saving.
 
 Treat a generated link as a credential. [Quick links](/guide/quick-links) covers
 the full workflow and how to revoke one.
@@ -102,12 +131,13 @@ for the full UI configuration reference.
 
 ## Live updates
 
-The UI doesn't poll. Overview, Downloads, and Settings each hold a
+The UI doesn't poll. ***Dashboard***, ***Downloads***, ***Live traffic*** and
+***Settings*** each hold a
 [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events)
 stream open through the BFF, and jack pushes a fresh snapshot the moment
-something changes: a transfer's progress, a connector's state, or a peer or
-server you just edited. There is no refresh interval to tune and no manual
-refresh button.
+something changes: a download's progress, a connection's state, or a friend or
+Radarr/Sonarr you just edited. There is no refresh interval to tune and no
+manual refresh button.
 
 The streams are plain `GET` endpoints on the management API:
 
@@ -115,6 +145,7 @@ The streams are plain `GET` endpoints on the management API:
 | --- | --- |
 | `/overview/stream` | Connector overview + download state |
 | `/downloads/stream` | Every persisted download change |
+| `/transfers/stream` | Running uploads and downloads, every second while any run |
 | `/config/stream` | Peer and server config changes |
 
 Each sends its current snapshot immediately on connect, then a full snapshot per
@@ -123,8 +154,16 @@ proxies from dropping the connection. The Logs page tails `/logs/stream`, which
 works the same way except each event is a single log line rather than a
 snapshot.
 
-The browser reconnects on its own if a stream drops; Overview and Downloads show
-a ***Live*** badge that flips to ***Reconnecting...*** while it's down.
+The browser reconnects on its own if a stream drops. ***Dashboard***,
+***Downloads***, ***Live traffic*** and ***Logs*** show a badge in the header:
+
+- ***Connecting...*** until the stream opens for the first time.
+- ***Live*** while it's open.
+- ***Reconnecting...*** after it dropped, until it's back.
+
+A page that can't load at all shows ***Can't reach jack. It may be restarting.
+Retrying automatically...*** and tries again every 5 seconds; ***Retry now***
+tries at once.
 
 **Behind a reverse proxy:** SSE needs response buffering **off** and an idle
 timeout **longer than 15 seconds** on whatever sits in front of the UI. jack

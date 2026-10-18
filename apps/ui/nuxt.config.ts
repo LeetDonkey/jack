@@ -13,8 +13,8 @@ export default defineNuxtConfig({
   // Peers and Servers are now sections of the Settings page; keep old
   // links/bookmarks (including the former Connectors page) working.
   routeRules: {
-    '/peers': { redirect: '/settings' },
-    '/servers': { redirect: '/settings' },
+    '/peers': { redirect: '/settings#peers' },
+    '/servers': { redirect: '/settings#servers' },
     '/connectors': { redirect: '/settings' },
   },
 

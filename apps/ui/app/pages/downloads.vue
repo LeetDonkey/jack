@@ -11,9 +11,30 @@ const toast = useToast()
 const { data, pending, error, refresh } = await useAsyncData('downloads', () =>
   request<{ downloads: DownloadItem[] }>('downloads'))
 
-const { connected } = useManagementStream<{ downloads: DownloadItem[] }>('downloads/stream', (snapshot) => {
+const { connected, hasConnectedOnce } = useManagementStream<{ downloads: DownloadItem[] }>('downloads/stream', (snapshot) => {
   data.value = snapshot
+  error.value = undefined
 })
+
+// Only words the empty state: with no downloads block, no download can start.
+const { data: downloadsConfig, status: downloadsConfigStatus, refresh: refreshDownloadsConfig } = useDownloadsConfig()
+const emptyState = computed<'loading' | 'off' | 'none'>(() => {
+  if (downloadsConfig.value === null)
+    return 'off'
+  // Wait for the answer rather than flash "Nothing downloaded yet" on a fresh install.
+  if (downloadsConfig.value === undefined && downloadsConfigStatus.value !== 'error')
+    return 'loading'
+  return 'none'
+})
+
+// While jack is unreachable both loads fail, so a retry repeats both. The config
+// only when it is missing: a failed refetch would throw away an answer it has.
+async function retryLoad() {
+  await Promise.all([
+    refresh(),
+    downloadsConfig.value === undefined ? refreshDownloadsConfig() : undefined,
+  ])
+}
 
 const pendingActions = ref<Record<number, DownloadAction | undefined>>({})
 
@@ -110,7 +131,7 @@ watch(pageCount, (count) => {
 
 const columns: TableColumn<DownloadItem>[] = [
   { accessorKey: 'filename', header: 'File' },
-  { accessorKey: 'peerName', header: 'Peer' },
+  { accessorKey: 'peerName', header: 'From' },
   { accessorKey: 'status', header: 'Status' },
   { accessorKey: 'progress', header: 'Progress' },
   { accessorKey: 'totalBytes', header: 'Size' },
@@ -124,27 +145,37 @@ const columns: TableColumn<DownloadItem>[] = [
     <template #header>
       <UDashboardNavbar title="Downloads">
         <template #right>
-          <UBadge :color="connected ? 'success' : 'warning'" variant="subtle" icon="i-ph-broadcast">
-            {{ connected ? 'Live' : 'Reconnecting…' }}
-          </UBadge>
+          <LiveBadge :connected="connected" :has-connected-once="hasConnectedOnce" />
         </template>
       </UDashboardNavbar>
     </template>
 
     <template #body>
-      <UAlert v-if="error" color="error" variant="soft" icon="i-ph-warning" title="Failed to load downloads." />
+      <LoadErrorAlert v-if="error && !data" :error="error" :retry="retryLoad" />
 
-      <p v-else-if="pending && !data" class="flex items-center gap-2 text-sm text-muted">
+      <p
+        v-else-if="(pending && !data) || (data?.downloads.length === 0 && emptyState === 'loading')"
+        class="flex items-center gap-2 text-sm text-muted"
+      >
         <UIcon name="i-ph-circle-notch" class="size-4 animate-spin" />
         Loading…
       </p>
 
       <UCard v-else-if="data && data.downloads.length === 0" variant="subtle">
-        <div class="flex flex-col items-center gap-3 py-6 text-center">
+        <div v-if="emptyState === 'off'" class="flex flex-col items-center gap-3 py-6 text-center">
           <UIcon name="i-ph-download-simple" class="size-8 text-dimmed" />
-          <p class="text-sm text-muted">
-            No downloads yet. Transfers show up here once a peer release starts pulling.
+          <p class="max-w-md text-sm text-muted">
+            Downloads are off, so Radarr/Sonarr can't start downloads from friends.
           </p>
+          <UButton label="Turn on downloads" icon="i-ph-power" :to="settingsLink('downloads')" />
+        </div>
+        <div v-else class="flex flex-col items-center gap-3 py-6 text-center">
+          <UIcon name="i-ph-download-simple" class="size-8 text-dimmed" />
+          <p class="max-w-md text-sm text-muted">
+            Nothing downloaded yet. Pick something in Friends' library, or search in Radarr/Sonarr,
+            where jack appears as an indexer.
+          </p>
+          <UButton label="Browse Friends' library" icon="i-ph-film-reel" to="/catalog" />
         </div>
       </UCard>
 

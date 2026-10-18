@@ -64,7 +64,7 @@ onBeforeUnmount(() => observer?.disconnect())
   <button
     ref="cardRef"
     type="button"
-    class="group flex flex-col gap-2 text-left focus:outline-none"
+    class="group flex w-full min-w-0 flex-col gap-2 text-left focus:outline-none"
     @click="$emit('select')"
   >
     <div class="relative aspect-[2/3] overflow-hidden rounded-lg bg-muted ring-1 ring-default transition group-hover:ring-primary">

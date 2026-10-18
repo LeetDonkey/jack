@@ -145,7 +145,7 @@ const logflixUrl = computed(() => props.title.tmdbId == null || meta.value == nu
          the chosen peer, so the choice is the peer, not an individual file. -->
     <template v-else>
       <p class="text-xs text-muted">
-        {{ pluralReleases(title.releaseCount) }} across {{ title.peers.length }} peers · {{ formatBytes(title.totalSize) }}
+        {{ pluralReleases(title.releaseCount) }} across {{ title.peers.length }} friends · {{ formatBytes(title.totalSize) }}
       </p>
       <div class="space-y-2">
         <div

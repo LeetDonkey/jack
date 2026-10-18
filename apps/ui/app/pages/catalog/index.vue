@@ -6,27 +6,26 @@ const { entryFor } = useCatalogMetadata()
 const toast = useToast()
 
 // Lazy (no top-level await) so navigation into the page is instant; the grid shows
-// skeletons until the catalog request resolves.
-// Peer catalogs are cached on the server for 15 minutes; the refresh button asks the
-// peers again. It goes through the async data's own refresh, so a successful refresh
-// also clears an earlier load error.
-const forceRefresh = ref(false)
-const { data, pending, error, refresh } = useLazyAsyncData(
+// skeletons until the first catalog arrives.
+const { data, error, refresh } = useLazyAsyncData(
   'peer-catalog',
-  () => request<CatalogResponse>(forceRefresh.value ? 'catalog?refresh=true' : 'catalog'),
+  () => request<CatalogResponse>('catalog'),
 )
 
+// Peer catalogs are cached on the server for 15 minutes; the refresh button asks the
+// peers again. It fetches outside the async data, because a failed asyncData refresh
+// empties `data`: this way a failed refresh keeps the grid and only toasts.
 const refreshing = ref(false)
 async function refreshCatalog() {
   refreshing.value = true
-  forceRefresh.value = true
   try {
-    await refresh()
-    if (error.value && data.value)
-      toast.add({ color: 'error', title: extractError(error.value, 'Could not refresh the catalog.') })
+    data.value = await request<CatalogResponse>('catalog?refresh=true')
+    error.value = undefined
+  }
+  catch (err) {
+    toast.add({ color: 'error', title: extractError(err, 'Could not refresh your friends\' library.') })
   }
   finally {
-    forceRefresh.value = false
     refreshing.value = false
   }
 }
@@ -55,6 +54,33 @@ const titles = computed(() => {
   const all = data.value?.titles ?? []
   return typeFilter.value === 'all' ? all : all.filter(t => t.mediaType === typeFilter.value)
 })
+
+// Why the grid is empty. The catalog only lists the friends that answered, so the
+// configured friends (from the settings stream) tell "no friends" apart from "none
+// reachable". Until that stream's first snapshot arrives the page keeps loading.
+type EmptyKind = 'checking' | 'no-friends' | 'unreachable' | 'nothing-shared' | 'filter'
+const emptyKind = computed<EmptyKind | null>(() => {
+  const catalog = data.value
+  if (!catalog || titles.value.length > 0)
+    return null
+  if (catalog.titles.length > 0)
+    return 'filter'
+  const friends = settings.value?.peers
+  if (!friends)
+    return 'checking'
+  if (friends.length === 0)
+    return 'no-friends'
+  return catalog.peers.length === 0 ? 'unreachable' : 'nothing-shared'
+})
+const unreachableCopy = computed(() => {
+  const friends = settings.value?.peers ?? []
+  return friends.length === 1
+    ? `${friends[0]!.name}'s jack can't be reached right now.`
+    : 'Your friends\' jacks can\'t be reached right now.'
+})
+
+// Shared by the skeletons and the real cards so both lay out the same.
+const gridClass = 'grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-4 sm:grid-cols-[repeat(auto-fill,minmax(140px,1fr))] md:grid-cols-[repeat(auto-fill,minmax(160px,1fr))] lg:grid-cols-[repeat(auto-fill,minmax(180px,1fr))] xl:grid-cols-[repeat(auto-fill,minmax(200px,1fr))]'
 
 function titleName(title: CatalogTitle): string {
   return title.metadata?.title ?? entryFor(title)?.data?.title ?? title.displayTitle
@@ -93,7 +119,7 @@ async function onConfirm(payload: CatalogRequestPayload) {
     })
     requestOpen.value = false
     selected.value = null
-    const peerName = title.peers.find(p => p.id === payload.peerId)?.name ?? 'a peer'
+    const peerName = title.peers.find(p => p.id === payload.peerId)?.name ?? 'a friend'
     toast.add({
       title: 'Added to your library',
       description: `"${titleName(title)}" is downloading from ${peerName}.`,
@@ -113,10 +139,10 @@ async function onConfirm(payload: CatalogRequestPayload) {
 <template>
   <UDashboardPanel id="catalog">
     <template #header>
-      <UDashboardNavbar title="Peer Catalog">
+      <UDashboardNavbar title="Friends' library">
         <template #right>
           <span v-if="updatedAgo" class="hidden text-xs text-muted sm:inline">Updated {{ updatedAgo }} ago</span>
-          <UButton icon="i-ph-arrows-clockwise" size="sm" color="neutral" variant="ghost" aria-label="Refresh the catalog" :loading="refreshing" @click="refreshCatalog" />
+          <UButton icon="i-ph-arrows-clockwise" size="sm" color="neutral" variant="ghost" aria-label="Refresh your friends' library" :loading="refreshing" @click="refreshCatalog" />
           <UTabs
             v-model="typeFilter"
             size="sm"
@@ -129,27 +155,56 @@ async function onConfirm(payload: CatalogRequestPayload) {
 
     <template #body>
       <!-- A failed refresh keeps showing the catalog it already has (and toasts). -->
-      <UAlert v-if="error && !data" color="error" variant="soft" icon="i-ph-warning" title="Failed to load the peer catalog." />
+      <LoadErrorAlert v-if="error && !data" :error="error" :retry="refresh" />
 
-      <UCard v-else-if="!pending && titles.length === 0" variant="subtle">
+      <!-- Skeletons only until the first catalog arrives: a refresh keeps the grid
+           (and the scroll position) and only spins the refresh button. -->
+      <div v-else-if="!data || emptyKind === 'checking'" class="space-y-4">
+        <p class="flex items-center gap-2 text-sm text-muted">
+          <UIcon name="i-ph-circle-notch" class="size-4 shrink-0 animate-spin" />
+          Loading your friends' libraries. The first load can take a minute.
+        </p>
+        <div :class="gridClass">
+          <CatalogPosterCardSkeleton v-for="n in 18" :key="n" />
+        </div>
+      </div>
+
+      <UCard v-else-if="emptyKind" variant="subtle">
         <div class="flex flex-col items-center gap-3 py-6 text-center">
-          <UIcon name="i-ph-film-slate" class="size-8 text-dimmed" />
-          <p class="text-sm text-muted">
-            Nothing to show here.
-          </p>
+          <template v-if="emptyKind === 'no-friends'">
+            <UIcon name="i-ph-users-three" class="size-8 text-dimmed" />
+            <p class="text-sm text-muted">
+              Your friends' movies and shows appear here once you've added a friend.
+            </p>
+            <UButton label="Add a friend" icon="i-ph-plus" :to="settingsLink('peers')" />
+          </template>
+          <template v-else-if="emptyKind === 'unreachable'">
+            <UIcon name="i-ph-wifi-slash" class="size-8 text-dimmed" />
+            <p class="text-sm text-muted">
+              {{ unreachableCopy }}
+            </p>
+            <UButton label="See friends" color="neutral" variant="subtle" to="/friends" />
+          </template>
+          <template v-else-if="emptyKind === 'nothing-shared'">
+            <UIcon name="i-ph-film-slate" class="size-8 text-dimmed" />
+            <p class="text-sm text-muted">
+              Your friends haven't shared any movies or shows yet.
+            </p>
+            <UButton label="See friends" color="neutral" variant="subtle" to="/friends" />
+          </template>
+          <template v-else>
+            <UIcon name="i-ph-film-slate" class="size-8 text-dimmed" />
+            <p class="text-sm text-muted">
+              {{ typeFilter === 'tv' ? 'No TV shows from your friends yet.' : 'No movies from your friends yet.' }}
+            </p>
+            <UButton label="Show all" color="neutral" variant="subtle" @click="typeFilter = 'all'" />
+          </template>
         </div>
       </UCard>
 
-      <div
-        v-else
-        class="grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-4 sm:grid-cols-[repeat(auto-fill,minmax(140px,1fr))] md:grid-cols-[repeat(auto-fill,minmax(160px,1fr))] lg:grid-cols-[repeat(auto-fill,minmax(180px,1fr))] xl:grid-cols-[repeat(auto-fill,minmax(200px,1fr))]"
-      >
-        <template v-if="pending">
-          <CatalogPosterCardSkeleton v-for="n in 18" :key="n" />
-        </template>
+      <div v-else :class="gridClass">
         <CatalogPosterCard
           v-for="title in titles"
-          v-else
           :key="title.key"
           :title="title"
           @select="selected = title"

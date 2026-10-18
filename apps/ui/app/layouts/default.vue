@@ -3,17 +3,25 @@ import type { NavigationMenuItem } from '@nuxt/ui'
 
 const { state, logout } = useAuth()
 
-// Peers and *arr servers are managed as sections under Settings, so the nav is
-// just the live views plus configuration.
-const items: NavigationMenuItem[] = [
-  { label: 'Dashboard', icon: 'i-ph-gauge', to: '/', exact: true },
-  { label: 'Downloads', icon: 'i-ph-download-simple', to: '/downloads' },
-  { label: 'Transfers', icon: 'i-ph-arrows-down-up', to: '/transfers' },
-  { label: 'Friends', icon: 'i-ph-users-three', to: '/friends' },
-  { label: 'Peer Catalog', icon: 'i-ph-film-reel', to: '/catalog' },
-  { label: 'Logs', icon: 'i-ph-scroll', to: '/logs' },
-  { label: 'Settings', icon: 'i-ph-gear-six', to: '/settings' },
+// Friends have their own page; Radarr/Sonarr and the rest of the configuration live
+// under Settings. Daily pages come first, and Logs and Settings form a second group
+// below a separator.
+const items: NavigationMenuItem[][] = [
+  [
+    { label: 'Dashboard', icon: 'i-ph-gauge', to: '/', exact: true },
+    { label: 'Friends\' library', icon: 'i-ph-film-reel', to: '/catalog' },
+    { label: 'Downloads', icon: 'i-ph-download-simple', to: '/downloads' },
+    { label: 'Live traffic', icon: 'i-ph-arrows-down-up', to: '/transfers' },
+    { label: 'Friends', icon: 'i-ph-users-three', to: '/friends' },
+  ],
+  [
+    { label: 'Logs', icon: 'i-ph-scroll', to: '/logs' },
+    { label: 'Settings', icon: 'i-ph-gear-six', to: '/settings' },
+  ],
 ]
+
+const helpUrl = docsUrl('unraid')
+const ENV_SIGN_IN = 'Signed in automatically (key from the jack-ui template)'
 
 const loggingOut = ref(false)
 async function onLogout() {
@@ -39,26 +47,47 @@ async function onLogout() {
       </template>
 
       <template #default="{ collapsed }">
-        <UNavigationMenu :collapsed="collapsed" :items="items" orientation="vertical" />
+        <UNavigationMenu :collapsed="collapsed" :items="items" orientation="vertical" :ui="{ separator: 'my-2' }" />
       </template>
 
       <template #footer="{ collapsed }">
-        <div class="flex w-full items-center gap-1.5" :class="collapsed ? 'flex-col' : ''">
+        <div class="flex w-full flex-col gap-1">
           <UButton
-            v-if="state.mode === 'cookie'"
-            :label="collapsed ? undefined : 'Sign out'"
-            icon="i-ph-sign-out"
+            :to="helpUrl"
+            target="_blank"
+            :label="collapsed ? undefined : 'Help & guide'"
+            :aria-label="collapsed ? 'Help & guide' : undefined"
+            icon="i-ph-question"
             color="neutral"
             variant="ghost"
-            :loading="loggingOut"
             :block="!collapsed"
-            :class="!collapsed && 'flex-1 justify-start'"
-            @click="onLogout"
+            :class="!collapsed && 'justify-start'"
           />
-          <span v-else-if="!collapsed" class="flex-1 truncate px-2.5 text-xs text-muted">
-            Key injected by host
-          </span>
-          <UColorModeButton />
+          <div class="flex w-full items-center gap-1.5" :class="collapsed ? 'flex-col' : ''">
+            <UButton
+              v-if="state.mode === 'cookie'"
+              :label="collapsed ? undefined : 'Sign out'"
+              icon="i-ph-sign-out"
+              color="neutral"
+              variant="ghost"
+              :loading="loggingOut"
+              :block="!collapsed"
+              :class="!collapsed && 'flex-1 justify-start'"
+              @click="onLogout"
+            />
+            <!-- Env mode: the BFF injects the key, so there is nothing to sign out of. -->
+            <UTooltip v-else :text="ENV_SIGN_IN" :content="{ side: 'top' }">
+              <span
+                tabindex="0"
+                class="flex items-center rounded-md px-2.5 py-1.5 text-muted focus-visible:outline-2 focus-visible:outline-primary"
+                :class="!collapsed && 'mr-auto'"
+              >
+                <UIcon name="i-ph-lock-key" class="size-5" />
+                <span class="sr-only">{{ ENV_SIGN_IN }}</span>
+              </span>
+            </UTooltip>
+            <UColorModeButton />
+          </div>
         </div>
       </template>
     </UDashboardSidebar>

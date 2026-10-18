@@ -22,21 +22,31 @@ const state = reactive({
   headers: { ...(props.initial?.headers ?? {}) } as Record<string, SecretRef>,
 })
 
+// Links carry the saved name and URL, so generating needs both saved. The reason
+// is shown as text under the button: a title tooltip never shows on touch screens.
+const generateBlockedReason = computed(() => {
+  if (!props.available)
+    return 'To generate a link, save the jack section first.'
+  if (!props.initial?.url || !props.initial?.instanceName)
+    return 'To generate a link, fill in Instance name and External URL, then Save.'
+  return null
+})
+
 function validate(s: typeof state): FormError[] {
   const errors: FormError[] = []
   if (!s.instanceName.trim())
-    errors.push({ name: 'instanceName', message: 'Enter the instance name shared with peers.' })
+    errors.push({ name: 'instanceName', message: 'Enter the name friends see for you.' })
   if (!s.url.trim()) {
-    errors.push({ name: 'url', message: 'Enter the external URL.' })
+    errors.push({ name: 'url', message: 'Enter the address friends use to reach your jack.' })
   }
   else {
     try {
       const url = new URL(s.url)
       if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password)
-        errors.push({ name: 'url', message: 'Use an HTTP or HTTPS URL without embedded credentials.' })
+        errors.push({ name: 'url', message: 'Use an http:// or https:// address without a username or password in it.' })
     }
     catch {
-      errors.push({ name: 'url', message: 'Enter a valid external URL.' })
+      errors.push({ name: 'url', message: 'Enter a full address, for example https://jack.example.com.' })
     }
   }
   return errors
@@ -53,16 +63,16 @@ function onSubmit() {
 
 <template>
   <SettingsSection
+    id="public-address"
     title="Quick linking"
-    description="Configure how this Jack is shared, generate access links, or add a peer from one."
+    description="How friends reach your jack. Generate a link for a friend, or add a friend from the link they sent you."
   >
     <template #aside>
       <div class="flex flex-wrap gap-2">
         <UButton
           label="Generate quick link"
           icon="i-ph-link"
-          :disabled="!available || !initial?.url || !initial?.instanceName"
-          :title="initial?.url && initial?.instanceName ? 'Generate a credential-bearing quick link' : 'Save the quick-linking configuration first'"
+          :disabled="generateBlockedReason !== null"
           @click="emit('generate')"
         />
         <UButton
@@ -73,6 +83,9 @@ function onSubmit() {
           @click="emit('import')"
         />
       </div>
+      <p v-if="generateBlockedReason" class="mt-2 text-xs text-muted">
+        {{ generateBlockedReason }}
+      </p>
     </template>
 
     <UCard v-if="!available" variant="subtle">
@@ -80,8 +93,8 @@ function onSubmit() {
         color="neutral"
         variant="soft"
         icon="i-ph-info"
-        title="Configure Jack first"
-        description="You can still add a peer from a quick link, but generating links requires a local Jack configuration."
+        title="Save the jack section first"
+        description="You can still add a friend from their quick link. Generating links needs the jack section saved."
       />
     </UCard>
 
@@ -90,30 +103,30 @@ function onSubmit() {
         <UFormField
           name="instanceName"
           label="Instance name"
-          description="Suggested peer name shown to people who import one of this instance’s quick links."
+          description="The name friends see for you when they add your link. They can change it on their side."
           required
         >
-          <UInput v-model="state.instanceName" placeholder="Roz’s Jack" :maxlength="100" class="w-full" />
+          <UInput v-model="state.instanceName" placeholder="e.g. Bob" :maxlength="100" class="w-full" />
         </UFormField>
 
         <UFormField
           name="url"
           label="External URL"
-          description="The URL another Jack should use to reach this instance."
+          description="Your public jack address. Friends' jacks use it to reach yours."
           required
         >
           <UInput v-model="state.url" placeholder="https://jack.example.com" class="w-full" />
         </UFormField>
 
-        <UFormField label="External headers" hint="Optional">
+        <UFormField label="Proxy headers" hint="Optional">
           <HeadersEditor v-model="state.headers" />
           <template #help>
-            <span>Proxy credentials such as Cloudflare Access headers. Prefer environment or file refs over literal values.</span>
+            <span>Only if your reverse proxy needs extra headers (e.g. Cloudflare Access). Every link you create includes them.</span>
           </template>
         </UFormField>
 
         <UAlert v-if="error" color="error" variant="soft" icon="i-ph-warning" :title="error" />
-        <UAlert v-if="saved" color="success" variant="soft" icon="i-ph-check-circle" title="Quick-linking configuration saved." />
+        <UAlert v-if="saved" color="success" variant="soft" icon="i-ph-check-circle" title="Quick linking settings saved." />
 
         <div class="flex justify-between gap-2 pt-2">
           <UButton

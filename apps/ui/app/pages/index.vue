@@ -3,26 +3,41 @@ import type { Overview } from '~/types/management'
 
 const { request } = useManagement()
 
-const { data: overview, pending, error } = await useAsyncData('overview', () =>
-  request<Overview>('overview'))
+const overviewRequest = useAsyncData('overview', () => request<Overview>('overview'))
+const { data: overview, error, refresh } = overviewRequest
 
-const { connected } = useManagementStream<Overview>('overview/stream', (snapshot) => {
+// Setup checklist state. Awaited together with the overview so the first render
+// already knows whether setup is open: no card popping in, no green flash.
+const setup = useSetupStatus(overview)
+await Promise.all([overviewRequest, setup.whenLoaded()])
+
+const { connected, hasConnectedOnce } = useManagementStream<Overview>('overview/stream', (snapshot) => {
   overview.value = snapshot
+  error.value = undefined
 })
+
+// Requests that failed while jack was unreachable get another go once the stream
+// reaches it again.
+watch(connected, (isConnected) => {
+  if (isConnected)
+    void setup.refreshMissing()
+})
+
+async function retry() {
+  await Promise.all([refresh(), setup.refreshMissing()])
+}
+
+// Content is held back only until it first renders. A later refetch of missing
+// setup data leaves the dashboard on screen instead of swapping it for "Loading…".
+const shownOnce = ref(false)
+watch(() => Boolean(overview.value) && setup.settled, (shown) => {
+  if (shown)
+    shownOnce.value = true
+}, { immediate: true })
 
 // Peer colors from the shared settings store (single source, consistent across views).
 const { settings } = useSettings()
 const peerTextClass = (id: string) => settings.value?.peerColors.get(id)?.text ?? peerColorTextClass(id)
-
-// Server connection role, shown in the connections grid (e.g. "source · destination").
-function serverRole(server: { source: boolean, destination: boolean }) {
-  const roles = []
-  if (server.source)
-    roles.push('source')
-  if (server.destination)
-    roles.push('destination')
-  return roles.join(' · ') || 'idle'
-}
 </script>
 
 <template>
@@ -30,48 +45,45 @@ function serverRole(server: { source: boolean, destination: boolean }) {
     <template #header>
       <UDashboardNavbar title="Dashboard">
         <template #right>
-          <UBadge :color="connected ? 'success' : 'warning'" variant="subtle" icon="i-ph-broadcast">
-            {{ connected ? 'Live' : 'Reconnecting…' }}
-          </UBadge>
+          <LiveBadge :connected="connected" :has-connected-once="hasConnectedOnce" />
         </template>
       </UDashboardNavbar>
     </template>
 
     <template #body>
-      <UAlert v-if="error" color="error" variant="soft" icon="i-ph-warning" title="Failed to load overview." />
+      <LoadErrorAlert v-if="error && !overview" :error="error" :retry="retry" />
 
-      <p v-else-if="pending && !overview" class="flex items-center gap-2 text-sm text-muted">
-        <UIcon name="i-ph-circle-notch" class="size-4 animate-spin" />
-        Loading…
-      </p>
-
-      <div v-else-if="overview" class="space-y-8">
-        <!-- What needs doing, first. -->
-        <DashboardAttention :overview="overview" />
+      <!-- Held back while the setup data is still on its way, so the dashboard never
+           renders first without the setup card. -->
+      <div v-else-if="overview && (setup.settled || shownOnce)" class="space-y-8">
+        <!-- What needs doing, first: setup, then problems. -->
+        <div class="space-y-4">
+          <SetupChecklist :status="setup" />
+          <DashboardAttention
+            :overview="overview"
+            :setup-state="setup.requiredState"
+            :downloads-on="setup.ready ? setup.downloadsOn : null"
+            :share-only="setup.shareOnly"
+          />
+        </div>
 
         <!-- Lifetime totals — the satisfying numbers. -->
         <section>
           <h2 class="mb-3 text-xs font-semibold uppercase tracking-wider text-muted">
             Lifetime
           </h2>
-          <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <div class="grid grid-cols-2 gap-4 lg:grid-cols-3">
             <StatCard label="Imported" :value="overview.downloads.byStatus.imported ?? 0" hint="media files" icon="i-ph-tray-arrow-down" />
-            <StatCard label="Data moved" :value="formatBytes(overview.downloads.bytesMoved)" hint="across all peers" icon="i-ph-swap" />
-            <StatCard label="Transfers" :value="overview.downloads.total" hint="started" icon="i-ph-download-simple" />
-            <StatCard
-              label="Peers connected"
-              :value="overview.peers.initialized"
-              :hint="overview.peers.initialized === 1 ? 'friend sharing' : 'friends sharing'"
-              icon="i-ph-users-three"
-            />
+            <StatCard label="Downloaded from friends" :value="formatBytes(overview.downloads.bytesMoved)" icon="i-ph-swap" />
+            <StatCard label="Downloads started" :value="overview.downloads.total" icon="i-ph-download-simple" class="col-span-2 lg:col-span-1" />
           </div>
         </section>
 
-        <!-- Live transfer activity. -->
+        <!-- Live download activity. -->
         <section>
           <div class="mb-3 flex items-center justify-between">
             <h2 class="text-xs font-semibold uppercase tracking-wider text-muted">
-              Transfers
+              Downloads
             </h2>
             <UButton to="/downloads" label="View all downloads" trailing-icon="i-ph-arrow-right" variant="link" size="sm" class="px-0" />
           </div>
@@ -93,7 +105,7 @@ function serverRole(server: { source: boolean, destination: boolean }) {
             </div>
 
             <p v-if="overview.downloads.active.length === 0" class="px-5 py-6 text-sm text-muted">
-              No active transfers.
+              Nothing downloading right now.
             </p>
             <div v-else class="divide-y divide-default">
               <div v-for="d in overview.downloads.active" :key="d.id" class="px-5 py-4">
@@ -122,52 +134,63 @@ function serverRole(server: { source: boolean, destination: boolean }) {
             Connections
           </h2>
           <div class="grid gap-4 md:grid-cols-2">
-            <!-- Peers -->
+            <!-- Friends -->
             <UCard variant="subtle" :ui="{ body: '!p-0' }">
               <div class="flex items-center justify-between border-b border-default px-4 py-3">
-                <span class="text-xs font-semibold uppercase tracking-wide text-muted">Peers</span>
+                <span class="text-xs font-semibold uppercase tracking-wide text-muted">Friends online</span>
                 <span class="text-xs tabular-nums text-dimmed">
-                  {{ overview.peers.initialized }} / {{ overview.peers.total }} online
+                  {{ overview.peers.initialized }} of {{ overview.peers.total }}
                 </span>
               </div>
-              <p v-if="overview.peers.total === 0" class="px-4 py-5 text-sm text-muted">
-                No peers yet.
-              </p>
+              <div v-if="overview.peers.total === 0" class="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
+                <p class="text-sm text-muted">
+                  No friends yet.
+                </p>
+                <UButton :to="settingsLink('peers')" label="Add a friend" icon="i-ph-plus" size="sm" variant="soft" />
+              </div>
               <div v-else class="divide-y divide-default">
                 <div v-for="peer in overview.peers.items" :key="peer.id" class="flex items-center gap-3 px-4 py-2.5">
                   <ConnDot :initialized="peer.initialized" :error="peer.initializationError" :accent-class="peerTextClass(peer.id)" />
-                  <span class="flex-1 truncate text-sm text-default" :title="peer.name">{{ peer.name }}</span>
-                  <span class="text-xs tabular-nums" :class="peer.initialized ? 'text-muted' : 'text-error'">
-                    {{ peer.initialized ? (peer.version ?? '—') : 'unreachable' }}
-                  </span>
+                  <span class="min-w-0 flex-1 truncate text-sm text-default" :title="peer.name">{{ peer.name }}</span>
+                  <span v-if="peer.initialized" class="text-xs tabular-nums text-muted">{{ peer.version ?? '—' }}</span>
+                  <span v-else-if="peer.initializationError" class="text-xs text-error">unreachable</span>
+                  <span v-else class="text-xs text-muted">connecting…</span>
                 </div>
               </div>
             </UCard>
 
-            <!-- Servers -->
+            <!-- Radarr & Sonarr -->
             <UCard variant="subtle" :ui="{ body: '!p-0' }">
               <div class="flex items-center justify-between border-b border-default px-4 py-3">
-                <span class="text-xs font-semibold uppercase tracking-wide text-muted">Servers</span>
+                <span class="text-xs font-semibold uppercase tracking-wide text-muted">Radarr & Sonarr</span>
                 <span class="text-xs tabular-nums text-dimmed">
-                  {{ overview.servers.initialized }} / {{ overview.servers.total }} online
+                  {{ overview.servers.initialized }} of {{ overview.servers.total }} connected
                 </span>
               </div>
-              <p v-if="overview.servers.total === 0" class="px-4 py-5 text-sm text-muted">
-                No servers yet.
-              </p>
+              <div v-if="overview.servers.total === 0" class="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
+                <p class="text-sm text-muted">
+                  No Radarr or Sonarr yet.
+                </p>
+                <UButton :to="settingsLink('servers')" label="Connect Radarr or Sonarr" icon="i-ph-plus" size="sm" variant="soft" />
+              </div>
               <div v-else class="divide-y divide-default">
                 <div v-for="server in overview.servers.items" :key="server.id" class="flex items-center gap-3 px-4 py-2.5">
                   <ConnDot :initialized="server.initialized" :error="server.initializationError" />
-                  <span class="flex-1 truncate text-sm text-default" :title="server.name">{{ server.name }}</span>
-                  <span class="text-xs" :class="server.initialized ? 'text-muted' : 'text-error'">
-                    {{ server.initialized ? serverRole(server) : 'unreachable' }}
-                  </span>
+                  <span class="min-w-0 flex-1 truncate text-sm text-default" :title="server.name">{{ server.name }}</span>
+                  <span v-if="server.initialized" class="text-right text-xs text-muted">{{ serverRoleLabel(server) }}</span>
+                  <span v-else-if="server.initializationError" class="text-xs text-error">unreachable</span>
+                  <span v-else class="text-xs text-muted">connecting…</span>
                 </div>
               </div>
             </UCard>
           </div>
         </section>
       </div>
+
+      <p v-else class="flex items-center gap-2 text-sm text-muted">
+        <UIcon name="i-ph-circle-notch" class="size-4 animate-spin" />
+        Loading…
+      </p>
     </template>
   </UDashboardPanel>
 </template>

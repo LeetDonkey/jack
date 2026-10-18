@@ -66,6 +66,7 @@ function revert() {
 
 <template>
   <SettingsSection
+    id="rss"
     title="RSS feed"
     description="What your Radarr/Sonarr see on every RSS sync. Searches (a new movie, a request, a manual search) always look through every friend's whole library."
   >
@@ -83,7 +84,7 @@ function revert() {
           :disabled="saving"
           name="rssMaxAgeDays"
           label="Newest releases only"
-          description="Days back a friend's file may have been added and still appear in the feed. A feed of every friend's whole library lets *arr grab every possible upgrade in one sync."
+          description="Days back a friend's file may have been added and still appear in the feed. A feed of every friend's whole library lets Radarr/Sonarr grab every possible upgrade in one sync."
           :default-value="DEFAULTS.rssMaxAgeDays"
           :min="1"
         />

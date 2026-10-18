@@ -22,6 +22,19 @@ const pending = ref(false)
 const error = ref('')
 const live = ref(true)
 const connected = ref(false)
+// Whether the current stream has opened at least once: before that the badge says
+// "Connecting…", after a drop "Reconnecting…".
+const connectedOnce = ref(false)
+
+const badge = computed(() => {
+  if (!live.value)
+    return { label: 'Paused', color: 'neutral' as const }
+  if (connected.value)
+    return { label: 'Live', color: 'success' as const }
+  return connectedOnce.value
+    ? { label: 'Reconnecting…', color: 'warning' as const }
+    : { label: 'Connecting…', color: 'neutral' as const }
+})
 
 // View controls.
 const query = ref('')
@@ -49,6 +62,7 @@ function disconnect() {
   source?.close()
   source = null
   connected.value = false
+  connectedOnce.value = false
 }
 
 function connect() {
@@ -61,8 +75,10 @@ function connect() {
   const nextSource = new EventSource(`/api/management/logs/stream${levelQuery('?')}`)
   source = nextSource
   nextSource.onopen = () => {
-    if (source === nextSource)
+    if (source === nextSource) {
       connected.value = true
+      connectedOnce.value = true
+    }
   }
   nextSource.onmessage = (event) => {
     if (source !== nextSource || !event.data)
@@ -229,23 +245,22 @@ const summary = computed(() => {
       <UDashboardNavbar title="Logs">
         <template #right>
           <div class="flex items-center gap-2">
-            <UBadge
-              :color="live ? (connected ? 'success' : 'warning') : 'neutral'"
-              variant="subtle"
-              :icon="live ? 'i-ph-broadcast' : 'i-ph-pause'"
-            >
-              {{ live ? (connected ? 'Live' : 'Reconnecting…') : 'Paused' }}
+            <UBadge :color="badge.color" variant="subtle" :icon="live ? 'i-ph-broadcast' : 'i-ph-pause'">
+              {{ badge.label }}
             </UBadge>
-            <USelect v-model="level" :items="levelItems" size="sm" class="w-32" aria-label="Minimum log level" />
-            <UButton
-              :icon="live ? 'i-ph-pause' : 'i-ph-play'"
-              :label="live ? 'Pause' : 'Resume'"
-              color="neutral"
-              variant="ghost"
-              size="sm"
-              @click="toggleLive"
-            />
-            <UButton icon="i-ph-trash" label="Clear" color="neutral" variant="ghost" size="sm" @click="clear" />
+            <!-- Below sm only the badge stays here; the controls sit in the filter bar. -->
+            <div class="hidden items-center gap-2 sm:flex">
+              <USelect v-model="level" :items="levelItems" size="sm" class="w-32" aria-label="Minimum log level" />
+              <UButton
+                :icon="live ? 'i-ph-pause' : 'i-ph-play'"
+                :label="live ? 'Pause' : 'Resume'"
+                color="neutral"
+                variant="ghost"
+                size="sm"
+                @click="toggleLive"
+              />
+              <UButton icon="i-ph-trash" label="Clear" color="neutral" variant="ghost" size="sm" @click="clear" />
+            </div>
           </div>
         </template>
       </UDashboardNavbar>
@@ -255,6 +270,19 @@ const summary = computed(() => {
       <div class="flex h-full flex-col gap-3">
         <!-- Filter bar -->
         <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <div class="flex w-full items-center gap-2 sm:hidden">
+            <USelect v-model="level" :items="levelItems" size="sm" class="w-36" aria-label="Minimum log level" />
+            <UButton
+              class="ms-auto"
+              :icon="live ? 'i-ph-pause' : 'i-ph-play'"
+              :label="live ? 'Pause' : 'Resume'"
+              color="neutral"
+              variant="ghost"
+              size="sm"
+              @click="toggleLive"
+            />
+            <UButton icon="i-ph-trash" label="Clear" color="neutral" variant="ghost" size="sm" @click="clear" />
+          </div>
           <UInput
             v-model="query"
             icon="i-ph-magnifying-glass"
@@ -289,7 +317,7 @@ const summary = computed(() => {
           <div class="flex flex-col items-center gap-3 py-6 text-center">
             <UIcon name="i-ph-scroll" class="size-8 text-dimmed" />
             <p class="text-sm text-muted">
-              No log lines yet. New entries stream in here as the server logs them.
+              No log lines yet. New entries stream in here as jack logs them.
             </p>
           </div>
         </UCard>

@@ -1,14 +1,63 @@
 <script setup lang="ts">
 import type { TableColumn } from '@nuxt/ui'
-import type { TransferDirectionSummary, TransferInfo, TransfersSnapshot } from '~/types/management'
+import type { BandwidthConfig, BandwidthPeriod, TransferDirectionSummary, TransferInfo, TransfersSnapshot, Weekday } from '~/types/management'
 
 const { request } = useManagement()
 
-const { data, pending, error } = await useAsyncData('transfers', () =>
+const { data, pending, error, refresh } = await useAsyncData('transfers', () =>
   request<TransfersSnapshot>('transfers'))
 
-const { connected } = useManagementStream<TransfersSnapshot>('transfers/stream', (snapshot) => {
+const { connected, hasConnectedOnce } = useManagementStream<TransfersSnapshot>('transfers/stream', (snapshot) => {
   data.value = snapshot
+  error.value = undefined
+})
+
+// The snapshot only carries the index of the schedule period in force; the period
+// itself (days and times) comes from the bandwidth config. Fetched again when the
+// period changes, so an edited schedule shows its new times.
+const { data: bandwidth, status: bandwidthStatus, refresh: refreshBandwidth } = useLazyAsyncData(
+  'transfers-bandwidth',
+  () => request<BandwidthConfig | null>('config/bandwidth'),
+)
+watch(() => data.value?.schedulePeriod, (next, prev) => {
+  if (next != null && next !== prev)
+    void refreshBandwidth()
+})
+
+const WEEKDAYS: Weekday[] = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+const dayLabel = (day: Weekday) => day.charAt(0).toUpperCase() + day.slice(1)
+
+// "Mon to Fri" for a run of three or more days, otherwise the days listed; nothing
+// when the period covers the whole week.
+function periodDays(days: Weekday[]): string {
+  const sorted = WEEKDAYS.filter(d => days.includes(d))
+  if (sorted.length === WEEKDAYS.length)
+    return ''
+  const first = WEEKDAYS.indexOf(sorted[0]!)
+  const contiguous = sorted.every((d, i) => WEEKDAYS.indexOf(d) === first + i)
+  if (contiguous && sorted.length >= 3)
+    return `${dayLabel(sorted[0]!)} to ${dayLabel(sorted.at(-1)!)}`
+  return sorted.map(dayLabel).join(', ')
+}
+
+function periodLabel(period: BandwidthPeriod): string {
+  const time = period.start === period.end ? 'all day' : `${period.start} to ${period.end}`
+  const days = periodDays(period.days)
+  return days ? `${time} · ${days}` : time
+}
+
+// Named by its time range; the number only when the config can't be read. Nothing
+// while the config is still loading, so the number doesn't flash first.
+const scheduleLabel = computed(() => {
+  const index = data.value?.schedulePeriod
+  if (index == null)
+    return null
+  const period = bandwidth.value?.schedule[index]
+  if (period)
+    return periodLabel(period)
+  if (bandwidthStatus.value === 'pending' || bandwidthStatus.value === 'idle')
+    return null
+  return `period ${index + 1}`
 })
 
 const directionMeta = {
@@ -35,7 +84,7 @@ const transfers = computed(() =>
 
 const columns: TableColumn<TransferInfo>[] = [
   { accessorKey: 'filename', header: 'File' },
-  { accessorKey: 'peer', header: 'Peer' },
+  { accessorKey: 'peer', header: 'Friend' },
   { accessorKey: 'progress', header: 'Progress' },
   { accessorKey: 'transferredBytes', header: 'Transferred' },
   { accessorKey: 'bytesPerSecond', header: 'Speed' },
@@ -46,17 +95,16 @@ const columns: TableColumn<TransferInfo>[] = [
 <template>
   <UDashboardPanel id="transfers">
     <template #header>
-      <UDashboardNavbar title="Transfers">
+      <UDashboardNavbar title="Live traffic">
         <template #right>
-          <UBadge :color="connected ? 'success' : 'warning'" variant="subtle" icon="i-ph-broadcast">
-            {{ connected ? 'Live' : 'Reconnecting…' }}
-          </UBadge>
+          <LiveBadge :connected="connected" :has-connected-once="hasConnectedOnce" />
         </template>
       </UDashboardNavbar>
     </template>
 
     <template #body>
-      <UAlert v-if="error" color="error" variant="soft" icon="i-ph-warning" title="Failed to load transfers." />
+      <!-- Once a snapshot has arrived (from the request or the stream), keep showing it. -->
+      <LoadErrorAlert v-if="error && !data" :error="error" :retry="refresh" />
 
       <p v-else-if="pending && !data" class="flex items-center gap-2 text-sm text-muted">
         <UIcon name="i-ph-circle-notch" class="size-4 animate-spin" />
@@ -66,23 +114,23 @@ const columns: TableColumn<TransferInfo>[] = [
       <div v-else-if="data" class="space-y-4">
         <div class="grid gap-3 sm:grid-cols-2">
           <StatCard
-            label="Downloading from peers"
+            label="Downloading from friends"
             :value="formatRate(data.download.bytesPerSecond)"
             :hint="summaryHint(data.download)"
             icon="i-ph-arrow-down"
           />
           <StatCard
-            label="Uploading to peers"
+            label="Uploading to friends"
             :value="formatRate(data.upload.bytesPerSecond)"
             :hint="summaryHint(data.upload)"
             icon="i-ph-arrow-up"
           />
         </div>
 
-        <p v-if="data.schedulePeriod != null" class="flex items-center gap-1.5 text-xs text-muted">
-          <UIcon name="i-ph-calendar-check" class="size-4" />
-          Bandwidth schedule period {{ data.schedulePeriod + 1 }} is in force.
-          <ULink to="/settings" class="underline">
+        <p v-if="scheduleLabel" class="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted">
+          <UIcon name="i-ph-calendar-check" class="size-4 shrink-0" />
+          <span>Bandwidth schedule in force: {{ scheduleLabel }}.</span>
+          <ULink :to="settingsLink('bandwidth')" class="underline">
             Edit schedule
           </ULink>
         </p>
@@ -91,7 +139,7 @@ const columns: TableColumn<TransferInfo>[] = [
           <div class="flex flex-col items-center gap-3 py-6 text-center">
             <UIcon name="i-ph-arrows-down-up" class="size-8 text-dimmed" />
             <p class="text-sm text-muted">
-              Nothing is moving right now. Downloads from peers and uploads to them show up here while they run.
+              Nothing is moving right now. Downloads from friends and uploads to them show up here while they run.
             </p>
           </div>
         </UCard>

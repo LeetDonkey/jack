@@ -47,7 +47,7 @@ async function saveJack(input: JackConfig) {
     jackSaved.value = true
   }
   catch (err) {
-    jackError.value = extractError(err, 'Could not save the Jack config.')
+    jackError.value = extractError(err, 'Could not save the jack settings.')
   }
   finally {
     jackSubmitting.value = false
@@ -56,7 +56,7 @@ async function saveJack(input: JackConfig) {
 
 async function saveQuickLinking(external: ExternalJackConfig) {
   if (!jack.value) {
-    quickLinkError.value = 'Configure Jack before setting up quick linking.'
+    quickLinkError.value = 'Save the jack section before setting up quick linking.'
     return
   }
   quickLinkSubmitting.value = true
@@ -69,7 +69,7 @@ async function saveQuickLinking(external: ExternalJackConfig) {
     quickLinkSaved.value = true
   }
   catch (err) {
-    quickLinkError.value = extractError(err, 'Could not save the quick-linking configuration.')
+    quickLinkError.value = extractError(err, 'Could not save the quick linking settings.')
   }
   finally {
     quickLinkSubmitting.value = false
@@ -87,7 +87,7 @@ async function removeQuickLinking() {
     showRemoveQuickLinking.value = false
   }
   catch (err) {
-    quickLinkError.value = extractError(err, 'Could not remove the quick-linking configuration.')
+    quickLinkError.value = extractError(err, 'Could not remove the quick linking settings.')
   }
   finally {
     removingQuickLinking.value = false
@@ -97,6 +97,60 @@ async function removeQuickLinking() {
 function reviewQuickLink(peer: PeerInput) {
   peersSection.value?.reviewImported(peer)
 }
+
+// Same condition as Quick linking's own Generate button.
+const canGenerateQuickLink = computed(() => Boolean(jack.value?.external?.url && jack.value?.external?.instanceName))
+
+// Deep links (settingsLink()). The page scrolls inside the dashboard panel body,
+// so vue-router's scrollBehavior can't reach the section. Sections above the
+// target load lazily and push it down as they render, so it is scrolled back
+// into view until the layout settles or the user scrolls.
+const route = useRoute()
+const content = ref<HTMLElement | null>(null)
+let stopFollowing: (() => void) | undefined
+let scrollRun = 0
+
+async function scrollToHash(hash: string) {
+  stopFollowing?.()
+  const run = ++scrollRun
+  const id = decodeURIComponent(hash.slice(1))
+  if (!id)
+    return
+  await nextTick()
+  if (run !== scrollRun)
+    return
+  const scroll = () => document.getElementById(id)?.scrollIntoView({ block: 'start' })
+  scroll()
+  if (!content.value)
+    return
+
+  const observer = new ResizeObserver(scroll)
+  observer.observe(content.value)
+  const userInput = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  function stop() {
+    observer.disconnect()
+    clearTimeout(timeout)
+    userInput.forEach(type => window.removeEventListener(type, stop))
+    stopFollowing = undefined
+  }
+  timeout = setTimeout(stop, 5_000)
+  userInput.forEach(type => window.addEventListener(type, stop, { passive: true }))
+  stopFollowing = stop
+}
+
+onMounted(() => void scrollToHash(route.hash))
+// Every navigation within this page, including a link to the hash already in the
+// URL: vue-router drops that one as a duplicate, so a watch on route.hash would
+// never see it, but afterEach still runs.
+const stopAfterEach = useRouter().afterEach((to, from) => {
+  if (to.path === from.path && to.path === route.path)
+    void scrollToHash(to.hash)
+})
+onBeforeUnmount(() => {
+  stopAfterEach()
+  stopFollowing?.()
+})
 
 const showForm = ref(false)
 const editTarget = ref<ApiKey | null>(null)
@@ -115,6 +169,12 @@ const createdOpen = computed({
 const copied = ref(false)
 
 const confirmTarget = ref<ApiKey | null>(null)
+// Kept after the dialog closes so its text doesn't change while it animates out.
+const lastRevoke = ref<ApiKey | null>(null)
+watch(confirmTarget, (key) => {
+  if (key)
+    lastRevoke.value = key
+})
 const revoking = ref(false)
 const revokeError = ref<string | null>(null)
 const confirmOpen = computed({
@@ -222,13 +282,14 @@ async function confirmRevoke() {
     </template>
 
     <template #body>
-      <div class="space-y-10">
-        <!-- Jack -->
+      <div ref="content" class="space-y-10">
+        <!-- jack: how Radarr/Sonarr reach it, plus extras -->
         <SettingsSection
-          title="Jack"
-          description="How this instance presents itself to your *arr apps. Changes apply after a restart."
+          id="internal-url"
+          title="jack"
+          description="How Radarr and Sonarr reach jack, plus optional extras."
         >
-          <UAlert v-if="jackLoadError" color="error" variant="soft" icon="i-ph-warning" title="Failed to load the Jack config." />
+          <UAlert v-if="jackLoadError" color="error" variant="soft" icon="i-ph-warning" title="Failed to load the jack settings." />
 
           <p v-else-if="jackPending" class="flex items-center gap-2 text-sm text-muted">
             <UIcon name="i-ph-circle-notch" class="size-4 animate-spin" />
@@ -243,6 +304,7 @@ async function confirmRevoke() {
               :initial="jack"
               :submitting="jackSubmitting"
               :error="jackError"
+              :tmdb-status="tmdbStatus"
               @submit="saveJack"
             />
             <UAlert
@@ -250,40 +312,11 @@ async function confirmRevoke() {
               color="success"
               variant="soft"
               icon="i-ph-check-circle"
-              title="Saved. Restart the server for the change to take effect."
+              title="Saved. Restart the jack container to apply this."
+              description="Unraid: Docker tab -> jack -> Restart. jack-ui doesn't need a restart."
             />
-            <p class="flex items-center gap-2 text-xs">
-              <template v-if="tmdbStatus?.ok">
-                <UIcon name="i-ph-check-circle" class="size-4 text-success" />
-                <span class="text-muted">TMDB connected.</span>
-              </template>
-              <template v-else-if="tmdbStatus?.configured">
-                <UIcon name="i-ph-warning" class="size-4 text-warning" />
-                <span class="text-muted">TMDB key set but not authenticating.</span>
-              </template>
-              <template v-else>
-                <UIcon name="i-ph-info" class="size-4 text-dimmed" />
-                <span class="text-muted">TMDB not configured. Peers running a current jack send titles and posters from their Radarr/Sonarr; TMDB fills in for older ones.</span>
-              </template>
-            </p>
           </UCard>
         </SettingsSection>
-
-        <USeparator />
-
-        <QuickLinkingSection
-          v-if="!jackPending && !jackLoadError"
-          :key="quickLinkFormRevision"
-          :available="Boolean(jack)"
-          :initial="jack?.external"
-          :submitting="quickLinkSubmitting"
-          :error="quickLinkError"
-          :saved="quickLinkSaved"
-          @submit="saveQuickLinking"
-          @generate="() => { showQuickLink = true }"
-          @import="() => { showQuickLinkImport = true }"
-          @remove="() => { showRemoveQuickLinking = true }"
-        />
 
         <USeparator />
 
@@ -291,44 +324,42 @@ async function confirmRevoke() {
 
         <USeparator />
 
-        <BandwidthSection />
+        <ServersSection />
 
         <USeparator />
 
-        <TorznabSection />
+        <template v-if="!jackPending && !jackLoadError">
+          <QuickLinkingSection
+            :key="quickLinkFormRevision"
+            :available="Boolean(jack)"
+            :initial="jack?.external"
+            :submitting="quickLinkSubmitting"
+            :error="quickLinkError"
+            :saved="quickLinkSaved"
+            @submit="saveQuickLinking"
+            @generate="() => { showQuickLink = true }"
+            @import="() => { showQuickLinkImport = true }"
+            @remove="() => { showRemoveQuickLinking = true }"
+          />
 
-        <USeparator />
-
-        <NotificationsSection />
-
-        <USeparator />
-
-        <DiscoverySection />
-
-        <USeparator />
-
-        <SecuritySection />
-
-        <USeparator />
+          <USeparator />
+        </template>
 
         <PeersSection ref="peersSection" />
 
         <USeparator />
 
-        <ServersSection />
-
-        <USeparator />
-
-        <!-- API keys -->
+        <!-- Keys you issue, one per friend -->
         <SettingsSection
-          title="API keys"
-          description="Keys external tools use to authenticate with Jack's API."
+          id="access-keys"
+          title="Friend access keys"
+          description="A key lets one friend's jack search and download from you. Give each friend their own; quick links create one for you. Radarr and Sonarr don't need one: jack sets up their keys itself."
         >
           <template #aside>
             <UButton label="Create key" icon="i-ph-plus" @click="openAdd" />
           </template>
 
-          <UAlert v-if="error" color="error" variant="soft" icon="i-ph-warning" title="Failed to load API keys." />
+          <UAlert v-if="error" color="error" variant="soft" icon="i-ph-warning" title="Failed to load the friend access keys." />
 
           <p v-else-if="pending" class="flex items-center gap-2 text-sm text-muted">
             <UIcon name="i-ph-circle-notch" class="size-4 animate-spin" />
@@ -339,9 +370,13 @@ async function confirmRevoke() {
             <div class="flex flex-col items-center gap-3 py-6 text-center">
               <UIcon name="i-ph-key" class="size-8 text-dimmed" />
               <p class="text-sm text-muted">
-                No API keys yet. Create one to let external tools authenticate with Jack.
+                Nobody can download from you yet. Generate a quick link for a friend.
               </p>
-              <UButton label="Create key" icon="i-ph-plus" @click="openAdd" />
+              <div class="flex flex-wrap justify-center gap-2">
+                <UButton v-if="canGenerateQuickLink" label="Generate quick link" icon="i-ph-link" @click="() => { showQuickLink = true }" />
+                <UButton v-else label="Set the address friends use" icon="i-ph-link" :to="settingsLink('public-address')" />
+                <UButton label="Create key" icon="i-ph-plus" color="neutral" variant="outline" @click="openAdd" />
+              </div>
             </div>
           </UCard>
 
@@ -371,8 +406,29 @@ async function confirmRevoke() {
 
         <USeparator />
 
+        <DiscoverySection />
+
+        <USeparator />
+
+        <BandwidthSection />
+
+        <USeparator />
+
+        <TorznabSection />
+
+        <USeparator />
+
+        <NotificationsSection />
+
+        <USeparator />
+
+        <SecuritySection />
+
+        <USeparator />
+
         <!-- About / Credits — also the home for required third-party attribution. -->
         <SettingsSection
+          id="about"
           title="About"
           description="What this is, and the data it relies on."
         >
@@ -386,7 +442,7 @@ async function confirmRevoke() {
                   <span class="font-mono text-xs text-dimmed">v{{ version }}</span>
                 </div>
                 <p class="text-xs text-muted">
-                  Self-hosted *arr peer bridge
+                  Share Radarr and Sonarr libraries with friends
                 </p>
               </div>
             </div>
@@ -407,7 +463,7 @@ async function confirmRevoke() {
     </template>
   </UDashboardPanel>
 
-  <UModal v-model:open="showForm" :title="editTarget ? 'Edit API key' : 'Create API key'">
+  <UModal v-model:open="showForm" :title="editTarget ? 'Edit friend access key' : 'Create friend access key'">
     <template #body>
       <ApiKeyForm
         :initial="editTarget"
@@ -421,10 +477,10 @@ async function confirmRevoke() {
 
   <QuickLinkImportModal v-model:open="showQuickLinkImport" @imported="reviewQuickLink" />
 
-  <UModal v-model:open="showRemoveQuickLinking" title="Remove quick-linking configuration" :ui="{ footer: 'justify-end' }">
+  <UModal v-model:open="showRemoveQuickLinking" title="Remove quick linking settings" :ui="{ footer: 'justify-end' }">
     <template #body>
       <p class="text-sm text-default">
-        Remove the external instance name, URL, and headers? Existing generated API keys remain active until revoked.
+        Remove the instance name, external URL and proxy headers? Links you already sent keep working until you revoke their keys under Friend access keys.
       </p>
       <UAlert v-if="quickLinkError" class="mt-3" color="error" variant="soft" icon="i-ph-warning" :title="quickLinkError" />
     </template>
@@ -441,7 +497,7 @@ async function confirmRevoke() {
     @generated="refresh"
   />
 
-  <UModal v-model:open="createdOpen" title="API key created" :ui="{ footer: 'justify-end' }">
+  <UModal v-model:open="createdOpen" title="Friend access key created" :ui="{ footer: 'justify-end' }">
     <template #body>
       <div class="space-y-4">
         <UAlert
@@ -449,7 +505,7 @@ async function confirmRevoke() {
           variant="soft"
           icon="i-ph-warning"
           title="Copy this key now"
-          description="It's the only time it's shown. Store it somewhere safe; you won't be able to view it again."
+          description="This is the only time it's shown. Send it to your friend now or store it somewhere safe."
         />
 
         <UFormField :label="created?.name || 'Unnamed key'">
@@ -471,11 +527,16 @@ async function confirmRevoke() {
     </template>
   </UModal>
 
-  <UModal v-model:open="confirmOpen" title="Revoke API key" :ui="{ footer: 'justify-end' }">
+  <UModal v-model:open="confirmOpen" title="Revoke access" :ui="{ footer: 'justify-end' }">
     <template #body>
       <p class="text-sm text-default">
-        Revoke <strong>{{ confirmTarget?.name || `key #${confirmTarget?.id}` }}</strong>? Any tool using this key
-        stops working immediately. This can't be undone.
+        <template v-if="lastRevoke?.name">
+          Revoke <strong>{{ lastRevoke.name }}</strong>'s access? Their jack can no longer search or download from you.
+        </template>
+        <template v-else>
+          Revoke <strong>key #{{ lastRevoke?.id }}</strong>? The jack using it can no longer search or download from you.
+        </template>
+        This can't be undone.
       </p>
       <UAlert v-if="revokeError" class="mt-3" color="error" variant="soft" icon="i-ph-warning" :title="revokeError" />
     </template>

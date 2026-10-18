@@ -93,7 +93,9 @@ present in your config (it needs `completedPath` to know where to write files).
 Without it, the Torznab indexer is still registered so searches work, but grabs
 have nowhere to go.
 
-**Fix:** add a `downloads` block with `completedPath` and restart jack.
+**Fix:** add a `downloads` block with `completedPath`, or click ***Turn on
+downloads*** under ***Settings -> Downloads*** in the management UI, and
+restart jack.
 
 If registration fails with `Failed to register indexer`, check that the
 destination server is reachable and its API key is correct. Registration logs
@@ -150,11 +152,12 @@ management UI's Downloads page removes their files too.
 
 ## Management UI stuck on "Reconnecting..."
 
-The Overview and Downloads pages show a ***Live*** badge while their
+The ***Dashboard***, ***Downloads*** and ***Live traffic*** pages show a
+***Live*** badge while their
 [event stream](/guide/management-ui#live-updates) is connected. If it sits on
-***Reconnecting...***, or flips to it every few seconds, the stream is being
-closed or buffered before it reaches the browser. The pages still load; they
-just stop updating on their own.
+***Connecting...*** or ***Reconnecting...***, or flips to ***Reconnecting...***
+every few seconds, the stream is being closed or buffered before it reaches the
+browser. The pages still load; they just stop updating on their own.
 
 The usual causes:
 

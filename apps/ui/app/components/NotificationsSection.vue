@@ -130,6 +130,7 @@ async function sendTest() {
 
 <template>
   <SettingsSection
+    id="notifications"
     title="Notifications"
     description="Messages to your phone or chat when a download fails for good, a friend goes offline, and a daily summary."
   >
@@ -177,7 +178,13 @@ async function sendTest() {
         <UFormField v-if="state.peerOffline" name="peerOfflineMinutes" label="Offline for at least" hint="minutes" :ui="{ hint: 'font-mono text-xs text-dimmed' }">
           <UInputNumber v-model="state.peerOfflineMinutes" :disabled="saving" :min="5" :increment="false" :decrement="false" placeholder="60" class="w-28" />
         </UFormField>
-        <UFormField name="ipBanned" label="Banned addresses" description="An address banned for repeated failed authentication (Settings: Security).">
+        <UFormField name="ipBanned" label="Banned addresses">
+          <template #description>
+            An address banned for repeated failed authentication.
+            <ULink :to="settingsLink('security')" class="underline">
+              Ban settings
+            </ULink>
+          </template>
           <USwitch v-model="state.ipBanned" :disabled="saving" />
         </UFormField>
         <UFormField name="dailySummaryAt" label="Daily summary" description="Traffic per friend and how downloads went, once a day at this time (server time). Empty means none.">

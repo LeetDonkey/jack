@@ -7,8 +7,8 @@ description: Connect jack instances securely, exchange scoped peer API keys, and
 jack authenticates each external surface by **key type**, so a credential only
 works where it's meant to (`/ping` is the only unauthenticated route):
 
-- **Peer API keys.** Issued per peer from the management UI's ***API keys***
-  section, from the management API, or implicitly when you generate a
+- **Peer API keys.** Issued per peer from the management UI's ***Friend access
+  keys*** section, from the management API, or implicitly when you generate a
   [quick link](/guide/quick-links). They are named, revocable, and optionally
   expiring. Scoped to the **peer API** (`/handshake`, `/peer/*`): a peer key
   **cannot** query your Torznab indexer or act as your download client.
@@ -45,8 +45,9 @@ You can also exchange the two values yourself, which is what a quick link
 automates:
 
 - **You give a friend** your reachable peer URL plus a peer API key you issue
-  them (management UI, ***API keys***). They add you under `peers` in *their*
-  config:
+  them (management UI, ***Friend access keys***). They add you with ***Add a
+  friend*** under ***Settings -> Friends you download from***, or under `peers`
+  in *their* config:
 
   ```jsonc
   {

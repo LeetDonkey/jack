@@ -44,7 +44,7 @@ const limitsText = computed(() => {
     </template>
 
     <template #body>
-      <UAlert v-if="error" color="error" variant="soft" icon="i-ph-warning" title="Failed to load friends." />
+      <LoadErrorAlert v-if="error && !data" :error="error" :retry="refresh" />
 
       <p v-else-if="pending && !data" class="flex items-center gap-2 text-sm text-muted">
         <UIcon name="i-ph-circle-notch" class="size-4 animate-spin" />
@@ -56,9 +56,12 @@ const limitsText = computed(() => {
           <h2 class="text-sm font-medium text-highlighted">
             You download from
           </h2>
-          <p v-if="data.peers.length === 0" class="text-sm text-muted">
-            No peers yet. Add one under Settings.
-          </p>
+          <UCard v-if="data.peers.length === 0" variant="subtle" :ui="{ body: 'p-3 flex flex-wrap items-center justify-between gap-2' }">
+            <p class="text-sm text-muted">
+              No friends yet.
+            </p>
+            <UButton :to="settingsLink('peers')" label="Add a friend" icon="i-ph-plus" size="sm" variant="soft" />
+          </UCard>
           <UCard v-for="peer in data.peers" :key="peer.id" variant="subtle" :ui="{ body: 'p-3 space-y-1.5' }">
             <div class="flex flex-wrap items-center justify-between gap-2">
               <p class="font-medium text-default">
@@ -81,15 +84,18 @@ const limitsText = computed(() => {
         <section class="space-y-2">
           <div class="flex flex-wrap items-baseline justify-between gap-2">
             <h2 class="text-sm font-medium text-highlighted">
-              Download from you
+              Can download from you
             </h2>
-            <ULink to="/settings" class="text-xs text-muted underline">
+            <ULink :to="settingsLink('bandwidth')" class="text-xs text-muted underline">
               {{ limitsText }}
             </ULink>
           </div>
-          <p v-if="data.keys.length === 0" class="text-sm text-muted">
-            You haven't issued any API keys, so no friend can download from you.
-          </p>
+          <UCard v-if="data.keys.length === 0" variant="subtle" :ui="{ body: 'p-3 flex flex-wrap items-center justify-between gap-2' }">
+            <p class="text-sm text-muted">
+              Nobody can download from you yet.
+            </p>
+            <UButton :to="settingsLink('public-address')" label="Generate quick link" icon="i-ph-link" size="sm" variant="soft" />
+          </UCard>
           <UCard v-for="key in data.keys" :key="key.id" variant="subtle" :ui="{ body: 'p-3 space-y-1.5' }">
             <div class="flex flex-wrap items-center justify-between gap-2">
               <p class="font-medium text-default">

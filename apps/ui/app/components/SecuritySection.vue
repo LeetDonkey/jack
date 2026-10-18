@@ -109,6 +109,7 @@ async function unban(ip: string) {
 
 <template>
   <SettingsSection
+    id="security"
     title="Security"
     description="Temporarily ban addresses that keep failing to authenticate on the public port, like fail2ban."
   >

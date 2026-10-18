@@ -67,6 +67,7 @@ function revert() {
 
 <template>
   <SettingsSection
+    id="friends-of-friends"
     title="Friends of friends"
     description="Let people your friends know find you by a name you choose, and ask to connect. Your address stays hidden until you both accept."
   >
@@ -79,8 +80,8 @@ function revert() {
 
     <UForm v-else :state="state" class="space-y-3" @submit="save">
       <UCard variant="subtle" :ui="{ body: 'space-y-4' }">
-        <UFormField name="publicName" label="Public name" description="What friends of friends see. Leave empty to use your quick-linking instance name.">
-          <UInput v-model="state.publicName" :disabled="saving" placeholder="e.g. Morten" maxlength="60" class="w-full" />
+        <UFormField name="publicName" label="Public name" description="What friends of friends see. Leave empty to use your Instance name from Quick linking.">
+          <UInput v-model="state.publicName" :disabled="saving" placeholder="e.g. Bob" maxlength="60" class="w-full" />
         </UFormField>
 
         <UFormField
@@ -105,7 +106,7 @@ function revert() {
         variant="soft"
         icon="i-ph-shield-check"
         title="When you both accept"
-        description="Each side issues an API key for the other and sends it with its external URL (from Quick linking), encrypted so only the other person can read it. Both jacks then add each other as peers and connect directly. Until then, every request and message goes through your mutual friend."
+        description="Each side creates an access key for the other and sends it with its external URL (from Quick linking), encrypted so only the other person can read it. Both jacks then add each other as friends and connect directly. Until then, every request and message goes through your mutual friend."
       />
 
       <UAlert v-if="saveError" color="error" variant="soft" icon="i-ph-warning" :title="saveError" />

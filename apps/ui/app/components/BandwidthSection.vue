@@ -153,8 +153,9 @@ function revert() {
 
 <template>
   <SettingsSection
+    id="bandwidth"
     title="Bandwidth"
-    description="Combined speed limits for everything jack moves to and from peers, and a weekly schedule that overrides them."
+    description="Combined speed limits for everything jack moves to and from friends, and a weekly schedule that overrides them."
   >
     <UAlert v-if="loadError" color="error" variant="soft" icon="i-ph-warning" title="Failed to load the bandwidth settings." />
 
@@ -166,18 +167,18 @@ function revert() {
     <UForm v-else :state="state" :validate="validate" class="space-y-3" @submit="save">
       <UCard variant="subtle" :ui="{ body: 'space-y-4' }">
         <div class="grid gap-4 sm:grid-cols-2">
-          <UFormField name="downloadMb" label="Download limit" description="Across all peers. Empty means unlimited." hint="MB/s" :ui="{ hint: 'font-mono text-xs text-dimmed' }">
+          <UFormField name="downloadMb" label="Download limit" description="Across all friends. Empty means unlimited." hint="MB/s" :ui="{ hint: 'font-mono text-xs text-dimmed' }">
             <UInputNumber v-model="state.downloadMb" :disabled="saving" :min="0" :step="0.5" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" />
           </UFormField>
-          <UFormField name="uploadMb" label="Upload limit" description="Across all peers. Empty means unlimited." hint="MB/s" :ui="{ hint: 'font-mono text-xs text-dimmed' }">
+          <UFormField name="uploadMb" label="Upload limit" description="Across all friends. Empty means unlimited." hint="MB/s" :ui="{ hint: 'font-mono text-xs text-dimmed' }">
             <UInputNumber v-model="state.uploadMb" :disabled="saving" :min="0" :step="0.5" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" />
           </UFormField>
         </div>
 
         <UFormField
           name="maxConcurrentUploads"
-          label="Simultaneous uploads"
-          description="How many peers may download from you at once. Others are asked to retry a minute later. Empty means unlimited."
+          label="Uploads at once"
+          description="How many friends may download from you at once. Others are asked to retry a minute later. Empty means unlimited."
         >
           <UInputNumber v-model="state.maxConcurrentUploads" :disabled="saving" :min="1" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" />
         </UFormField>
@@ -185,8 +186,8 @@ function revert() {
         <div class="grid gap-4 sm:grid-cols-2">
           <UFormField
             name="maxConcurrentUploadsPerPeer"
-            label="Simultaneous uploads per friend"
-            description="So one friend can't take every upload slot. Each API key you issued counts as one friend."
+            label="Uploads at once per friend"
+            description="So one friend can't take every upload slot. Each friend access key counts as one friend."
           >
             <UInputNumber v-model="state.maxConcurrentUploadsPerPeer" :disabled="saving" :min="1" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" />
           </UFormField>

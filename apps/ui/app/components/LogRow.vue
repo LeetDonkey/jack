@@ -65,21 +65,23 @@ async function copyRaw() {
   <div class="border-l-2" :class="level.rail">
     <button
       type="button"
-      class="flex w-full items-center gap-3 py-1 pl-2.5 pr-3 text-left hover:bg-elevated"
+      class="flex w-full items-start gap-3 py-1 pl-2.5 pr-3 text-left hover:bg-elevated"
       @click="emit('toggle')"
     >
-      <!-- Timestamp -->
-      <time class="w-[6.5rem] shrink-0 tabular-nums text-dimmed">{{ time }}</time>
+      <!-- Timestamp: HH:MM:SS on phones, milliseconds from sm up. -->
+      <time class="w-16 shrink-0 tabular-nums text-dimmed sm:w-[6.5rem]">{{ time.slice(0, 8) }}<span class="hidden sm:inline">{{ time.slice(8) }}</span></time>
 
-      <!-- Severity -->
-      <span class="w-12 shrink-0 truncate font-medium tracking-tight" :class="level.text" :title="level.label">{{ level.label }}</span>
+      <!-- Severity: the rail carries it on phones (lit for warn and up); the word
+           from sm up. The detail panel names it at every width. -->
+      <span class="hidden w-12 shrink-0 truncate font-medium tracking-tight sm:block" :class="level.text" :title="level.label">{{ level.label }}</span>
+      <span class="sr-only sm:hidden">{{ level.label }}</span>
 
       <!-- Content: a request line, or the plain message -->
       <span v-if="http" class="flex min-w-0 flex-1 items-center gap-2">
         <span class="w-14 shrink-0 font-semibold" :class="methodClass(http.method)">{{ http.method }}</span>
         <span class="truncate text-default" :title="http.path">{{ http.path }}</span>
       </span>
-      <span v-else class="min-w-0 flex-1 truncate text-default" :title="row.message">{{ row.message || '—' }}</span>
+      <span v-else class="line-clamp-2 min-w-0 flex-1 break-words text-default" :title="row.message">{{ row.message || '—' }}</span>
 
       <!-- Right lane: status · latency · micro-bar -->
       <template v-if="http">
@@ -89,7 +91,7 @@ async function copyRaw() {
         <span class="w-14 shrink-0 text-right tabular-nums" :class="lastMs !== undefined ? latencyClass(lastMs) : 'text-dimmed'">
           {{ lastMs !== undefined ? formatMs(lastMs) : '' }}
         </span>
-        <span class="hidden h-1.5 w-14 shrink-0 overflow-hidden rounded-full bg-accented/60 sm:block">
+        <span class="hidden h-1.5 w-14 shrink-0 self-center overflow-hidden rounded-full bg-accented/60 sm:block">
           <span
             v-if="lastMs !== undefined"
             class="block h-full rounded-full"
@@ -108,13 +110,14 @@ async function copyRaw() {
 
       <UIcon
         :name="expanded ? 'i-ph-caret-up' : 'i-ph-caret-down'"
-        class="size-3.5 shrink-0 text-dimmed"
+        class="mt-px size-3.5 shrink-0 text-dimmed"
       />
     </button>
 
     <!-- Detail -->
     <div v-if="expanded" class="border-t border-default/50 bg-default/40 px-4 py-3 text-muted">
-      <div v-if="count > 1 || latStats" class="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-dimmed">
+      <div class="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-dimmed">
+        <span><span class="font-medium" :class="level.text">{{ level.label }}</span><template v-if="time"> · {{ time }}</template></span>
         <span v-if="count > 1">{{ count }} occurrences</span>
         <span v-if="latStats">avg {{ formatMs(latStats.avg) }} · max {{ formatMs(latStats.max) }}</span>
       </div>

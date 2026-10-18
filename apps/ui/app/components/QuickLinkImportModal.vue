@@ -19,7 +19,7 @@ watch(open, (isOpen) => {
 })
 
 function validate(s: typeof state): FormError[] {
-  return s.link.trim() ? [] : [{ name: 'link', message: 'Paste a Jack quick link.' }]
+  return s.link.trim() ? [] : [{ name: 'link', message: 'Paste the quick link your friend sent.' }]
 }
 
 function importLink() {
@@ -31,21 +31,21 @@ function importLink() {
     emit('imported', peer)
   }
   catch {
-    error.value = 'This is not a valid or supported Jack quick link.'
+    error.value = 'This isn\'t a valid jack quick link. Check that you copied all of it.'
   }
 }
 </script>
 
 <template>
-  <UModal v-model:open="open" title="Import quick link">
+  <UModal v-model:open="open" title="Add via quick link">
     <template #body>
       <UForm :state="state" :validate="validate" class="space-y-4" @submit="importLink">
         <UAlert
           color="warning"
           variant="soft"
           icon="i-ph-shield-warning"
-          title="Treat quick links as credentials."
-          description="Only import one received through a channel you trust. You can review every field before the peer is saved."
+          title="A quick link contains a key to your friend's jack."
+          description="Only use a link your friend sent you directly. You can check every field before the friend is added."
         />
         <UFormField name="link" label="Quick link" required>
           <UTextarea v-model="state.link" :rows="6" autocomplete="off" placeholder="jack-link:v1:…" class="w-full font-mono text-xs" />
@@ -53,7 +53,7 @@ function importLink() {
         <UAlert v-if="error" color="error" variant="soft" icon="i-ph-warning" :title="error" />
         <div class="flex justify-end gap-2 pt-2">
           <UButton label="Cancel" color="neutral" variant="ghost" @click="() => { open = false }" />
-          <UButton type="submit" label="Review peer" icon="i-ph-arrow-right" />
+          <UButton type="submit" label="Continue" icon="i-ph-arrow-right" />
         </div>
       </UForm>
     </template>

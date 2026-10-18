@@ -4,12 +4,20 @@ import type { DownloadsConfig, DownloadsConfigPatch } from '~/types/management'
 
 const { request, extractError } = useManagement()
 
-// `null` is a real answer here: no downloads block in the config file, i.e. this
-// instance only shares its library and never pulls — there is nothing to configure.
-const { data: downloads, pending, error: loadError, refresh } = useLazyAsyncData(
-  'downloads-config',
-  () => request<DownloadsConfig | null>('config/downloads'),
-)
+// `null` is a real answer here: no downloads block in the config file, so downloads
+// are off and the section offers to turn them on.
+const { data: downloads, pending, error: loadError } = useDownloadsConfig()
+
+// The Container Path the Unraid template maps jack's Downloads folder to.
+const TEMPLATE_DOWNLOADS_PATH = '/data/jack'
+
+// Same shape as the jack section's Saved alert in settings.vue.
+const RESTART_TITLE = 'Saved. Restart the jack container to apply this.'
+const RESTART_NOTE = 'Unraid: Docker tab -> jack -> Restart. jack-ui doesn\'t need a restart.'
+
+// Read live by the running downloads service. Everything else in the block is
+// captured when jack starts.
+const LIVE_KEYS = new Set(['maxConcurrentDownloads', 'unlinkImportedFiles'])
 
 // Every tuning knob is `number | null`, where null means "absent from the file" and
 // jack's default applies. The switch has no such state — absent and false behave the
@@ -64,11 +72,28 @@ watch(dirty, (isDirty) => {
 })
 
 // A config file with no downloads block gets an invitation to add one rather than a
-// dead end — writing the block is exactly what this form does.
+// dead end, since writing the block is exactly what this form does.
 const adding = ref(false)
-// Set when the save that just succeeded is the one that created the block: nothing
-// downloads until the server restarts, which is worth saying plainly.
-const justAdded = ref(false)
+// Set when the save that just succeeded needs a jack restart to take effect: it
+// created the block, or it changed a value jack only reads at startup.
+const restartNeeded = ref(false)
+// jack only starts its downloads service when the block exists at startup, so
+// after turning downloads on nothing applies a "live" value until the restart
+// either. Batch 2's restartPending can replace this.
+const createdThisSession = ref(false)
+
+// The template always mounts the Downloads folder, so the path is known. Prefilling
+// leaves the form dirty, and Save works straight away.
+function startAdding() {
+  state.completedPath = TEMPLATE_DOWNLOADS_PATH
+  adding.value = true
+}
+
+// The block as a PATCH just wrote it: the form sends every key, and null means the
+// key is absent from the file.
+function configFromPatch(patch: DownloadsConfigPatch): DownloadsConfig {
+  return Object.fromEntries(Object.entries(patch).filter(([, value]) => value != null)) as DownloadsConfig
+}
 
 function validate(s: State): FormError[] {
   if (!s.completedPath.trim())
@@ -76,7 +101,7 @@ function validate(s: State): FormError[] {
   return []
 }
 
-// Every control is disabled for the duration of this call. The refresh below re-seeds
+// Every control is disabled for the duration of this call. The read-back below re-seeds
 // the form from the server's answer, which would otherwise silently discard anything
 // typed while the request was in flight — and reset the baseline with it, so the lost
 // edit wouldn't even leave the form dirty.
@@ -100,10 +125,21 @@ async function save() {
     unlinkImportedFiles: state.unlinkImportedFiles ? true : null,
   }
   const creating = !downloads.value
+  // Compare against the last saved values to tell whether this save needs a restart.
+  const before = JSON.parse(baseline.value) as State
+  const after: State = { ...state, completedPath: state.completedPath.trim() }
+  const changedAtStartup = (Object.keys(before) as Array<keyof State>)
+    .some(key => !LIVE_KEYS.has(key) && before[key] !== after[key])
   try {
     await request('config/downloads', { method: 'PATCH', body: patch })
-    await refresh()
-    justAdded.value = creating
+    // Read back what was written. A failed asyncData refresh would empty
+    // `downloads` (and the form with it), so fetch directly and fall back to what
+    // was just saved if jack can't be reached right now.
+    downloads.value = await request<DownloadsConfig | null>('config/downloads')
+      .catch(() => configFromPatch(patch))
+    if (creating)
+      createdThisSession.value = true
+    restartNeeded.value = createdThisSession.value || changedAtStartup
     adding.value = false
     saved.value = true
   }
@@ -156,12 +192,15 @@ const importOpen = ref(false)
 
 <template>
   <SettingsSection
+    id="downloads"
     title="Downloads"
-    description="Where jack puts the files it pulls from peers, and how hard it tries."
+    description="Where jack puts what it downloads from friends, and how hard it retries."
   >
-    <UAlert v-if="loadError" color="error" variant="soft" icon="i-ph-warning" title="Failed to load the downloads settings." />
+    <!-- Only when the first load failed. A save reads the block back itself, so a
+         failed read after a save never lands here. -->
+    <UAlert v-if="loadError && downloads === undefined" color="error" variant="soft" icon="i-ph-warning" title="Failed to load the downloads settings." />
 
-    <p v-else-if="pending && !downloads" class="flex items-center gap-2 text-sm text-muted">
+    <p v-else-if="pending && downloads === undefined" class="flex items-center gap-2 text-sm text-muted">
       <UIcon name="i-ph-circle-notch" class="size-4 animate-spin" />
       Loading…
     </p>
@@ -170,31 +209,39 @@ const importOpen = ref(false)
       <div class="flex flex-col items-center gap-3 py-6 text-center">
         <UIcon name="i-ph-download-simple" class="size-8 text-dimmed" />
         <p class="max-w-md text-sm text-muted">
-          This instance shares its library but doesn't download from peers. Add a completed folder
-          to start pulling from them.
+          Downloads are off, so friends' movies and episodes can't reach your Radarr/Sonarr.
+          The jack template already mounts {{ TEMPLATE_DOWNLOADS_PATH }} for this.
         </p>
-        <UButton label="Set up downloads" icon="i-ph-plus" @click="() => { adding = true }" />
+        <UButton label="Turn on downloads" icon="i-ph-power" @click="startAdding" />
       </div>
     </UCard>
 
     <UForm v-else :state="state" :validate="validate" class="space-y-3" @submit="save">
+      <p class="flex items-start gap-1.5 text-xs text-muted">
+        <UIcon name="i-ph-info" class="mt-px size-3.5 shrink-0" />
+        <span>
+          Completed folder, Download retries and Handing files to Radarr/Sonarr apply after you
+          restart the jack container. Downloads at once and Remove jack's copy apply right away.
+        </span>
+      </p>
+
       <!-- The two settings you actually choose, kept above the fold. -->
       <UCard variant="subtle" :ui="{ body: 'space-y-4' }">
         <UFormField
           name="completedPath"
           label="Completed folder"
-          description="Where jack writes finished downloads. Mount it into Radarr/Sonarr at this same path so they can import from it."
+          description="The Container Path of jack's Downloads folder in the Unraid template. Radarr/Sonarr must see this folder at the same path."
           required
         >
-          <UInput v-model="state.completedPath" :disabled="saving" placeholder="/data/torrents/completed" class="w-full font-mono" />
+          <UInput v-model="state.completedPath" :disabled="saving" :placeholder="TEMPLATE_DOWNLOADS_PATH" class="w-full font-mono" />
         </UFormField>
 
         <ConfigNumberField
           v-model="state.maxConcurrentDownloads"
           :disabled="saving"
           name="maxConcurrentDownloads"
-          label="Simultaneous transfers"
-          description="How many peer downloads run at once. Applies right away; running transfers are never interrupted."
+          label="Downloads at once"
+          description="How many downloads from friends run at the same time. Lowering it doesn't stop running downloads."
           :default-value="DEFAULTS.maxConcurrentDownloads!"
           :min="1"
         />
@@ -203,8 +250,8 @@ const importOpen = ref(false)
 
         <UFormField
           name="unlinkImportedFiles"
-          label="Unlink imported files"
-          description="Once Radarr/Sonarr confirms it imported a download, remove jack's copy from the completed folder. If your *arr hardlinks, the library keeps the file and only jack's extra link goes away; if it copies, the copy is untouched. Only ever runs on a confirmed import — never on a queued or failed one."
+          label="Remove jack's copy after Radarr/Sonarr import it"
+          description="Saves disk space. Runs only after a confirmed import; the file in your library stays."
         >
           <USwitch v-model="state.unlinkImportedFiles" :disabled="saving" />
         </UFormField>
@@ -218,7 +265,7 @@ const importOpen = ref(false)
           variant="subtle"
           block
           :ui="{ label: 'flex-1 text-left' }"
-          label="Transfer retries"
+          label="Download retries"
           :icon="transferOpen ? 'i-ph-caret-down' : 'i-ph-caret-right'"
         >
           <template #trailing>
@@ -229,7 +276,7 @@ const importOpen = ref(false)
         <template #content>
           <UCard variant="subtle" class="mt-2" :ui="{ body: 'space-y-4' }">
             <p class="text-xs text-muted">
-              How a stalled or failing transfer from a peer is retried.
+              How a stalled or failing download from a friend is retried.
             </p>
             <ConfigNumberField
               v-model="state.maxDownloadAttempts"
@@ -245,7 +292,7 @@ const importOpen = ref(false)
               :disabled="saving"
               name="retryWindowMs"
               label="Retry window"
-              description="After a network or peer error, keep retrying until this long has passed since the download last received data, even when the attempts above are used up. Waiting downloads don't take a transfer slot. 0 turns it off."
+              description="After a network error or an error from the friend's jack, keep retrying until this long has passed since the download last received data, even when the attempts above are used up. Waiting downloads don't take a download slot. 0 turns it off."
               :default-value="DEFAULTS.retryWindowMs!"
               unit="ms"
             />
@@ -254,7 +301,7 @@ const importOpen = ref(false)
               :disabled="saving"
               name="idleTimeoutMs"
               label="Stall timeout"
-              description="How long a transfer may receive no data before jack treats it as stalled and retries."
+              description="How long a download may receive no data before jack treats it as stalled and retries."
               :default-value="DEFAULTS.idleTimeoutMs!"
               unit="ms"
               :min="1000"
@@ -287,7 +334,7 @@ const importOpen = ref(false)
           variant="subtle"
           block
           :ui="{ label: 'flex-1 text-left' }"
-          label="Handing files to *arr"
+          label="Handing files to Radarr/Sonarr"
           :icon="importOpen ? 'i-ph-caret-down' : 'i-ph-caret-right'"
         >
           <template #trailing>
@@ -298,15 +345,15 @@ const importOpen = ref(false)
         <template #content>
           <UCard variant="subtle" class="mt-2" :ui="{ body: 'space-y-4' }">
             <p class="text-xs text-muted">
-              jack watches each destination *arr to find out when a finished download was imported, and
-              pushes an import itself for grabs your *arr won't pick up on its own.
+              jack checks each Radarr/Sonarr that receives downloads to see when a finished download
+              was imported, and starts the import itself when Radarr/Sonarr won't pick it up on its own.
             </p>
             <ConfigNumberField
               v-model="state.importPollIntervalMs"
               :disabled="saving"
               name="importPollIntervalMs"
               label="Import check interval"
-              description="How often jack reads each *arr's import history."
+              description="How often jack reads the import history of each Radarr/Sonarr."
               :default-value="DEFAULTS.importPollIntervalMs!"
               unit="ms"
               :min="1000"
@@ -316,7 +363,7 @@ const importOpen = ref(false)
               :disabled="saving"
               name="maxManualImportAttempts"
               label="Import attempts before giving up"
-              description="How many times jack pushes an import that *arr keeps rejecting before marking the download failed."
+              description="How many times jack starts an import that Radarr/Sonarr keeps rejecting before it marks the download failed."
               :default-value="DEFAULTS.maxManualImportAttempts!"
               :min="1"
             />
@@ -349,10 +396,8 @@ const importOpen = ref(false)
         color="success"
         variant="soft"
         icon="i-ph-check-circle"
-        title="Saved."
-        :description="justAdded
-          ? 'Restart the server to start downloading from peers with these settings.'
-          : 'Unlinking and simultaneous transfers apply right away. The other settings are read at startup, so restart the server for them to take effect.'"
+        :title="restartNeeded ? RESTART_TITLE : 'Saved.'"
+        :description="restartNeeded ? RESTART_NOTE : 'Applied right away.'"
       />
 
       <div class="flex flex-wrap items-center justify-end gap-2 pt-1">

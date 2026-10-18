@@ -12,14 +12,23 @@ const formRevision = ref(0)
 const formInitial = computed(() => editTarget.value ?? importedInput.value)
 const submitting = ref(false)
 const formError = ref<string | null>(null)
+// Whether the last failure was one a forced save can get past (see submit).
+const formOfferForce = ref(false)
+const showImport = ref(false)
 watch(showForm, (isOpen) => {
   if (!isOpen) {
     importedInput.value = null
-    formError.value = null
+    clearFormError()
   }
 })
 
 const confirmTarget = ref<PeerItem | null>(null)
+// Kept after the dialog closes so the title doesn't change while it animates out.
+const confirmName = ref('')
+watch(confirmTarget, (peer) => {
+  if (peer)
+    confirmName.value = peer.name
+})
 const deleting = ref(false)
 const deleteError = ref<string | null>(null)
 const confirmOpen = computed({
@@ -57,24 +66,29 @@ function closeConfirm() {
   deleteError.value = null
 }
 
+function clearFormError() {
+  formError.value = null
+  formOfferForce.value = false
+}
+
 function openAdd() {
   editTarget.value = null
   importedInput.value = null
-  formError.value = null
+  clearFormError()
   formRevision.value++
   showForm.value = true
 }
 function openEdit(peer: PeerItem) {
   editTarget.value = peer
   importedInput.value = null
-  formError.value = null
+  clearFormError()
   formRevision.value++
   showForm.value = true
 }
 function reviewImported(peer: PeerInput) {
   editTarget.value = null
   importedInput.value = peer
-  formError.value = null
+  clearFormError()
   formRevision.value++
   showForm.value = true
 }
@@ -83,12 +97,22 @@ function closeForm() {
   showForm.value = false
   importedInput.value = null
 }
+// The blank form points to quick links; swap it for the paste dialog.
+function switchToQuickLink() {
+  closeForm()
+  showImport.value = true
+}
+
+function errorStatus(err: unknown): number | undefined {
+  const e = err as { response?: { status?: number }, statusCode?: number }
+  return e?.response?.status ?? e?.statusCode
+}
 
 async function submit(input: PeerInput, force = false) {
   submitting.value = true
-  formError.value = null
-  // force (shift-click): persist the peer even if its handshake fails — the
-  // backend keeps it resident and retries lazily instead of rejecting the add.
+  clearFormError()
+  // force: persist the peer even if its handshake fails — the backend keeps it
+  // resident and retries lazily instead of rejecting the add.
   const query = force ? { force: 'true' } : undefined
   try {
     if (editTarget.value)
@@ -99,7 +123,13 @@ async function submit(input: PeerInput, force = false) {
     await reload()
   }
   catch (err) {
-    formError.value = extractError(err, 'Could not save the peer.')
+    formError.value = extractError(err, 'Could not save this friend.')
+    // A failed handshake is a 502, and the BFF answers 5xx when jack itself
+    // didn't respond. 4xx means the request itself is wrong (bad field, a
+    // duplicate name or address, a peer that no longer exists), which forcing
+    // can't fix.
+    const status = errorStatus(err)
+    formOfferForce.value = !force && (status === undefined || status >= 500)
   }
   finally {
     submitting.value = false
@@ -117,7 +147,7 @@ async function confirmDelete() {
     await reload()
   }
   catch (err) {
-    deleteError.value = extractError(err, 'Could not remove the peer.')
+    deleteError.value = extractError(err, 'Could not remove this friend.')
   }
   finally {
     deleting.value = false
@@ -126,12 +156,12 @@ async function confirmDelete() {
 </script>
 
 <template>
-  <SettingsSection title="Peers" description="Other jacks this instance federates with.">
+  <SettingsSection id="peers" title="Friends you download from" description="Friends whose libraries you can download from.">
     <template #aside>
-      <UButton label="Add peer" icon="i-ph-plus" @click="openAdd" />
+      <UButton label="Add a friend" icon="i-ph-plus" @click="openAdd" />
     </template>
 
-    <UAlert v-if="error && !settings" color="error" variant="soft" icon="i-ph-warning" title="Failed to load peers." />
+    <UAlert v-if="error && !settings" color="error" variant="soft" icon="i-ph-warning" title="Failed to load your friends." />
 
     <p v-else-if="pending && !settings" class="flex items-center gap-2 text-sm text-muted">
       <UIcon name="i-ph-circle-notch" class="size-4 animate-spin" />
@@ -142,9 +172,9 @@ async function confirmDelete() {
       <div class="flex flex-col items-center gap-3 py-6 text-center">
         <UIcon name="i-ph-users-three" class="size-8 text-dimmed" />
         <p class="text-sm text-muted">
-          No peers yet. Add a friend's jack to start pulling from their library.
+          No friends yet. Add a friend to download from their library.
         </p>
-        <UButton label="Add peer" icon="i-ph-plus" @click="openAdd" />
+        <UButton label="Add a friend" icon="i-ph-plus" @click="openAdd" />
       </div>
     </UCard>
 
@@ -176,30 +206,36 @@ async function confirmDelete() {
     </div>
   </SettingsSection>
 
-  <UModal v-model:open="showForm" :title="editTarget ? 'Edit peer' : 'Add peer'">
+  <UModal v-model:open="showForm" :title="editTarget ? `Edit ${editTarget.name}` : 'Add a friend'">
     <template #body>
       <PeerForm
         :key="formRevision"
         :initial="formInitial"
         :submitting="submitting"
         :error="formError"
+        :offer-force="formOfferForce"
         @submit="submit"
         @cancel="closeForm"
+        @dismiss-error="clearFormError"
+        @quick-link="switchToQuickLink"
       />
     </template>
   </UModal>
 
-  <UModal v-model:open="confirmOpen" title="Remove peer" :ui="{ footer: 'justify-end' }">
+  <QuickLinkImportModal v-model:open="showImport" @imported="reviewImported" />
+
+  <UModal v-model:open="confirmOpen" :title="`Stop downloading from ${confirmName}?`" :ui="{ footer: 'justify-end' }">
     <template #body>
       <p class="text-sm text-default">
-        Remove <strong>{{ confirmTarget?.name }}</strong>? In-flight downloads finish; new
-        searches stop hitting it immediately.
+        Searches stop using their library right away; downloads in progress finish.
+        <strong>{{ confirmName }}</strong> can still download from you until you revoke their key under
+        <UButton :to="settingsLink('access-keys')" variant="link" label="Friend access keys" class="p-0 align-baseline" @click="closeConfirm" />.
       </p>
       <UAlert v-if="deleteError" class="mt-3" color="error" variant="soft" icon="i-ph-warning" :title="deleteError" />
     </template>
     <template #footer="{ close }">
       <UButton label="Cancel" color="neutral" variant="ghost" @click="close" />
-      <UButton label="Remove" color="error" :loading="deleting" @click="confirmDelete" />
+      <UButton label="Stop downloading" color="error" :loading="deleting" @click="confirmDelete" />
     </template>
   </UModal>
 </template>

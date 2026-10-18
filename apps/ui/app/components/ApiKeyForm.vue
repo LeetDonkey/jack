@@ -76,9 +76,9 @@ function onSubmit() {
       name="name"
       label="Name"
       hint="Optional"
-      description="Name it so you can recognize it later — the key itself is only shown once."
+      description="The friend's name, so you can recognize the key later. The key itself is shown only once."
     >
-      <UInput v-model="state.name" :maxlength="100" placeholder="Radarr on the NAS" class="w-full" />
+      <UInput v-model="state.name" :maxlength="100" placeholder="e.g. Alice" class="w-full" />
     </UFormField>
 
     <UFormField name="description" label="Description" hint="Optional">
@@ -97,7 +97,7 @@ function onSubmit() {
 
     <div class="flex justify-end gap-2 pt-2">
       <UButton label="Cancel" color="neutral" variant="ghost" @click="emit('cancel')" />
-      <UButton type="submit" :loading="submitting" :label="submitting ? 'Saving…' : editing ? 'Save' : 'Create key'" />
+      <UButton type="submit" :loading="submitting" :label="submitting ? 'Saving…' : editing ? 'Save changes' : 'Create key'" />
     </div>
   </UForm>
 </template>

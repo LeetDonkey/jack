@@ -57,12 +57,22 @@ function onConfirm() {
         Loading options…
       </p>
 
-      <p v-else-if="candidates.length === 0" class="text-sm text-muted">
-        No {{ title?.mediaType === 'tv' ? 'Sonarr' : 'Radarr' }} destination is configured for this type. Add one in Settings.
-      </p>
+      <div v-else-if="candidates.length === 0" class="space-y-3">
+        <p class="text-sm text-muted">
+          No {{ title?.mediaType === 'tv' ? 'Sonarr' : 'Radarr' }} has Download from friends turned on.
+        </p>
+        <UButton
+          label="Edit Radarr & Sonarr"
+          :to="settingsLink('servers')"
+          size="sm"
+          color="neutral"
+          variant="outline"
+          @click="open = false"
+        />
+      </div>
 
       <div v-else class="space-y-4">
-        <UFormField v-if="peers.length > 1 && !lockedPeerId" label="Peer">
+        <UFormField v-if="peers.length > 1 && !lockedPeerId" label="Friend">
           <USelect
             v-model="peerId"
             :items="peers.map(p => ({ label: p.name, value: p.id }))"
