@@ -145,6 +145,11 @@ const app = getApp(envs, config, connectorManager, {
   introductions,
   bans,
   trustedProxies: () => securityConfig().trustedProxies,
+  arrAccess: () => {
+    const security = securityConfig()
+    return { lanOnly: security.lanOnlyArrApis, alsoAllowed: security.arrApiAlsoAllowed, trustedProxies: security.trustedProxies }
+  },
+  publicOpenApi: () => securityConfig().publicOpenApi,
   internalUrl: currentInternalUrl,
   onArrContact: id => registrations.recordContact(id),
 })

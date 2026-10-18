@@ -35,7 +35,7 @@ export function getConfigRouter(controller: ConfigController) {
   app.get('/torznab', configDoc('Get the torznab block', 'What the Torznab RSS feed offers: releases peers added within rssMaxAgeDays, newest first, at most rssMaxItems. Defaults apply when the block is absent.'), c => c.json(controller.getTorznab()))
   app.get('/notifications', configDoc('Get the notifications block', 'Webhooks and which events to send, as stored: webhook URLs keep their {env}/{file} references.'), c => c.json(controller.getNotifications()))
   app.get('/discovery', configDoc('Get the discovery block', 'Public name and whether friends of friends may find you and whether you introduce your friends to each other, with defaults applied.'), c => c.json(controller.getDiscovery()))
-  app.get('/security', configDoc('Get the security block', 'Ban settings for addresses that keep failing authentication on the public port, with defaults applied.'), c => c.json(controller.getSecurity()))
+  app.get('/security', configDoc('Get the security block', 'How the public port protects itself, with defaults applied: temporary bans (banEnabled, maxFailures, windowMinutes, banMinutes, trustedProxies, neverBan), the Torznab and qBittorrent APIs only for the LAN (lanOnlyArrApis, arrApiAlsoAllowed), and whether /openapi.json is served (publicOpenApi).'), c => c.json(controller.getSecurity()))
   app.get('/stream', describeRoute({
     tags: ['Config'],
     summary: 'Stream connector config',

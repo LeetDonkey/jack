@@ -145,6 +145,50 @@ describe('introductions between friends of friends', () => {
     expect((await fresh.service.overview()).people.map(p => p.name)).toEqual(['Carol'])
   })
 
+  test('mail through a friend who stops introducing waits instead of getting lost', async () => {
+    const alice = makeJack('Alice', { publicName: 'Alice' }, 'https://alice.example')
+    const bob = makeJack('Bob', { publicName: 'Bob' }, 'https://bob.example')
+    const carol = makeJack('Carol', { publicName: 'Carol', discoverable: true }, 'https://carol.example')
+    connect(alice, bob, 1)
+    connect(bob, carol, 2)
+    const [person] = (await alice.service.overview()).people
+    await alice.service.request(person!.id, 'conn-Bob', 'Hej')
+
+    // Bob stops introducing before Alice's request reaches him: he refuses it, and Alice keeps it.
+    bob.discovery.introduce = false
+    await syncAll(alice, bob)
+    expect((await carol.service.overview()).threads).toEqual([])
+    expect(alice.store.mailFor(bob.service.profile().id, alice.service.profile().id)).toHaveLength(1)
+
+    // Once Bob introduces again, the same request goes through.
+    bob.discovery.introduce = true
+    await syncAll(alice, bob)
+    expect((await carol.service.overview()).threads).toMatchObject([{ direction: 'incoming', state: 'pending', messages: [{ text: 'Hej' }] }])
+    expect(alice.store.mailFor(bob.service.profile().id, alice.service.profile().id)).toEqual([])
+  })
+
+  test('mail waiting for a friend who connects to us is held while it does not introduce', async () => {
+    const alice = makeJack('Alice', { publicName: 'Alice' }, 'https://alice.example')
+    const bob = makeJack('Bob', { publicName: 'Bob' }, 'https://bob.example')
+    const carol = makeJack('Carol', { publicName: 'Carol', discoverable: true }, 'https://carol.example')
+    connect(alice, bob, 1)
+    connect(bob, carol, 2)
+    const [person] = (await alice.service.overview()).people
+    const { requestId } = await alice.service.request(person!.id, 'conn-Bob')
+    await syncAll(alice, bob)
+    await carol.service.accept(requestId)
+
+    // Carol's answer and card go to Alice through Bob, who collects them from Carol.
+    // While Bob doesn't introduce, Carol keeps them.
+    bob.discovery.introduce = false
+    await syncAll(bob)
+    expect(carol.store.mailFor(bob.service.profile().id, carol.service.profile().id)).toHaveLength(2)
+    bob.discovery.introduce = true
+    await syncAll(bob, alice)
+    expect(carol.store.mailFor(bob.service.profile().id, carol.service.profile().id)).toEqual([])
+    expect(alice.added).toEqual([{ name: 'Carol', url: 'https://carol.example', apiKey: 'Carol-key-1' }])
+  })
+
   test('declining tells the requester, and nothing is exchanged', async () => {
     const alice = makeJack('Alice', { publicName: 'Alice' }, 'https://alice.example')
     const bob = makeJack('Bob', { publicName: 'Bob' }, null)

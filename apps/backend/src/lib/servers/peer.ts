@@ -259,7 +259,7 @@ export class PeerConnector extends ServerConnector {
 
   /** Hand over introduction mail for (or through) this peer, and receive what waits for us. */
   @requiresInitialization
-  async introMail(body: IntroMailRequest): Promise<{ messages: unknown[] }> {
+  async introMail(body: IntroMailRequest): Promise<{ messages: unknown[], refused?: string[] }> {
     return this.fetch('/peer/intro/mail', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

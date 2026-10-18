@@ -23,9 +23,8 @@ operate jack day to day:
 - ***Logs***: live-tail the backend's logs.
 - ***Settings***: one page, with these sections in this order:
   - ***jack***: ***Address Radarr/Sonarr use to reach jack***
-    ([`jack.internalUrl`](/reference/configuration#jack-internalurl)), and the
-    optional [TMDB API key](/reference/configuration#jack-tmdbapikey) under
-    ***Extras***. Both apply after you restart the jack container.
+    ([`jack.internalUrl`](/reference/configuration#jack-internalurl)). It
+    applies right away.
   - ***Downloads***: the whole
     [`downloads`](/reference/configuration#downloads) block, covering where
     finished files land, how many downloads run at once, whether jack drops its

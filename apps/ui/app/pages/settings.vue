@@ -16,15 +16,13 @@ const keys = computed(() => data.value ?? [])
 const { data: jack, pending: jackPending, error: jackLoadError, refresh: refreshJack }
   = await useAsyncData('jack-config', () => request<JackConfig | null>('config/jack'))
 
-// Whether the running TMDB key authenticates — surfaced beside the key field so a
-// saved key can be confirmed at a glance.
+// TMDB is only used when a key is set in config.jsonc; About credits it then.
 const { data: tmdbStatus } = await useAsyncData('tmdb-status', () =>
   request<{ configured: boolean, ok: boolean }>('catalog/tmdb/status'))
 
 const jackSubmitting = ref(false)
 const jackError = ref<string | null>(null)
 const jackSaved = ref(false)
-const jackRestartNeeded = ref(false)
 const jackFormRevision = ref(0)
 const showQuickLink = ref(false)
 const showQuickLinkImport = ref(false)
@@ -41,13 +39,9 @@ async function saveJack(input: JackConfig) {
   jackError.value = null
   jackSaved.value = false
   try {
-    // The address applies right away; the keys are read when jack starts.
-    const keyChanged = (['apiKey', 'tmdbApiKey'] as const).some(k =>
-      k in input && JSON.stringify(input[k] ?? null) !== JSON.stringify(jack.value?.[k] ?? null))
     await request('config/jack', { method: 'PATCH', body: input })
     await refreshJack()
     jackFormRevision.value++
-    jackRestartNeeded.value = keyChanged
     jackSaved.value = true
   }
   catch (err) {
@@ -287,11 +281,11 @@ async function confirmRevoke() {
 
     <template #body>
       <div ref="content" class="space-y-10">
-        <!-- jack: how Radarr/Sonarr reach it, plus extras -->
+        <!-- jack: how Radarr/Sonarr reach it -->
         <SettingsSection
           id="internal-url"
           title="jack"
-          description="How Radarr and Sonarr reach jack, plus optional extras."
+          description="How Radarr and Sonarr reach jack."
         >
           <UAlert v-if="jackLoadError" color="error" variant="soft" icon="i-ph-warning" title="Failed to load the jack settings." />
 
@@ -301,14 +295,12 @@ async function confirmRevoke() {
           </p>
 
           <UCard v-else variant="subtle" :ui="{ body: 'space-y-4' }">
-            <!-- Re-key after a successful refresh so the form and nested secret
-                 editors seed their local state from the latest refs-intact config. -->
+            <!-- Re-key after a successful refresh so the form seeds its state from the saved config. -->
             <JackConfigForm
               :key="jackFormRevision"
               :initial="jack"
               :submitting="jackSubmitting"
               :error="jackError"
-              :tmdb-status="tmdbStatus"
               @submit="saveJack"
             />
             <UAlert
@@ -316,8 +308,7 @@ async function confirmRevoke() {
               color="success"
               variant="soft"
               icon="i-ph-check-circle"
-              :title="jackRestartNeeded ? 'Saved. Restart the jack container to apply the key.' : 'Saved. jack updates Radarr/Sonarr with the new address.'"
-              :description="jackRestartNeeded ? 'Unraid: Docker tab -> jack -> Restart. jack-ui doesn\'t need a restart.' : undefined"
+              title="Saved. jack updates Radarr/Sonarr with the new address."
             />
           </UCard>
         </SettingsSection>
@@ -451,11 +442,10 @@ async function confirmRevoke() {
               </div>
             </div>
 
-            <USeparator />
-
-            <!-- TMDB attribution — deliberately quieter than the jack mark above:
-                 a smaller logo and muted notice keep it subordinate, per TMDB's terms. -->
-            <div class="flex items-start gap-3">
+            <!-- TMDB attribution, only while jack uses a TMDB key. Deliberately quieter
+                 than the jack mark above, per TMDB's terms. -->
+            <USeparator v-if="tmdbStatus?.configured" />
+            <div v-if="tmdbStatus?.configured" class="flex items-start gap-3">
               <img src="/tmdb.svg" alt="The Movie Database (TMDB)" class="mt-0.5 h-4 w-auto shrink-0">
               <p class="text-xs leading-relaxed text-muted">
                 This product uses the TMDB API but is not endorsed or certified by TMDB.

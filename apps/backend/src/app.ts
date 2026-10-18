@@ -8,6 +8,7 @@ import type { IntroductionsService } from './modules/introductions/introductions
 import type { ManagedKeysRepository } from './modules/managed-keys/managed-keys.repository'
 import type { PieceHasher } from './modules/peer/piece-hasher'
 import type { BanList } from './modules/security/ban-list'
+import type { ArrAccess } from './modules/security/lan-guard'
 import type { TransfersService } from './modules/transfers/transfers.service'
 import { httpInstrumentationMiddleware } from '@hono/otel'
 import { Hono } from 'hono'
@@ -26,6 +27,7 @@ import { getPeerRouter } from './modules/peer/peer.router'
 import { QbittorrentController } from './modules/qbittorrent/qbittorrent.controller'
 import { getQbittorrentRouter } from './modules/qbittorrent/qbittorrent.router'
 import { banGuard } from './modules/security/ban-guard'
+import { lanGuard } from './modules/security/lan-guard'
 import { getDownloadRouter } from './modules/torznab/download.router'
 import { TorznabController } from './modules/torznab/torznab.controller'
 import { getTorznabRouter } from './modules/torznab/torznab.router'
@@ -48,6 +50,10 @@ interface AppServices {
   /** Temporary bans for addresses that keep failing authentication (fail2ban). */
   bans?: BanList
   trustedProxies?: () => readonly string[] | null | undefined
+  /** Who may use /torznab and /api/v2, read per request. Unset: everyone (tests). */
+  arrAccess?: () => ArrAccess
+  /** Whether /openapi.json answers on the public port, read per request. Unset: yes. */
+  publicOpenApi?: () => boolean
   /** jack.internalUrl as stored now; defaults to the boot config. */
   internalUrl?: () => string
   /** Called with the destination id whenever its Radarr/Sonarr authenticates (Torznab or qBittorrent). */
@@ -108,6 +114,8 @@ export function getApp(envs: Envs, config: AppConfig, connManager: { servers: Co
       managedKeysRepository: services.managedKeysRepository,
       onContact: services.onArrContact,
     })
+    if (services.arrAccess)
+      app.use('/api/v2/*', lanGuard(services.arrAccess))
     app.route('/api/v2', getQbittorrentRouter(qbController))
   }
 
@@ -146,14 +154,21 @@ export function getApp(envs: Envs, config: AppConfig, connManager: { servers: Co
     services.torznabConfig,
     id => connManager.servers.find(s => s.id === id && s.canDestination),
   )
+  if (services.arrAccess)
+    app.use('/torznab/*', lanGuard(services.arrAccess))
   app.use('/torznab/*', arrAuth)
   app.route('/torznab', getTorznabRouter(torznabController))
   app.route('/torznab', getDownloadRouter(() => connManager.peers))
 
   // Live OpenAPI spec for this app. Unauthenticated like /ping: it exposes
   // route shapes only (the same ones documented on the public website), never
-  // config values or keys.
-  app.get('/openapi.json', openAPIRouteHandler(app, { documentation: peerDocumentation }))
+  // config values or keys. Off unless security.publicOpenApi is on.
+  const openApi = openAPIRouteHandler(app, { documentation: peerDocumentation })
+  app.get('/openapi.json', async (c, next) => {
+    if (!(services.publicOpenApi?.() ?? true))
+      return c.json({ error: 'Not found' }, 404)
+    await next()
+  }, openApi)
 
   // Peer-facing app: error responses are opaque (see handle-error.ts).
   app.onError(handleError(envs.ENVIRONMENT))

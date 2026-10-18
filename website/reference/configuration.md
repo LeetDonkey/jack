@@ -41,7 +41,7 @@ it alone.)
 | [`bandwidth`](#bandwidth) | Speed limits, upload slots and per-friend limits |
 | [`notifications`](#notifications) | Webhooks for failures, offline friends and a daily summary |
 | [`discovery`](#discovery) | Meeting friends of friends |
-| [`security`](#security) | Temporary bans for repeated failed authentication |
+| [`security`](#security) | Bans, LAN-only Radarr/Sonarr APIs and the public API description |
 | [`servers[].name`](#servers-name) | Display name |
 | [`servers[].type`](#servers-type) | Radarr or Sonarr |
 | [`servers[].url`](#servers-url) | *arr base URL |
@@ -80,8 +80,10 @@ indexer and download client in every auto-register server.
 
 **Type:** [`ConfigSecret`](#configsecret)
 
-TMDB v3 API key, used by the management UI's catalog to enrich peer libraries
-with artwork and metadata.
+TMDB v3 API key, used by the management UI's catalog to fill in artwork and
+metadata for titles a peer sends without them (a jack from before this fork
+sent titles, posters and quality from its Radarr/Sonarr). Set it in the config
+file; the management UI doesn't edit it. Applies after a restart.
 
 ### `jack.external`
 
@@ -343,8 +345,9 @@ to meet and requests are on the ***Friends*** page.
   [`jack.external.instanceName`](#jack-external-instancename).
 - **`discoverable`** (default `false`): let friends of friends see that name and
   ask to connect.
-- **`introduce`** (default `true`): list the friends who chose to be found to
-  your other friends, and carry their requests and messages.
+- **`introduce`** (default `false`): list the friends who chose to be found to
+  your other friends, and carry their requests and messages. Friends of friends
+  only find each other through a friend who has this on.
 
 Each jack has a random identity id and an X25519 key pair. A friend that
 introduces lists only the id, public name and public key of each friend who is
@@ -366,11 +369,12 @@ jack rules that out.
 
 ## `security`
 
-Temporary bans on the public port, like fail2ban. Optional; edited in
-***Settings -> Security***, where the banned addresses are listed with a
-button to lift each ban. Applies right away.
+How the public port protects itself. Every protection is on by default.
+Optional; edited in ***Settings -> Security***, where the banned addresses are
+listed with a button to lift each ban. Applies right away.
 
-- **`banEnabled`** (default `false`): turn bans on.
+- **`banEnabled`** (default `true`): temporary bans for addresses that keep
+  failing authentication, like fail2ban.
 - **`maxFailures`** (default `10`), **`windowMinutes`** (default `10`): an
   address refused that many times within the window is banned. A refusal is a
   401 or 403 answer (a wrong, missing or expired key, no qBittorrent session) or
@@ -380,11 +384,31 @@ button to lift each ban. Applies right away.
   stored, so a restart doesn't lift them.
 - **`trustedProxies`** (default: private network ranges): addresses or CIDR
   ranges of the reverse proxy in front of jack. Only a request from one of these
-  may name the real client, in `X-Real-IP` or `X-Forwarded-For`; any other
-  request is judged by its own address, so a client can't dodge a ban or get
-  someone else banned by sending those headers.
+  may name the real client, in `X-Forwarded-For` (its rightmost entry that
+  isn't a trusted proxy) or else `X-Real-IP`; any other request is judged by
+  its own address, so a client can't dodge a ban or get someone else banned by
+  sending those headers.
 - **`neverBan`** (default: private network ranges and loopback): addresses that
   are never counted, so your Radarr/Sonarr on the LAN can't lock themselves out.
+- **`lanOnlyArrApis`** (default `true`): answer the Torznab (`/torznab`) and
+  qBittorrent (`/api/v2`) APIs, which only your own Radarr/Sonarr use, only to
+  private network ranges, loopback and `arrApiAlsoAllowed`. Any other address
+  gets 403 `Not available from this address` before its key is checked; these
+  refusals don't count towards a ban, and jack logs the first one per address.
+  - Behind a reverse proxy, the client address is the rightmost
+    `X-Forwarded-For` entry that isn't a trusted proxy, else `X-Real-IP`. When
+    the proxy sends both, both must be allowed, so a client can't get in by
+    forging either.
+  - A request that carries forwarding headers from an address outside
+    `trustedProxies` is refused: `trustedProxies` must include the address
+    your proxy connects from.
+  - A proxy that sends neither header makes every request look like it comes
+    from the proxy's own LAN address. Nginx Proxy Manager sends both.
+- **`arrApiAlsoAllowed`** (default: none): addresses or CIDR ranges allowed on
+  top of the LAN, for a Radarr/Sonarr that reaches jack from elsewhere, e.g.
+  over Tailscale (`100.64.0.0/10`) or from a VPS.
+- **`publicOpenApi`** (default `false`): answer `/openapi.json` on the public
+  port. The same description is in this documentation.
 
 [`notifications.ipBanned`](#notifications) (default `true`) sends a
 notification when an address is banned.
@@ -477,7 +501,7 @@ into it.
 ### `servers[].autoregister`
 
 **Type:** `object`\
-**Content:** `enable`: `boolean`, default `true` · `priority`: `integer` 1-50, default `1`
+**Content:** `enable`: `boolean`, default `true` · `priority`: `integer` 1-50, default `50`
 
 Controls the indexer/download-client registration jack performs in destination
 servers. jack registers itself:
@@ -494,7 +518,8 @@ indexer, the same check as their ***Test*** buttons, and reports the result as
 
 - **`enable`**: set `false` to register jack in that *arr yourself.
 - **`priority`**: indexer priority in *arr, from 1 (preferred) to 50. *arr uses
-  it to choose between releases that are otherwise equal. The
+  it to choose between releases that are otherwise equal. The default, 50, lets
+  your other indexers win a tie. The
   qBittorrent download client is always registered at *arr's lowest priority
   (50): *arr's general client pool only round-robins among the best-priority
   group, so torrents grabbed from your other indexers never get routed to
@@ -619,7 +644,7 @@ reports the problem and refuses to load that config.
       "destination": true,
       "autoregister": {
         "enable": true,
-        "priority": 1
+        "priority": 50
       }
     },
     {

@@ -213,8 +213,8 @@ In Nginx Proxy Manager, add a ***Proxy Host***:
 
 Your friends only need `/ping`, `/handshake` and `/peer/`. The Torznab
 (`/torznab`) and qBittorrent (`/api/v2`) paths are for your own Radarr/Sonarr on
-the LAN; you can block them in the proxy host with ***Custom locations*** that
-return 403.
+the LAN, and jack refuses them to every other address, also through the proxy
+(***Settings -> Security -> Radarr/Sonarr APIs only on your LAN***).
 
 Then, in jack-ui, ***Settings -> Quick linking***: set ***Instance name*** (the
 name friends see for you) and ***External URL*** (`https://jack.example.com`),
@@ -245,7 +245,9 @@ From then on, your Radarr/Sonarr find your friends' releases through the Jack
 indexer, and grabs download through jack.
 
 If you and another jack user share a friend, you don't even need to exchange
-links: see ***Settings -> Friends of friends***.
+links: see ***Settings -> Friends of friends***. It is off until you turn it
+on: you choose ***Let friends of friends find me***, and the friend you have in
+common turns on ***Introduce my friends to each other***.
 
 ## 8. Worth a look
 
@@ -253,8 +255,10 @@ links: see ***Settings -> Friends of friends***.
   (e.g. less upload in the evening), and limits per friend.
 - ***Settings -> Notifications***: Discord, ntfy or a Home Assistant webhook
   when a download fails, a friend goes offline, and a daily summary.
-- ***Settings -> Security***: temporarily ban addresses that keep sending wrong
-  keys.
+- ***Settings -> Security***: on by default. Addresses that keep sending wrong
+  keys are banned for an hour, the Radarr/Sonarr APIs only answer your LAN, and
+  the public port doesn't publish its API description. Banned addresses are
+  listed there, with a button to lift each ban.
 - ***Settings -> RSS feed***: how far back friends' new releases show up in
   your *arr's RSS sync.
 - ***Live traffic*** shows what's moving right now; ***Downloads*** shows

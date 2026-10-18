@@ -19,12 +19,15 @@ const DEFAULTS = { maxFailures: 10, windowMinutes: 10, banMinutes: 60 }
 
 function blankState() {
   return {
-    banEnabled: false,
+    banEnabled: true,
+    lanOnlyArrApis: true,
+    publicOpenApi: false,
     maxFailures: null as number | null,
     windowMinutes: null as number | null,
     banMinutes: null as number | null,
     trustedProxies: '',
     neverBan: '',
+    arrApiAlsoAllowed: '',
   }
 }
 
@@ -36,11 +39,14 @@ function seed(config: SecurityConfig | null | undefined) {
   Object.assign(state, blankState())
   if (config) {
     state.banEnabled = config.banEnabled
+    state.lanOnlyArrApis = config.lanOnlyArrApis
+    state.publicOpenApi = config.publicOpenApi
     state.maxFailures = orDefault(config.maxFailures, DEFAULTS.maxFailures)
     state.windowMinutes = orDefault(config.windowMinutes, DEFAULTS.windowMinutes)
     state.banMinutes = orDefault(config.banMinutes, DEFAULTS.banMinutes)
     state.trustedProxies = (config.trustedProxies ?? []).join(', ')
     state.neverBan = (config.neverBan ?? []).join(', ')
+    state.arrApiAlsoAllowed = (config.arrApiAlsoAllowed ?? []).join(', ')
   }
   baseline.value = JSON.stringify(state)
 }
@@ -68,7 +74,10 @@ async function save() {
   saveError.value = null
   saved.value = false
   const patch: SecurityConfigPatch = {
-    banEnabled: state.banEnabled ? true : null,
+    banEnabled: state.banEnabled,
+    lanOnlyArrApis: state.lanOnlyArrApis,
+    publicOpenApi: state.publicOpenApi,
+    arrApiAlsoAllowed: list(state.arrApiAlsoAllowed),
     maxFailures: state.maxFailures,
     windowMinutes: state.windowMinutes,
     banMinutes: state.banMinutes,
@@ -111,7 +120,7 @@ async function unban(ip: string) {
   <SettingsSection
     id="security"
     title="Security"
-    description="Temporarily ban addresses that keep failing to authenticate on the public port, like fail2ban."
+    description="How jack's public port protects itself. Everything here is on by default."
   >
     <UAlert v-if="loadError" color="error" variant="soft" icon="i-ph-warning" title="Failed to load the security settings." />
 
@@ -130,7 +139,7 @@ async function unban(ip: string) {
           <USwitch v-model="state.banEnabled" :disabled="saving" />
         </UFormField>
 
-        <div class="grid gap-4 sm:grid-cols-3">
+        <div v-if="state.banEnabled" class="grid gap-4 sm:grid-cols-3">
           <ConfigNumberField v-model="state.maxFailures" :disabled="saving" name="maxFailures" label="Failures" description="Refusals that trigger a ban." :default-value="DEFAULTS.maxFailures" :min="1" />
           <ConfigNumberField v-model="state.windowMinutes" :disabled="saving" name="windowMinutes" label="Within (minutes)" description="Window the failures are counted in." :default-value="DEFAULTS.windowMinutes" :min="1" />
           <ConfigNumberField v-model="state.banMinutes" :disabled="saving" name="banMinutes" label="Ban for (minutes)" description="How long the address is refused." :default-value="DEFAULTS.banMinutes" :min="1" />
@@ -139,12 +148,37 @@ async function unban(ip: string) {
         <UFormField
           name="trustedProxies"
           label="Trusted proxies"
-          description="Addresses or CIDR ranges of the reverse proxy in front of jack (e.g. Nginx Proxy Manager). Only requests from these may name the real client in X-Real-IP / X-Forwarded-For. Empty means private network ranges."
+          description="Addresses or CIDR ranges of the reverse proxy in front of jack (e.g. Nginx Proxy Manager). Only requests from these may name the real client in X-Forwarded-For / X-Real-IP. The list must include the address your proxy connects from, or jack refuses the Radarr/Sonarr APIs to everything coming through it. Empty means private network ranges."
         >
           <UInput v-model="state.trustedProxies" :disabled="saving" placeholder="Private ranges" class="w-full font-mono" />
         </UFormField>
-        <UFormField name="neverBan" label="Never ban" description="Addresses or CIDR ranges that are never counted. Empty means your LAN and loopback.">
+        <UFormField v-if="state.banEnabled" name="neverBan" label="Never ban" description="Addresses or CIDR ranges that are never counted. Empty means your LAN and loopback.">
           <UInput v-model="state.neverBan" :disabled="saving" placeholder="Private ranges" class="w-full font-mono" />
+        </UFormField>
+      </UCard>
+
+      <UCard variant="subtle" :ui="{ body: 'space-y-4' }">
+        <UFormField
+          name="lanOnlyArrApis"
+          label="Radarr/Sonarr APIs only on your LAN"
+          description="The Torznab and qBittorrent APIs (/torznab, /api/v2) are only for your own Radarr and Sonarr. With this on, jack refuses them to every address outside your LAN, also when someone reaches jack through your reverse proxy. Friends don't use them."
+        >
+          <USwitch v-model="state.lanOnlyArrApis" :disabled="saving" />
+        </UFormField>
+        <UFormField
+          v-if="state.lanOnlyArrApis"
+          name="arrApiAlsoAllowed"
+          label="Also allow"
+          description="Addresses or CIDR ranges allowed on top of your LAN, for a Radarr or Sonarr that reaches jack from elsewhere, e.g. over Tailscale (100.64.0.0/10) or from a VPS."
+        >
+          <UInput v-model="state.arrApiAlsoAllowed" :disabled="saving" placeholder="Nothing else" class="w-full font-mono" />
+        </UFormField>
+        <UFormField
+          name="publicOpenApi"
+          label="Publish the API description"
+          description="Answer /openapi.json on the public port. It lists jack's routes, no keys or settings. Off by default; the description is also in the docs."
+        >
+          <USwitch v-model="state.publicOpenApi" :disabled="saving" />
         </UFormField>
       </UCard>
 

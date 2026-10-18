@@ -16,7 +16,7 @@ export interface IntroPeer {
   url: string
   introProfile: () => Promise<IntroProfile | null>
   introDirectory: () => Promise<IntroDirectory | null>
-  introMail: (body: IntroMailRequest) => Promise<{ messages: unknown[] }>
+  introMail: (body: IntroMailRequest) => Promise<{ messages: unknown[], refused?: string[] }>
 }
 
 export interface IntroductionsDeps {
@@ -105,7 +105,7 @@ export class IntroductionsService {
 
   /** The friends a caller may ask to meet, or null when this jack doesn't introduce. */
   async directoryFor(apiKeyId: number | undefined): Promise<IntroDirectory | null> {
-    if (!(this.deps.discovery()?.introduce ?? true))
+    if (!(this.deps.discovery()?.introduce ?? false))
       return null
     const caller = apiKeyId != null ? this.deps.store.boundIdentity(apiKeyId) : null
     const me = this.identity
@@ -117,16 +117,22 @@ export class IntroductionsService {
   }
 
   /** POST /peer/intro/mail from a friend: take its mail, hand back ours. */
-  async handleMail(apiKeyId: number | undefined, body: IntroMailRequest): Promise<{ messages: IntroEnvelope[] }> {
+  async handleMail(apiKeyId: number | undefined, body: IntroMailRequest): Promise<{ messages: IntroEnvelope[], refused: string[] }> {
     if (apiKeyId == null)
       throw new BadRequestError('Introduction mail needs a peer API key')
     if (!this.deps.store.bind(apiKeyId, body.self.id, body.self.publicKey))
       throw new ConflictError('This API key belongs to a different jack identity')
-    for (const envelope of body.messages)
-      await this.process(envelope, body.self.id)
-    const outgoing = this.deps.store.mailFor(body.self.id, this.identity.id)
+    const refused: string[] = []
+    for (const envelope of body.messages) {
+      if (!await this.process(envelope, body.self.id))
+        refused.push(envelope.id)
+    }
+    // Mail we asked the caller to carry waits while it doesn't introduce: it would
+    // refuse the mail, and we'd delete it as delivered.
+    const mail = this.deps.store.mailFor(body.self.id, this.identity.id)
+    const outgoing = body.introduces === false ? mail.filter(e => e.to === body.self.id) : mail
     this.deps.store.delivered(outgoing.map(e => e.id))
-    return { messages: outgoing }
+    return { messages: outgoing, refused }
   }
 
   // ── Syncing with our own peers ─────────────────────────────────────────────
@@ -147,8 +153,10 @@ export class IntroductionsService {
         continue
       const outgoing = this.deps.store.mailFor(profile.id, me.id)
       try {
-        const { messages } = await peer.introMail({ self: { id: me.id, publicKey: me.publicKey }, messages: outgoing })
-        this.deps.store.delivered(outgoing.map(e => e.id))
+        const { messages, refused } = await peer.introMail({ self: { id: me.id, publicKey: me.publicKey }, messages: outgoing, introduces: this.deps.discovery()?.introduce ?? false })
+        // What the peer won't carry yet stays in our outbox for the next sync.
+        const kept = new Set(refused ?? [])
+        this.deps.store.delivered(outgoing.filter(e => !kept.has(e.id)).map(e => e.id))
         for (const raw of messages) {
           const envelope = EnvelopeSchema.safeParse(raw)
           if (envelope.success)
@@ -188,26 +196,33 @@ export class IntroductionsService {
 
   // ── Mail handling ──────────────────────────────────────────────────────────
 
-  private async process(envelope: IntroEnvelope, callerId: string): Promise<void> {
+  /** Take one envelope. False when it is ours to carry but we won't now: the sender keeps it. */
+  private async process(envelope: IntroEnvelope, callerId: string): Promise<boolean> {
     const me = this.identity
-    if (!this.deps.store.firstSeen(envelope.id))
-      return
-    if (envelope.to === me.id) {
-      // Delivered by the friend in between, or by the sender itself.
-      if (envelope.via === callerId || envelope.from === callerId) {
-        try {
-          await this.receive(envelope)
-        }
-        catch (err) {
-          logger.error({ from: envelope.fromName, type: envelope.type, err }, 'Could not handle an introduction message')
-        }
-      }
-      return
+    if (envelope.to !== me.id) {
+      // Carried through us: only when the sender handed it over itself, only for
+      // our own friends, and only while we introduce. A refused envelope isn't
+      // marked seen, so it can still come through later.
+      if (envelope.via !== me.id || envelope.from !== callerId)
+        return true
+      if (!(this.deps.discovery()?.introduce ?? false) || !await this.canReach(envelope.to))
+        return false
+      if (this.deps.store.firstSeen(envelope.id))
+        this.deps.store.queue(envelope)
+      return true
     }
-    // Carried through us: only for our own friends, only when we introduce, and
-    // only when the sender handed it over itself.
-    if (envelope.via === me.id && envelope.from === callerId && (this.deps.discovery()?.introduce ?? true) && await this.canReach(envelope.to))
-      this.deps.store.queue(envelope)
+    if (!this.deps.store.firstSeen(envelope.id))
+      return true
+    // Delivered by the friend in between, or by the sender itself.
+    if (envelope.via === callerId || envelope.from === callerId) {
+      try {
+        await this.receive(envelope)
+      }
+      catch (err) {
+        logger.error({ from: envelope.fromName, type: envelope.type, err }, 'Could not handle an introduction message')
+      }
+    }
+    return true
   }
 
   private async canReach(identityId: string): Promise<boolean> {
@@ -359,7 +374,7 @@ export class IntroductionsService {
       }
     }
     return {
-      me: { id: me.id, name, discoverable: Boolean(discovery?.discoverable), introduce: discovery?.introduce ?? true, ready: missing.length === 0, missing },
+      me: { id: me.id, name, discoverable: Boolean(discovery?.discoverable), introduce: discovery?.introduce ?? false, ready: missing.length === 0, missing },
       people: [...people.values()].sort((a, b) => a.name.localeCompare(b.name)),
       threads: threads.map(t => ({ ...t, safetyCode: safetyCode(me.publicKey, t.peerKey) })),
     }

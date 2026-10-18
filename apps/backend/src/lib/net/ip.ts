@@ -65,23 +65,35 @@ export function inRanges(rawIp: string, ranges: readonly string[]): boolean {
   })
 }
 
+/** Headers a reverse proxy adds to name the client. A client connecting directly never sends them. */
+export const FORWARDING_HEADERS = ['x-forwarded-for', 'x-real-ip', 'forwarded'] as const
+
+/** X-Real-IP, normalized, when it holds an address. */
+export function realIpHeader(headers: { get: (name: string) => string | null }): string | null {
+  const realIp = headers.get('x-real-ip')
+  return realIp && isIP(normalizeIp(realIp)) ? normalizeIp(realIp) : null
+}
+
 /**
  * The client's address. Forwarding headers are believed only when the direct
- * peer is a trusted proxy (otherwise anyone could claim any address): then
- * `X-Real-IP` (which nginx overwrites), else the rightmost `X-Forwarded-For`
- * entry that isn't itself a trusted proxy.
+ * peer is a trusted proxy (otherwise anyone could claim any address): then the
+ * rightmost `X-Forwarded-For` entry that isn't itself a trusted proxy, else
+ * `X-Real-IP`. X-Forwarded-For comes first because every common proxy appends
+ * the address it sees there (nginx, Traefik, HAProxy, Go's ReverseProxy) or
+ * replaces it (Caddy), so the client can't forge the rightmost entry; some of
+ * them pass a client's own X-Real-IP through untouched.
  */
 export function clientIp(remoteAddress: string | undefined, headers: { get: (name: string) => string | null }, trustedProxies: readonly string[]): string | null {
   const direct = remoteAddress ? normalizeIp(remoteAddress) : null
   if (!direct || !inRanges(direct, trustedProxies))
     return direct
-  const realIp = headers.get('x-real-ip')
-  if (realIp && isIP(normalizeIp(realIp)))
-    return normalizeIp(realIp)
   const forwarded = (headers.get('x-forwarded-for') ?? '').split(',').map(s => normalizeIp(s)).filter(s => isIP(s))
   for (let i = forwarded.length - 1; i >= 0; i--) {
     if (!inRanges(forwarded[i]!, trustedProxies))
       return forwarded[i]!
   }
-  return forwarded[0] ?? direct
+  // Every entry is a trusted (LAN) address: the leftmost is the client.
+  if (forwarded.length > 0)
+    return forwarded[0]!
+  return realIpHeader(headers) ?? direct
 }

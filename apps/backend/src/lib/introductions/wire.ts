@@ -55,12 +55,20 @@ export type IntroEnvelope = z.infer<typeof IntroEnvelope>
 export const IntroMailRequest = z.object({
   self: z.object({ id: z.uuid(), publicKey: PublicKey }),
   messages: z.array(IntroEnvelope).max(100),
+  // Whether the caller carries mail for its friends right now. Absent (older
+  // jacks) means yes; with false, the callee keeps mail meant to go through it.
+  introduces: z.boolean().optional(),
 })
 
 export type IntroMailRequest = z.infer<typeof IntroMailRequest>
 
 // Each returned envelope is validated on its own, so one bad entry can't hide the rest.
-export const IntroMailResponse = z.object({ messages: z.array(z.unknown()).max(100) })
+export const IntroMailResponse = z.object({
+  messages: z.array(z.unknown()).max(100),
+  // Ids of handed-over envelopes the callee won't carry now (it doesn't
+  // introduce, or can't reach the recipient). The caller keeps them to try again.
+  refused: z.array(z.string()).max(100).optional(),
+})
 
 /** Decrypted payloads, per envelope type. */
 export const RequestPayload = z.object({ message: z.string().max(2000).optional() })

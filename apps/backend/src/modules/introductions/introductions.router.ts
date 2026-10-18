@@ -34,9 +34,9 @@ export function getIntroPeerRouter(service: PeerSide) {
   app.post('/mail', describeRoute({
     tags: ['Peer'],
     summary: 'Exchange introduction mail',
-    description: 'Hands over end-to-end encrypted envelopes for (or through) this jack and returns the ones waiting for the caller. The caller\'s identity is pinned to its API key on first use.',
+    description: 'Hands over end-to-end encrypted envelopes for (or through) this jack and returns the ones waiting for the caller. `introduces: false` keeps mail that would go through the caller. The caller\'s identity is pinned to its API key on first use.',
     security: [{ 'X-Api-Key': [] }],
-    responses: { 200: { description: '`{ messages }` waiting for the caller' }, 409: { description: 'The API key is pinned to another identity' } },
+    responses: { 200: { description: '`{ messages, refused }`: mail waiting for the caller, and the ids of handed-over envelopes this jack won\'t carry now (the caller keeps them)' }, 409: { description: 'The API key is pinned to another identity' } },
   }), zValidator('json', IntroMailRequest), async (c) => {
     return c.json(await service.handleMail(c.get('apiKeyId'), c.req.valid('json')))
   })

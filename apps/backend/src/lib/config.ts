@@ -97,7 +97,9 @@ export type ConnectorHeadersConfig = z.infer<typeof ConnectorHeadersConfig>
 
 export const AutoRegisterConfig = z.object({
   enable: z.boolean().default(true),
-  priority: z.number().int().min(1).default(1),
+  // 1 is the most preferred indexer, 50 the least: with 50, the *arr's other
+  // indexers win when two releases are otherwise equal.
+  priority: z.number().int().min(1).default(50),
 })
 
 export type AutoRegisterConfig = z.infer<typeof AutoRegisterConfig>
@@ -433,8 +435,8 @@ export const DiscoveryConfig = z.object({
   // Let friends' friends see that name and ask to connect.
   discoverable: z.boolean().default(false),
   // List the friends who opted in to your other friends, and carry their
-  // (end-to-end encrypted) requests and messages.
-  introduce: z.boolean().default(true),
+  // (end-to-end encrypted) requests and messages. Off until you turn it on.
+  introduce: z.boolean().default(false),
 })
 
 export type DiscoveryConfig = z.infer<typeof DiscoveryConfig>
@@ -449,10 +451,11 @@ export type RawDiscoveryConfig = z.infer<typeof RawDiscoveryConfig>
 
 const Cidr = z.string().trim().min(2).max(50)
 
-// Temporary bans for addresses that keep failing authentication on the public
-// port, like fail2ban. Off by default.
+// The public port's defences, all on by default: temporary bans for addresses
+// that keep failing authentication (like fail2ban), the Radarr/Sonarr APIs only
+// for the LAN, and no public API description.
 export const SecurityConfig = z.object({
-  banEnabled: z.boolean().default(false),
+  banEnabled: z.boolean().default(true),
   // Failed attempts (401/403 answers, failed qBittorrent logins) within the window that trigger a ban.
   maxFailures: z.number().int().min(1).max(1000).default(10),
   windowMinutes: z.number().int().min(1).max(1440).default(10),
@@ -461,6 +464,13 @@ export const SecurityConfig = z.object({
   trustedProxies: z.array(Cidr).nullish(),
   // Addresses that are never banned (by default the LAN and loopback, so your *arr apps can't lock themselves out).
   neverBan: z.array(Cidr).nullish(),
+  // Answer /torznab and /api/v2 (used only by your own Radarr/Sonarr) only from
+  // the LAN, loopback and arrApiAlsoAllowed, also through the reverse proxy.
+  lanOnlyArrApis: z.boolean().default(true),
+  // Addresses allowed on top of the LAN, e.g. a Radarr on Tailscale or a VPS.
+  arrApiAlsoAllowed: z.array(Cidr).nullish(),
+  // Serve the public port's API description at /openapi.json.
+  publicOpenApi: z.boolean().default(false),
 })
 
 export type SecurityConfig = z.infer<typeof SecurityConfig>
@@ -472,6 +482,9 @@ export const RawSecurityConfig = z.object({
   banMinutes: z.number().int().min(1).max(525_600).nullish(),
   trustedProxies: z.array(Cidr).nullish(),
   neverBan: z.array(Cidr).nullish(),
+  lanOnlyArrApis: z.boolean().nullish(),
+  arrApiAlsoAllowed: z.array(Cidr).nullish(),
+  publicOpenApi: z.boolean().nullish(),
 })
 
 export type RawSecurityConfig = z.infer<typeof RawSecurityConfig>

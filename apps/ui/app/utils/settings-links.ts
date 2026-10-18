@@ -14,7 +14,6 @@ export const SETTINGS_SECTIONS = {
   'rss': '/settings',
   'notifications': '/settings',
   'security': '/settings',
-  'tmdb': '/settings',
   'about': '/settings',
 } as const
 

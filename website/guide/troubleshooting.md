@@ -33,6 +33,15 @@ The usual causes:
 - **The managed key is no longer valid**, for example after wiping jack's
   database. **Restart jack**: auto-registration runs again on startup and
   updates the registration with a fresh, valid key.
+- **jack answers 403 `Not available from this address`.** jack only answers
+  the Torznab and qBittorrent APIs to your LAN
+  ([`security.lanOnlyArrApis`](../reference/configuration.md#security)), and
+  logs `Refused the Radarr/Sonarr API to an address outside your LAN` with the
+  address. Typical causes: the *arr reaches jack over Tailscale (`100.x`
+  addresses), from a VPS or another site, over a global IPv6 address, or
+  `jack.internalUrl` is your public domain so the *arr goes through your
+  reverse proxy. Use a LAN address in `jack.internalUrl`, or add the *arr's
+  address under ***Settings -> Security -> Also allow***.
 
 ## qBittorrent download client test fails / `Failed to register download client`
 

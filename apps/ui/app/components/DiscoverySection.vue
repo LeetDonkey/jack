@@ -9,7 +9,7 @@ const { data: discovery, pending, error: loadError, refresh } = useLazyAsyncData
 )
 
 function blankState() {
-  return { publicName: '', discoverable: false, introduce: true }
+  return { publicName: '', discoverable: false, introduce: false }
 }
 
 const state = reactive(blankState())
@@ -42,8 +42,8 @@ async function save() {
   saved.value = false
   const patch: DiscoveryConfigPatch = {
     publicName: state.publicName.trim() || null,
-    discoverable: state.discoverable ? true : null,
-    introduce: state.introduce ? null : false,
+    discoverable: state.discoverable,
+    introduce: state.introduce,
   }
   try {
     await request('config/discovery', { method: 'PATCH', body: patch })

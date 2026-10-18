@@ -24,7 +24,7 @@ export function banGuard(bans: BanList, trustedProxies: () => readonly string[] 
 
     await next()
 
-    if (!ip)
+    if (!ip || c.get('lanRefused'))
       return
     const status = c.res.status
     let failed = status === 401 || status === 403

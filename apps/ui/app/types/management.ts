@@ -392,6 +392,9 @@ export interface SecurityConfig {
   banMinutes: number
   trustedProxies?: string[] | null
   neverBan?: string[] | null
+  lanOnlyArrApis: boolean
+  arrApiAlsoAllowed?: string[] | null
+  publicOpenApi: boolean
 }
 
 export type SecurityConfigPatch = { [K in keyof SecurityConfig]?: SecurityConfig[K] | null }
