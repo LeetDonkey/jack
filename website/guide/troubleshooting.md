@@ -46,6 +46,11 @@ side**. On a shared Docker network use the container name (`http://jack:5225`);
 otherwise the host IP/domain. If *arr and jack are on different networks, attach
 jack to *arr's network (the `networks:` block in the example compose).
 
+When *arr refuses the download client itself (`Failed to register download
+client` in the log), jack leaves the indexer as it was, so it stays bound to
+jack's client. Fix the cause, then save the server in the management UI again or
+restart jack.
+
 ## Grabs download but never import
 
 The download completes in jack (you see it finish in the logs) but Radarr/Sonarr
@@ -82,20 +87,27 @@ Two gotchas:
   mount) are readable/writable by uid 1000, with `chown -R 1000:1000`. If your
   *arr uses a different `PUID`, set it to match.
 
-## `No "downloads" config set`, no download client registered
+## `Downloads are off`, nothing registered
 
 ```
-No "downloads" config set; skipping download client auto-registration. Grabs will fail until a qBittorrent client is configured.
+Downloads are off, so jack did not add its indexer or download client to Radarr/Sonarr. Turn on Downloads in Settings, then restart the jack container.
 ```
 
-jack only registers the qBittorrent download client when a `downloads` block is
-present in your config (it needs `completedPath` to know where to write files).
-Without it, the Torznab indexer is still registered so searches work, but grabs
-have nowhere to go.
+jack only registers itself in your *arr when a `downloads` block is present in
+your config (it needs `completedPath` to know where to write files). Without it,
+jack registers neither the qBittorrent download client nor the Torznab indexer:
+an indexer without jack's client would let *arr send jack's releases to another
+torrent client, where they never start.
+
+If an earlier jack already added a Jack indexer with no download client bound,
+jack turns it off in that *arr (the `Turned off the Jack indexer` warning in
+the log). Registering with downloads on turns it back on, bound to jack's
+client.
 
 **Fix:** add a `downloads` block with `completedPath`, or click ***Turn on
 downloads*** under ***Settings -> Downloads*** in the management UI, and
-restart jack.
+restart jack. Saving it in the management UI registers both right away; the
+restart starts the download client.
 
 If registration fails with `Failed to register indexer`, check that the
 destination server is reachable and its API key is correct. Registration logs
@@ -113,10 +125,10 @@ are ready, those connectors fail initially and you'll see `sources:0` /
 retried lazily the next time a search/download needs them, so they can recover
 without a restart once the remote service is up.
 
-Auto-registration still runs only during startup, so a destination that was down
-at boot may need a jack restart before the Torznab indexer or qBittorrent
-download client is created in Radarr/Sonarr. To make startup deterministic, wait
-for the dependencies to be healthy:
+jack also retries an auto-register destination that was down at boot, after 30
+seconds at first and backing off to every 15 minutes, and registers its Torznab
+indexer and qBittorrent download client there as soon as it connects. To make
+startup deterministic, wait for the dependencies to be healthy:
 
 ```yaml
 # jack

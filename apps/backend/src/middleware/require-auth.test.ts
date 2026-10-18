@@ -164,5 +164,20 @@ describe('requireApiKey', () => {
       expect(res.status).toBe(401)
       expect(((await res.json()) as ErrorResponse).error.message).toContain('invalid API key')
     })
+
+    test('reports the destination of every managed key it accepts, and nothing else', async () => {
+      const key = generateManagedKey()
+      managedRepo.create({ keyHash: hashKey(key), serverId: 'srv-a' })
+      const contacts: string[] = []
+      const app = new Hono<{ Variables: AuthVariables }>()
+      app.use('*', requireApiKey(masterKey, { type: 'managed_key', repository: managedRepo, onAuthenticated: id => contacts.push(id) }))
+      app.get('/test', c => c.json({ ok: true }))
+      app.onError(handleError('test', { exposeDetails: true }))
+
+      expect((await app.request('/test', { headers: { 'X-Api-Key': key } })).status).toBe(200)
+      expect((await app.request('/test', { headers: { 'X-Api-Key': generateManagedKey() } })).status).toBe(401)
+      expect((await app.request('/test', { headers: { 'X-Api-Key': masterKey } })).status).toBe(200)
+      expect(contacts).toEqual(['srv-a'])
+    })
   })
 })

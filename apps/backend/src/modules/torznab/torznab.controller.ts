@@ -1,4 +1,4 @@
-import type { AppConfig, TorznabConfig } from '../../lib/config'
+import type { TorznabConfig } from '../../lib/config'
 import type { Release } from '../../lib/release'
 import type { ArrServerConnector } from '../../lib/servers/arr/base'
 import type { PeerConnector } from '../../lib/servers/peer'
@@ -60,7 +60,8 @@ export class TorznabController {
 
   constructor(
     private readonly getPeers: () => PeerConnector[],
-    private readonly jackConfig: NonNullable<AppConfig['jack']>,
+    // jack.internalUrl, read per feed so a change in the management UI applies at once.
+    private readonly internalUrl: () => string,
     // Read on every RSS request so a change in the management UI applies at once.
     private readonly getTorznabConfig: () => TorznabConfig = () => ({ rssMaxAgeDays: 7, rssMaxItems: 100 }),
     // The destination a managed key belongs to, for its upgrade policy.
@@ -126,6 +127,7 @@ export class TorznabController {
     // restart. Each peer is isolated: if it fails (still down, or errors), we log
     // and treat it as zero results instead of failing the whole search.
     const peers = this.getPeers()
+    const internalUrl = this.internalUrl()
     return withSpan('torznab.fan_out', {
       'search.label': label,
       'peer.count': peers.length,
@@ -147,8 +149,8 @@ export class TorznabController {
               setSpanAttribute(peerSpan, 'release.count', releases.length)
               // Embed the SAME key the requester authenticated with (passed down
               // from the request), so the grab of this release's .torrent passes
-              // auth — the deprecated main key (jackConfig.apiKey) is often unset.
-              return releases.map(release => releaseToTorznab(release, peer.id, peer.name, this.jackConfig.internalUrl, apiKey))
+              // auth — the deprecated main key (jack.apiKey) is often unset.
+              return releases.map(release => releaseToTorznab(release, peer.id, peer.name, internalUrl, apiKey))
             })
           }
           catch (err) {

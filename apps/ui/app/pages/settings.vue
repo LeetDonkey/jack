@@ -24,6 +24,7 @@ const { data: tmdbStatus } = await useAsyncData('tmdb-status', () =>
 const jackSubmitting = ref(false)
 const jackError = ref<string | null>(null)
 const jackSaved = ref(false)
+const jackRestartNeeded = ref(false)
 const jackFormRevision = ref(0)
 const showQuickLink = ref(false)
 const showQuickLinkImport = ref(false)
@@ -40,10 +41,13 @@ async function saveJack(input: JackConfig) {
   jackError.value = null
   jackSaved.value = false
   try {
+    // The address applies right away; the keys are read when jack starts.
+    const keyChanged = (['apiKey', 'tmdbApiKey'] as const).some(k =>
+      k in input && JSON.stringify(input[k] ?? null) !== JSON.stringify(jack.value?.[k] ?? null))
     await request('config/jack', { method: 'PATCH', body: input })
     await refreshJack()
     jackFormRevision.value++
-    // jack values are captured at boot, so the change lands on next restart.
+    jackRestartNeeded.value = keyChanged
     jackSaved.value = true
   }
   catch (err) {
@@ -312,8 +316,8 @@ async function confirmRevoke() {
               color="success"
               variant="soft"
               icon="i-ph-check-circle"
-              title="Saved. Restart the jack container to apply this."
-              description="Unraid: Docker tab -> jack -> Restart. jack-ui doesn't need a restart."
+              :title="jackRestartNeeded ? 'Saved. Restart the jack container to apply the key.' : 'Saved. jack updates Radarr/Sonarr with the new address.'"
+              :description="jackRestartNeeded ? 'Unraid: Docker tab -> jack -> Restart. jack-ui doesn\'t need a restart.' : undefined"
             />
           </UCard>
         </SettingsSection>

@@ -2,12 +2,14 @@ import type { z } from 'zod'
 import type { AppConfig } from '../../lib/config'
 import type { ConnectorManager } from '../../lib/servers'
 import type { DownloadsRepository } from '../downloads/downloads.repository'
+import type { DestinationRegistration } from '../registration/registration.service'
 import { jsonc } from 'jsonc'
 import { atomicWriteFile } from '../../lib/atomic-write'
-import { BandwidthConfig, DiscoveryConfig, DownloadsConfig, ExternalJackConfig, JackConfig, NotificationsConfig, PeerConfig, RawBandwidthConfig, RawDiscoveryConfig, RawDownloadsConfig, RawExternalJackConfig, RawJackConfig, RawNotificationsConfig, RawPeerConfig, RawSecurityConfig, RawServerConfig, RawTorznabConfig, SecurityConfig, ServerConfig, TorznabConfig } from '../../lib/config'
+import { BandwidthConfig, DiscoveryConfig, DownloadsConfig, ExternalJackConfig, JackConfig, NotificationsConfig, PeerConfig, RawBandwidthConfig, RawDiscoveryConfig, RawDownloadsConfig, RawExternalJackConfig, RawJackConfig, RawJackConfigPatch, RawNotificationsConfig, RawPeerConfig, RawSecurityConfig, RawServerConfig, RawTorznabConfig, SecurityConfig, ServerConfig, TorznabConfig } from '../../lib/config'
 import { BadRequestError } from '../../lib/errors/BadRequestError'
 import { ConflictError } from '../../lib/errors/ConflictError'
 import { NotFoundError } from '../../lib/errors/NotFoundError'
+import { isWritableDirectory } from '../../lib/fs-checks'
 import { generateId } from '../../lib/servers/base'
 
 type RawConfig = z.input<typeof AppConfig>
@@ -16,22 +18,31 @@ type RawConfig = z.input<typeof AppConfig>
 interface RawEntry { url: string, name: string }
 type Slice = 'peers' | 'servers'
 
+/** Re-registers jack in the saved server; resolves to the result, or null when it isn't registrable. */
+export type ServerSavedListener = (id: string) => Promise<DestinationRegistration | null> | void
+export type JackSavedListener = (previous: RawJackConfig | null, next: RawJackConfig) => void
+export type DownloadsSavedListener = (previous: RawDownloadsConfig | null, next: RawDownloadsConfig) => void
+
 export class ConfigService {
   private path: string
   private raw: RawConfig
   private connectorManager: ConnectorManager
   private downloadsRepository?: DownloadsRepository
+  private readonly isWritable: (path: string) => Promise<boolean>
   // Serialized write queue: one async mutex every mutation chains onto, so file
   // read-modify-write + map mutation never interleave between concurrent calls.
   private queue: Promise<unknown> = Promise.resolve()
   private readonly subscribers = new Set<() => void>()
-  private readonly serverSavedListeners = new Set<(id: string) => void>()
+  private readonly serverSavedListeners = new Set<ServerSavedListener>()
+  private readonly jackSavedListeners = new Set<JackSavedListener>()
+  private readonly downloadsSavedListeners = new Set<DownloadsSavedListener>()
 
-  constructor(params: { path: string, raw: RawConfig, connectorManager: ConnectorManager, downloadsRepository?: DownloadsRepository }) {
+  constructor(params: { path: string, raw: RawConfig, connectorManager: ConnectorManager, downloadsRepository?: DownloadsRepository, isWritable?: (path: string) => Promise<boolean> }) {
     this.path = params.path
     this.raw = params.raw
     this.connectorManager = params.connectorManager
     this.downloadsRepository = params.downloadsRepository
+    this.isWritable = params.isWritable ?? isWritableDirectory
   }
 
   /**
@@ -40,10 +51,10 @@ export class ConfigService {
    * from `getAppConfig` to the constructor; this convenience factory is for
    * standalone / test construction from just a path.
    */
-  static async fromFile(params: { path: string, connectorManager: ConnectorManager, downloadsRepository?: DownloadsRepository }): Promise<ConfigService> {
+  static async fromFile(params: { path: string, connectorManager: ConnectorManager, downloadsRepository?: DownloadsRepository, isWritable?: (path: string) => Promise<boolean> }): Promise<ConfigService> {
     const text = await Bun.file(params.path).text()
     const raw = jsonc.parse(text) as RawConfig
-    return new ConfigService({ path: params.path, raw, connectorManager: params.connectorManager, downloadsRepository: params.downloadsRepository })
+    return new ConfigService({ ...params, raw })
   }
 
   private enqueue<T>(task: () => Promise<T>): Promise<T> {
@@ -62,17 +73,49 @@ export class ConfigService {
 
   /**
    * Called with the connector id after a server is added or updated, so the
-   * caller can re-register jack in that *arr without a restart.
+   * caller can re-register jack in that *arr without a restart. A listener may
+   * return the registration as a promise; the save hands it to its caller.
    */
-  onServerSaved(listener: (id: string) => void): () => void {
+  onServerSaved(listener: ServerSavedListener): () => void {
     this.serverSavedListeners.add(listener)
     return () => this.serverSavedListeners.delete(listener)
   }
 
-  private notifyServerSaved(id: string): void {
+  /** Called after the jack block is saved, with the stored block before and after. */
+  onJackSaved(listener: JackSavedListener): () => void {
+    this.jackSavedListeners.add(listener)
+    return () => this.jackSavedListeners.delete(listener)
+  }
+
+  /** Called after the downloads block is saved; `previous` is null when it was just created. */
+  onDownloadsSaved(listener: DownloadsSavedListener): () => void {
+    this.downloadsSavedListeners.add(listener)
+    return () => this.downloadsSavedListeners.delete(listener)
+  }
+
+  // Resolves to the first registration a listener returns. A failing listener
+  // must not make a committed save look failed, so errors resolve to null. Never
+  // rejects.
+  private async notifyServerSaved(id: string): Promise<DestinationRegistration | null> {
+    const pending: Array<Promise<DestinationRegistration | null>> = []
     for (const listener of this.serverSavedListeners) {
       try {
-        listener(id)
+        const result = listener(id)
+        if (result)
+          pending.push(result.catch(() => null))
+      }
+      catch {
+        // See above.
+      }
+    }
+    const results = await Promise.all(pending)
+    return results.find(result => result !== null) ?? null
+  }
+
+  private notifyListeners<A extends unknown[]>(listeners: Set<(...args: A) => void>, ...args: A): void {
+    for (const listener of listeners) {
+      try {
+        listener(...args)
       }
       catch {
         // A failing listener must not make a committed save look failed.
@@ -128,6 +171,20 @@ export class ConfigService {
     if (!jack)
       return null
     return RawJackConfig.parse(jack)
+  }
+
+  /**
+   * The stored internal URL, or null when the file has no jack block. Read per
+   * registration and per Torznab feed, so it resolves no secrets: it is a plain
+   * URL, validated when saved.
+   */
+  getInternalUrl(): string | null {
+    return this.raw.jack?.internalUrl ?? null
+  }
+
+  /** The whole stored config, refs intact. A copy: changing it changes nothing. */
+  getRaw(): RawConfig {
+    return structuredClone(this.raw)
   }
 
   /** Resolve the saved external access profile only when a quick link needs it. */
@@ -295,52 +352,64 @@ export class ConfigService {
 
   // ── Servers ──────────────────────────────────────────────────────────────────
 
-  async addServer(input: unknown): Promise<void> {
+  /**
+   * Resolves once the server is saved. `registration` settles when jack has
+   * registered itself in the server (null when it isn't an auto-register
+   * destination); it never rejects.
+   */
+  async addServer(input: unknown): Promise<{ registration: Promise<DestinationRegistration | null> }> {
     const resolved = ServerConfig.parse(input)
     const rawServer = RawServerConfig.parse(input)
     // rethrowInitError: a server that fails its status check aborts the add (and rolls
     // the config back) so the UI can report the cause, rather than persisting a dead one.
     await this.addEntry('servers', 'server', resolved, rawServer, () => this.connectorManager.addServerConnector(resolved, { rethrowInitError: true }))
-    this.notifyServerSaved(generateId(resolved.url))
+    return { registration: this.notifyServerSaved(generateId(resolved.url)) }
   }
 
   async removeServer(id: string): Promise<void> {
     return this.removeEntry('servers', 'server', id)
   }
 
-  async updateServer(id: string, input: unknown): Promise<void> {
+  async updateServer(id: string, input: unknown): Promise<{ registration: Promise<DestinationRegistration | null> }> {
     // A URL change rekeys the connector. There is no download cascade (downloads
     // key off peers, not servers), so no onRekey. Listeners re-register jack in
     // the saved *arr, which applies a new indexer priority right away.
     const resolved = ServerConfig.parse(input)
     const rawServer = RawServerConfig.parse(input)
     await this.updateEntry('servers', 'server', id, resolved, rawServer, () => this.connectorManager.addServerConnector(resolved, { rethrowInitError: true }))
-    this.notifyServerSaved(generateId(resolved.url))
+    return { registration: this.notifyServerSaved(generateId(resolved.url)) }
   }
 
   // ── Jack ───────────────────────────────────────────────────────────────────
   // jack is a singular object (not an array slice), so it bypasses the generic
-  // CRUD helpers. Its values are captured at boot (main key / qB / torznab /
-  // *arr autoregister), so there is NO live connector to reconcile — persisting
-  // the new block is the whole job; it takes effect on the next restart.
+  // CRUD helpers. There is no live connector to reconcile. The internal URL
+  // applies at once (onJackSaved listeners re-register jack in every *arr); the
+  // main key and the TMDB key are read at boot.
+  /**
+   * Patch the jack block with the same merge rules as `updateDownloads`: an absent
+   * key keeps its stored value and `null` removes it. `internalUrl` can't be
+   * removed, and the first patch of a file without a jack block must set it.
+   */
   async updateJack(input: unknown): Promise<void> {
-    // Validate + resolve secrets up front (bad shape / unresolvable ref → 400
-    // before any write, mirroring addPeer); persist the ref-preserving
-    // RawJackConfig parse so {env}/{file} refs survive the round-trip to disk.
-    JackConfig.parse(input)
-    const rawJack = RawJackConfig.parse(input)
-    return this.enqueue(async () => {
-      const merged = {
-        ...rawJack,
-        ...(!Object.hasOwn(rawJack, 'external') && this.raw.jack?.external
-          ? { external: this.raw.jack.external }
-          : {}),
+    const patch = RawJackConfigPatch.parse(input)
+    const { previous, next } = await this.enqueue(async () => {
+      const previous = RawJackConfig.safeParse(this.raw.jack).data ?? null
+      const merged: Record<string, unknown> = { ...(this.raw.jack ?? {}), ...patch }
+      for (const [key, value] of Object.entries(merged)) {
+        if (value === null || value === undefined)
+          delete merged[key]
       }
+      // Resolve secrets to validate them (bad shape / unresolvable ref → 400 before
+      // any write, mirroring addPeer); persist the ref-preserving RawJackConfig
+      // parse so {env}/{file} refs survive the round-trip to disk.
       JackConfig.parse(merged)
-      const next = { ...this.raw, jack: RawJackConfig.parse(merged) } as RawConfig
-      await this.persist(next)
-      this.raw = next
+      const jack = RawJackConfig.parse(merged)
+      const nextRaw = { ...this.raw, jack } as RawConfig
+      await this.persist(nextRaw)
+      this.raw = nextRaw
+      return { previous, next: jack }
     })
+    this.notifyListeners(this.jackSavedListeners, previous, next)
   }
 
   /** Atomically replace or remove only jack.external, preserving every sibling field. */
@@ -374,12 +443,17 @@ export class ConfigService {
    * this is what the UI's empty field means. `undefined` (absent) leaves the stored
    * value alone.
    *
-   * Only `unlinkImportedFiles` takes effect immediately (the import watcher reads it
-   * per import); the rest are captured at boot and land on the next restart.
+   * `unlinkImportedFiles` and `maxConcurrentDownloads` take effect immediately; the
+   * rest are captured at boot and land on the next restart.
+   *
+   * A patch that sets `completedPath` is refused with a 400 unless jack can write to
+   * that folder, so a typo or a missing container mount shows up here rather than
+   * as the first failed download.
    */
   async updateDownloads(input: unknown): Promise<void> {
     const patch = RawDownloadsConfig.parse(input)
-    return this.enqueue(async () => {
+    const { previous, next } = await this.enqueue(async () => {
+      const previous = this.getRawDownloads()
       const merged: Record<string, unknown> = { ...(this.raw.downloads ?? {}), ...patch }
       for (const [key, value] of Object.entries(merged)) {
         if (value === null)
@@ -387,11 +461,15 @@ export class ConfigService {
       }
       // Validate the merged block, but persist `merged` — writing the parsed value
       // would bake every default into the file.
-      DownloadsConfig.parse(merged)
-      const next = { ...this.raw, downloads: merged } as RawConfig
-      await this.persist(next)
-      this.raw = next
+      const parsed = DownloadsConfig.parse(merged)
+      if (patch.completedPath !== undefined && !(await this.isWritable(parsed.completedPath)))
+        throw new BadRequestError(`jack can't write to ${parsed.completedPath}. Check the Downloads path in the jack template.`)
+      const nextRaw = { ...this.raw, downloads: merged } as RawConfig
+      await this.persist(nextRaw)
+      this.raw = nextRaw
+      return { previous, next: RawDownloadsConfig.parse(merged) }
     })
+    this.notifyListeners(this.downloadsSavedListeners, previous, next)
   }
 
   // ── Bandwidth ──────────────────────────────────────────────────────────────

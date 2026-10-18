@@ -117,20 +117,30 @@ describe('TorznabController embeds the requester key in download URLs', () => {
   }
 
   test('searchMovie embeds the passed request key, not the main key', async () => {
-    const controller = new TorznabController(() => [fakePeer([movieRelease])], jackConfig)
+    const controller = new TorznabController(() => [fakePeer([movieRelease])], () => jackConfig.internalUrl)
     const items = await controller.searchMovie({ tmdbId: '12345' }, 'jack_managed_abc')
     expect(items).toHaveLength(1)
     expect(new URL(items[0]!.downloadUrl).searchParams.get('apikey')).toBe('jack_managed_abc')
   })
 
   test('searchTv embeds the passed request key', async () => {
-    const controller = new TorznabController(() => [fakePeer([episodeRelease])], jackConfig)
+    const controller = new TorznabController(() => [fakePeer([episodeRelease])], () => jackConfig.internalUrl)
     const items = await controller.searchTv('654321', 1, 2, 'jack_managed_tv')
     expect(new URL(items[0]!.downloadUrl).searchParams.get('apikey')).toBe('jack_managed_tv')
   })
 
+  test('reads the internal URL per request, so a saved one applies to the next feed', async () => {
+    let internalUrl = 'http://jack:5225'
+    const controller = new TorznabController(() => [fakePeer([movieRelease])], () => internalUrl)
+    const host = async () => new URL((await controller.searchMovie({ tmdbId: '12345' }, 'jack_managed_abc'))[0]!.downloadUrl).host
+
+    expect(await host()).toBe('jack:5225')
+    internalUrl = 'http://192.168.1.10:5225'
+    expect(await host()).toBe('192.168.1.10:5225')
+  })
+
   test('catalog embeds the passed request key', async () => {
-    const controller = new TorznabController(() => [fakePeer([{ ...movieRelease, publishDate: new Date().toISOString() }])], jackConfig)
+    const controller = new TorznabController(() => [fakePeer([{ ...movieRelease, publishDate: new Date().toISOString() }])], () => jackConfig.internalUrl)
     const items = await controller.catalog('jack_managed_xyz')
     expect(new URL(items[0]!.downloadUrl).searchParams.get('apikey')).toBe('jack_managed_xyz')
   })
@@ -184,7 +194,7 @@ describe('TorznabController RSS feed', () => {
       { ...movieRelease, id: 'c:movie:3' },
       { ...movieRelease, id: 'c:movie:4', publishDate: daysAgo(3) },
     ]
-    const controller = new TorznabController(() => [feedPeer(releases, seen)], jackConfig, () => ({ rssMaxAgeDays: 7, rssMaxItems: 100 }))
+    const controller = new TorznabController(() => [feedPeer(releases, seen)], () => jackConfig.internalUrl, () => ({ rssMaxAgeDays: 7, rssMaxItems: 100 }))
 
     const items = await controller.catalog('key', now)
 
@@ -195,7 +205,7 @@ describe('TorznabController RSS feed', () => {
 
   test('caps the feed at rssMaxItems', async () => {
     const releases = Array.from({ length: 5 }, (_, i) => ({ ...movieRelease, id: `c:movie:${i}`, publishDate: daysAgo(i) }))
-    const controller = new TorznabController(() => [feedPeer(releases, [])], jackConfig, () => ({ rssMaxAgeDays: 30, rssMaxItems: 2 }))
+    const controller = new TorznabController(() => [feedPeer(releases, [])], () => jackConfig.internalUrl, () => ({ rssMaxAgeDays: 30, rssMaxItems: 2 }))
 
     const items = await controller.catalog('key', now)
 
@@ -223,7 +233,7 @@ describe('TorznabController upgrade policy', () => {
   }
 
   const controllerFor = (dest: ArrServerConnector) =>
-    new TorznabController(() => [], jackConfig, undefined, id => (id === dest.id ? dest : undefined))
+    new TorznabController(() => [], () => jackConfig.internalUrl, undefined, id => (id === dest.id ? dest : undefined))
 
   test('with upgrades off, offers only what the destination is missing', async () => {
     const controller = controllerFor(destination({ allow: false }, new Set([1])))

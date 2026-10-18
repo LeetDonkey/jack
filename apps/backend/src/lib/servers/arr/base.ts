@@ -1,5 +1,6 @@
 import type { AutoRegisterConfig, ConnectorHeadersConfig, ServerConfig, UpgradePolicyConfig } from '../../config'
 import type { Release } from '../../release'
+import type { ArrValidationFailure } from './validation'
 import z from 'zod'
 import { logger } from '../../../logger'
 import { requiresDestination, requiresSource } from '../../decorators/requires-capability'
@@ -7,6 +8,7 @@ import { requiresInitialization } from '../../decorators/requires-initialization
 import { BadRequestError } from '../../errors/BadRequestError'
 import { FetchError } from '../../errors/FetchError'
 import { ServerConnector } from '../base'
+import { parseArrValidationFailures } from './validation'
 
 const BASENAME_SEPARATOR_REGEX = /[/\\]/
 const TRAILING_SLASH_REGEX = /\/$/
@@ -82,6 +84,33 @@ export class PermanentManualImportError extends Error {
     super(message)
     this.name = 'PermanentManualImportError'
   }
+}
+
+/**
+ * What *arr said when asked to test one of its download clients or indexers:
+ * `ok` (possibly with warnings), `failed` with its validation failures, or
+ * `missing` when it has no entry by that name.
+ */
+export type ArrProviderTest
+  = | { status: 'ok', warnings: ArrValidationFailure[] }
+    | { status: 'failed', failures: ArrValidationFailure[] }
+    | { status: 'missing' }
+
+function hasBaseUrl(indexer: any, baseUrl: string): boolean {
+  return Array.isArray(indexer?.fields)
+    && indexer.fields.some((f: any) => f?.name === 'baseUrl' && f.value === baseUrl)
+}
+
+/**
+ * jack's own indexer in an *arr's indexer list: the Torznab indexer with jack's name
+ * (preferring one already at `baseUrl` when there are several), else any indexer
+ * at `baseUrl`, for one the user renamed.
+ */
+export function findJackIndexer(indexers: unknown, name: string, baseUrl: string): any {
+  if (!Array.isArray(indexers))
+    return undefined
+  const named = indexers.filter((idx: any) => idx?.implementation === 'Torznab' && idx.name === name)
+  return named.find(idx => hasBaseUrl(idx, baseUrl)) ?? named[0] ?? indexers.find(idx => hasBaseUrl(idx, baseUrl))
 }
 
 export function basename(path: string): string {
@@ -331,11 +360,9 @@ export abstract class ArrServerConnector extends ServerConnector {
   @requiresDestination
   @requiresInitialization
   async registerIndexer(indexerConfig: { name: string, internalUrl: string, apiKey: string, priority: number, categories: number[], downloadClientId?: number }) {
-    const existingIndexers = await this.arrGet<any[]>('/api/v3/indexer')
-    const existing: any = Array.isArray(existingIndexers)
-      ? existingIndexers.find((idx: any) =>
-          idx.fields?.some((f: any) => f.name === 'baseUrl' && f.value === indexerConfig.internalUrl))
-      : null
+    // Matched by name first, so a changed internal URL updates jack's indexer in
+    // place instead of adding a second one next to the stale address.
+    const existing = findJackIndexer(await this.arrGet<unknown>('/api/v3/indexer'), indexerConfig.name, indexerConfig.internalUrl)
 
     const body = {
       name: indexerConfig.name,
@@ -378,6 +405,31 @@ export abstract class ArrServerConnector extends ServerConnector {
         query: { forceSave: 'true' },
       } as any)
     }
+  }
+
+  /**
+   * Turn off jack's indexer (see findJackIndexer) when it has no download client
+   * bound, so the *arr stops searching jack and handing its grabs to another
+   * torrent client. Resolves true when it turned one off. registerIndexer turns it
+   * back on.
+   */
+  @requiresDestination
+  @requiresInitialization
+  async disableUnboundIndexer(name: string, baseUrl: string): Promise<boolean> {
+    const indexer = findJackIndexer(await this.arrGet<unknown>('/api/v3/indexer'), name, baseUrl)
+    if (!indexer || indexer.downloadClientId)
+      return false
+    if (!indexer.enableRss && !indexer.enableAutomaticSearch && !indexer.enableInteractiveSearch)
+      return false
+    // The resource as *arr returned it: *arr keeps a masked apiKey ("********")
+    // from the saved entry with the same id.
+    await this.fetch(`/api/v3/indexer/${indexer.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...indexer, enableRss: false, enableAutomaticSearch: false, enableInteractiveSearch: false }),
+      query: { forceSave: 'true' },
+    } as any)
+    return true
   }
 
   @requiresDestination
@@ -442,5 +494,56 @@ export abstract class ArrServerConnector extends ServerConnector {
       schema: DownloadClientResource,
     } as any)
     return created.id
+  }
+
+  /**
+   * Ask *arr to test its download client named `name`, the same as its Test button,
+   * which makes *arr connect to the client's address. Network errors and timeouts
+   * reaching *arr itself are thrown.
+   */
+  @requiresDestination
+  @requiresInitialization
+  async testDownloadClient(name: string, { timeoutMs }: { timeoutMs?: number } = {}): Promise<ArrProviderTest> {
+    const clients = await this.arrGet<unknown>('/api/v3/downloadclient')
+    const client = Array.isArray(clients) ? clients.find((c: any) => c?.name === name) : undefined
+    if (!client)
+      return { status: 'missing' }
+    return this.testProvider('/api/v3/downloadclient/test', client, timeoutMs)
+  }
+
+  /** Ask *arr to test jack's Torznab indexer (see findJackIndexer), like its Test button. */
+  @requiresDestination
+  @requiresInitialization
+  async testIndexer(name: string, baseUrl: string, { timeoutMs }: { timeoutMs?: number } = {}): Promise<ArrProviderTest> {
+    const indexer = findJackIndexer(await this.arrGet<unknown>('/api/v3/indexer'), name, baseUrl)
+    if (!indexer)
+      return { status: 'missing' }
+    return this.testProvider('/api/v3/indexer/test', indexer, timeoutMs)
+  }
+
+  // POSTs the resource as *arr returned it: *arr fills masked secrets ("********")
+  // from the saved entry with the same id.
+  private async testProvider(path: string, resource: unknown, timeoutMs?: number): Promise<ArrProviderTest> {
+    try {
+      await this.fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(resource),
+        timeoutMs,
+        allowEmptyBody: true,
+      })
+      return { status: 'ok', warnings: [] }
+    }
+    catch (err) {
+      if (err instanceof FetchError && err.response.status === 400) {
+        const failures = parseArrValidationFailures(err.extras.body)
+        if (failures.length > 0) {
+          return failures.every(failure => failure.warning)
+            ? { status: 'ok', warnings: failures }
+            : { status: 'failed', failures }
+        }
+      }
+      throw err
+    }
   }
 }

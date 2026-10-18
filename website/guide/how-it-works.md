@@ -26,9 +26,11 @@ sequenceDiagram
     JACK-->>ARR: releases (stub .torrent)<br/>link → /torznab/download/{peerId}:{itemId}.torrent
 ```
 
-The setup happens once, at startup: jack registers itself in each
-`destination` Radarr/Sonarr as a **Torznab indexer**, and (when `downloads` is
-configured) as a **qBittorrent download client**. Both registrations point at
+jack registers itself in each `destination` Radarr/Sonarr as a **Torznab
+indexer** and a **qBittorrent download client**: at startup, and again when a
+setting it registers changes (see
+[`autoregister`](/reference/configuration#servers-autoregister)). It registers
+neither while `downloads` isn't configured. Both registrations point at
 `jack.internalUrl` and authenticate with an auto-issued **managed key**. If
 you'd rather register jack yourself, set that server's
 [`autoregister.enable`](/reference/configuration#servers-autoregister) to

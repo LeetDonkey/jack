@@ -79,6 +79,9 @@ Container -> Template*** (in the ***User templates*** group).
   *Container Path*. If your Radarr maps `/mnt/user/downloads` to `/data`, keep
   the *Container Path* `/data/jack` and set the *Host Path* to
   `/mnt/user/downloads/jack`.
+- **Internal URL**: `http://<your-server-ip>:5225`, the address your
+  Radarr/Sonarr use to reach jack. jack reads it when it creates its config on
+  first start; after that you change it in jack-ui.
 - **Management key**: a long random secret. Generate one in the terminal:
 
   ```bash
@@ -114,38 +117,40 @@ management key in each new browser session.
 ## 5. Connect Radarr and Sonarr
 
 Open jack-ui. Until jack is set up, the ***Dashboard*** shows a setup card,
-***Finish setting up jack***, with steps 1, 2 and 4 below, in order. Each step
-has a button that opens its section of ***Settings***, and the card ticks the
-step off once it's done. When every step is done, the card reads ***jack is set
+***Finish setting up jack***, with steps 1 to 3 below, in order. Each step has
+a button that opens its section of ***Settings***, and the card ticks the step
+off once it's done. When every step is done, the card reads ***jack is set
 up*** and offers ***Hide***. A second card, ***Share with friends***, points to
 steps 6 and 7 and is optional.
 
-Set up jack's address and downloads before you connect Radarr and Sonarr: jack
-reads both when it starts, and it adds its download client to Radarr/Sonarr
-only once downloads are on.
+1. **jack's address.** Under ***Settings -> jack***, check that ***Address
+   Radarr/Sonarr use to reach jack*** is `http://<your-server-ip>:5225` (the
+   ***Internal URL*** you set in the template). If it shows the default
+   `http://jack:5225`, change it and click ***Save***. If you opened jack-ui by
+   IP address, the button ***Use http://...:5225 (if you kept port 5225)***
+   under the field fills in that address. The default only works if Radarr and
+   Sonarr run on the jack network too; in that case keep it and click ***Yes, on
+   the jack network*** on the setup card. A new address applies right away: jack
+   updates its indexer and download client in every Radarr/Sonarr it is
+   registered in.
+2. **Downloads.** On first start jack turns on downloads with ***Completed
+   folder*** `/data/jack`, the *Container Path* of your downloads mount. Under
+   ***Settings -> Downloads***, turn on ***Remove jack's copy after
+   Radarr/Sonarr import it*** and click ***Save changes***. With it on, jack
+   removes its own copy once Radarr/Sonarr confirm the import: if they copied
+   the file (the usual case when downloads and library are separate mounts in
+   their container) that saves the space of a second copy; if they hardlinked
+   it, only jack's extra link goes away.
 
-1. **jack's address.** Under ***Settings -> jack***, set ***Address
-   Radarr/Sonarr use to reach jack*** to `http://<your-server-ip>:5225` and
-   click ***Save***. If you opened jack-ui by IP address, the button ***Use
-   http://...:5225 (if you kept port 5225)*** under the field fills in that
-   address. This is the address jack registers in your Radarr/Sonarr. The
-   default `http://jack:5225` only works if they run on the jack network too;
-   in that case keep it and click ***Yes, on the jack network*** on the setup
-   card.
-2. **Downloads.** Under ***Settings -> Downloads***, click ***Turn on
-   downloads***. Check that ***Completed folder*** is the *Container Path* of
-   your downloads mount (`/data/jack`, filled in for you), turn on ***Remove
-   jack's copy after Radarr/Sonarr import it***, and click ***Save changes***.
-   With it on, jack removes its own copy once Radarr/Sonarr confirm the import:
-   if they copied the file (the usual case when downloads and library are
-   separate mounts in their container) that saves the space of a second copy;
-   if they hardlinked it, only jack's extra link goes away.
+   If the section offers ***Turn on downloads*** instead (the config is from an
+   older jack, or jack couldn't write to `/data/jack` on first start), click
+   it, check that ***Completed folder*** is `/data/jack`, save, and restart the
+   jack container (Docker tab -> jack -> ***Restart***). Grabs only reach jack
+   after that restart. jack-ui doesn't need a restart.
 
    If you only want to share your library, click ***I only share*** on the
    setup card instead and skip this step.
-3. **Restart** the jack container (Docker tab -> jack -> ***Restart***). jack-ui
-   doesn't need a restart.
-4. **Radarr & Sonarr.** Under ***Settings -> Radarr & Sonarr***, click
+3. **Radarr & Sonarr.** Under ***Settings -> Radarr & Sonarr***, click
    ***Connect Radarr or Sonarr*** once for each of them:
    - ***Name***: e.g. `Radarr` or `Sonarr`.
    - ***URL***: e.g. `http://<your-server-ip>:7878` for Radarr, `:8989` for
@@ -276,12 +281,11 @@ links: see ***Settings -> Friends of friends***.
 - **Radarr says it can't reach jack, or grabs never start**: ***Address
   Radarr/Sonarr use to reach jack*** (***Settings -> jack***) is wrong. It must
   be an address your Radarr container can reach, usually
-  `http://<your-server-ip>:5225` (see the tip in step 5 for `br0`). Restart the
-  jack container after you change it.
-- **No Jack download client in Radarr/Sonarr**: downloads were off when jack
-  started. Click ***Turn on downloads*** under ***Settings -> Downloads***,
-  save, and restart the jack container; jack adds the download client when it
-  starts.
+  `http://<your-server-ip>:5225` (see the tip in step 5 for `br0`).
+- **No Jack indexer or download client in Radarr/Sonarr**: downloads are off.
+  Click ***Turn on downloads*** under ***Settings -> Downloads*** and save;
+  saving registers both in Radarr/Sonarr. Then restart the jack container: its
+  download client only accepts grabs after a restart.
 - **Downloads finish but Radarr doesn't import them**: the downloads folder
   doesn't match. jack's ***Completed folder***, its downloads *Container Path*
   and the path your Radarr sees must all be the same.

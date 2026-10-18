@@ -143,10 +143,10 @@ The streams are plain `GET` endpoints on the management API:
 
 | Stream | What it pushes |
 | --- | --- |
-| `/overview/stream` | Connector overview + download state |
+| `/overview/stream` | Connector overview, registration results, download state and pending restarts |
 | `/downloads/stream` | Every persisted download change |
 | `/transfers/stream` | Running uploads and downloads, every second while any run |
-| `/config/stream` | Peer and server config changes |
+| `/config/stream` | Peer and server config changes, and each server's registration results |
 
 Each sends its current snapshot immediately on connect, then a full snapshot per
 change, with no deltas to reassemble. A `ping` event every 15 seconds keeps idle

@@ -526,6 +526,95 @@ describe('Auto-registration', () => {
     expect(putBody.id).toBe(3)
   })
 
+  test('a changed internal URL updates jack\'s indexer in place: exactly one Jack indexer, at the new address', async () => {
+    // A Radarr that keeps its indexers, next to one of the user's own.
+    let nextId = 2
+    let indexers: any[] = [{ id: 1, name: 'MyTracker', implementation: 'Torznab', fields: [{ name: 'baseUrl', value: 'https://tracker.example/api' }] }]
+    server.use(
+      http.get(`${RADARR_URL}/api/v3/indexer`, () => HttpResponse.json(indexers)),
+      http.post(`${RADARR_URL}/api/v3/indexer`, async ({ request }) => {
+        const created = { ...(await request.json() as object), id: nextId++ }
+        indexers.push(created)
+        return HttpResponse.json(created)
+      }),
+      http.put(`${RADARR_URL}/api/v3/indexer/:id`, async ({ request, params }) => {
+        const updated = await request.json() as { id: number }
+        indexers = indexers.map(idx => (String(idx.id) === String(params.id) ? updated : idx))
+        return HttpResponse.json(updated)
+      }),
+    )
+
+    const radarr = markInitialized(makeRadarr())
+    const register = (internalUrl: string) => radarr.registerIndexer({ name: 'Jack', internalUrl, apiKey: 'k', priority: 1, categories: [2000] })
+    await register('http://jack:5225/torznab')
+    await register('http://192.168.1.10:5225/torznab')
+
+    const jack = indexers.filter(idx => idx.name === 'Jack')
+    expect(jack).toHaveLength(1)
+    expect(jack[0].fields).toContainEqual({ name: 'baseUrl', value: 'http://192.168.1.10:5225/torznab' })
+    expect(indexers.map(idx => idx.name)).toEqual(['MyTracker', 'Jack'])
+  })
+
+  test('disableUnboundIndexer turns off a Jack indexer with no download client, and leaves a bound one alone', async () => {
+    const puts: any[] = []
+    let indexers: any[] = [{ id: 4, name: 'Jack', implementation: 'Torznab', downloadClientId: 0, enableRss: true, enableAutomaticSearch: true, enableInteractiveSearch: true, fields: [{ name: 'baseUrl', value: 'http://jack:5225/torznab' }, { name: 'apiKey', value: '********' }] }]
+    server.use(
+      http.get(`${RADARR_URL}/api/v3/indexer`, () => HttpResponse.json(indexers)),
+      http.put(`${RADARR_URL}/api/v3/indexer/:id`, async ({ request }) => {
+        puts.push({ url: request.url, body: await request.json() })
+        return HttpResponse.json({})
+      }),
+    )
+    const radarr = markInitialized(makeRadarr())
+
+    // Matched by name, so an indexer left at an older address is found too.
+    expect(await radarr.disableUnboundIndexer('Jack', 'http://192.168.1.10:5225/torznab')).toBe(true)
+    expect(puts).toHaveLength(1)
+    expect(new URL(puts[0].url).pathname).toBe('/api/v3/indexer/4')
+    expect(new URL(puts[0].url).searchParams.get('forceSave')).toBe('true')
+    expect(puts[0].body).toMatchObject({ id: 4, enableRss: false, enableAutomaticSearch: false, enableInteractiveSearch: false, fields: indexers[0].fields })
+
+    indexers = [{ ...indexers[0], downloadClientId: 7 }]
+    expect(await radarr.disableUnboundIndexer('Jack', 'http://jack:5225/torznab')).toBe(false)
+    indexers = [{ ...indexers[0], downloadClientId: 0, enableRss: false, enableAutomaticSearch: false, enableInteractiveSearch: false }]
+    expect(await radarr.disableUnboundIndexer('Jack', 'http://jack:5225/torznab')).toBe(false)
+    indexers = []
+    expect(await radarr.disableUnboundIndexer('Jack', 'http://jack:5225/torznab')).toBe(false)
+    expect(puts).toHaveLength(1)
+  })
+
+  test('testDownloadClient posts jack\'s client to *arr\'s test and reports its validation failures', async () => {
+    let tested: any = null
+    server.use(
+      http.get(`${RADARR_URL}/api/v3/downloadclient`, () => HttpResponse.json([{ id: 5, name: 'Other' }, { id: 7, name: 'Jack', fields: [{ name: 'password', value: '********' }] }])),
+      http.post(`${RADARR_URL}/api/v3/downloadclient/test`, async ({ request }) => {
+        tested = await request.json()
+        return HttpResponse.json([{ propertyName: 'Host', errorMessage: 'Unable to connect to qBittorrent', detailedDescription: 'Name or service not known (jack:5225)', severity: 'error' }], { status: 400 })
+      }),
+    )
+
+    const result = await markInitialized(makeRadarr()).testDownloadClient('Jack')
+    expect(tested.id).toBe(7)
+    expect(result).toEqual({ status: 'failed', failures: [{ message: 'Unable to connect to qBittorrent', detail: 'Name or service not known (jack:5225)', warning: false }] })
+  })
+
+  test('testIndexer passes on an empty 200 and on warnings, and reports a missing indexer', async () => {
+    const radarr = markInitialized(makeRadarr())
+    const jackIndexer = { id: 3, name: 'Jack', implementation: 'Torznab', fields: [{ name: 'baseUrl', value: 'http://jack:5225/torznab' }] }
+
+    server.use(
+      http.get(`${RADARR_URL}/api/v3/indexer`, () => HttpResponse.json([jackIndexer])),
+      http.post(`${RADARR_URL}/api/v3/indexer/test`, () => new HttpResponse(null, { status: 200 })),
+    )
+    expect(await radarr.testIndexer('Jack', 'http://jack:5225/torznab')).toEqual({ status: 'ok', warnings: [] })
+
+    server.use(http.post(`${RADARR_URL}/api/v3/indexer/test`, () => HttpResponse.json([{ errorMessage: 'Slow', isWarning: true }], { status: 400 })))
+    expect(await radarr.testIndexer('Jack', 'http://jack:5225/torznab')).toEqual({ status: 'ok', warnings: [{ message: 'Slow', warning: true }] })
+
+    server.use(http.get(`${RADARR_URL}/api/v3/indexer`, () => HttpResponse.json([])))
+    expect(await radarr.testIndexer('Jack', 'http://jack:5225/torznab')).toEqual({ status: 'missing' })
+  })
+
   test('registerDownloadClient registers at lowest priority and clears tags (so the general pool never picks Jack)', async () => {
     let putBody: any = null
     server.use(

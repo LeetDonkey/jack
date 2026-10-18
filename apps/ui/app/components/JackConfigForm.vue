@@ -56,11 +56,16 @@ function validate(s: typeof state): FormError[] {
 
 function onSubmit() {
   const input: JackConfig = { internalUrl: state.internalUrl.trim() }
-  // SecretInput emits null when cleared → omit the key entirely (optional).
+  // PATCH merges: an absent key keeps the stored value, so a key the user
+  // cleared (SecretInput emits null) is sent as null to remove it.
   if (state.apiKey)
     input.apiKey = state.apiKey
+  else if (props.initial?.apiKey)
+    input.apiKey = null
   if (state.tmdbApiKey)
     input.tmdbApiKey = state.tmdbApiKey
+  else if (props.initial?.tmdbApiKey)
+    input.tmdbApiKey = null
   emit('submit', input)
 }
 </script>
@@ -150,7 +155,7 @@ function onSubmit() {
 
     <div class="flex flex-wrap items-center justify-end gap-2 pt-2">
       <p class="mr-auto text-xs text-muted">
-        Changes apply after you restart the jack container.
+        The address applies right away. Keys apply after you restart the jack container.
       </p>
       <UButton type="submit" :loading="submitting" :label="submitting ? 'Saving…' : 'Save'" />
     </div>

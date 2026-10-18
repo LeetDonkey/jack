@@ -48,6 +48,10 @@ interface AppServices {
   /** Temporary bans for addresses that keep failing authentication (fail2ban). */
   bans?: BanList
   trustedProxies?: () => readonly string[] | null | undefined
+  /** jack.internalUrl as stored now; defaults to the boot config. */
+  internalUrl?: () => string
+  /** Called with the destination id whenever its Radarr/Sonarr authenticates (Torznab or qBittorrent). */
+  onArrContact?: (destinationId: string) => void
 }
 
 // This is the external surface, gated per audience rather than by one global key:
@@ -102,6 +106,7 @@ export function getApp(envs: Envs, config: AppConfig, connManager: { servers: Co
       repository: services.downloadsRepository,
       downloadsService: services.downloadsService,
       managedKeysRepository: services.managedKeysRepository,
+      onContact: services.onArrContact,
     })
     app.route('/api/v2', getQbittorrentRouter(qbController))
   }
@@ -110,7 +115,7 @@ export function getApp(envs: Envs, config: AppConfig, connManager: { servers: Co
   // Peer scope: other Jacks present regular api_keys. *arr scope: the operator's
   // Radarr/Sonarr present the managed key Jack registered with them.
   const peerAuth = requireApiKey(masterKey, { type: 'api_key', repository: services.apiKeysRepository })
-  const arrAuth = requireApiKey(masterKey, { type: 'managed_key', repository: services.managedKeysRepository })
+  const arrAuth = requireApiKey(masterKey, { type: 'managed_key', repository: services.managedKeysRepository, onAuthenticated: services.onArrContact })
 
   // Peer handshake — other Jacks probe this at init to read our identity and
   // protocol version, then check it against their minimum compatible version.
@@ -137,7 +142,7 @@ export function getApp(envs: Envs, config: AppConfig, connManager: { servers: Co
   // download router. Returns empty results when there are no peers to fan out to.
   const torznabController = new TorznabController(
     () => connManager.peers,
-    config.jack,
+    services.internalUrl ?? (() => config.jack.internalUrl),
     services.torznabConfig,
     id => connManager.servers.find(s => s.id === id && s.canDestination),
   )

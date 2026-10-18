@@ -1,9 +1,31 @@
 import type { ArrServerConnector } from '../../lib/servers/arr/base'
 import type { ServerConnector } from '../../lib/servers/base'
 import type { PeerConnector } from '../../lib/servers/peer'
+import type { DestinationRegistration, RegistrationService, RegistrationStatus } from '../registration/registration.service'
 import type { ConfigService } from './config.service'
 import { z } from 'zod'
 import { BadRequestError } from '../../lib/errors/BadRequestError'
+import { NotFoundError } from '../../lib/errors/NotFoundError'
+import { serverRegistrationFields } from '../registration/registration.service'
+
+// How long a save or a register request waits for the registration. The *arr's
+// tests can take up to 45 s, and a run can wait behind others; a longer wait would
+// run into the management server's 60 s idle timeout and the 60 s default of a
+// reverse proxy in front of jack-ui. After it the request answers with
+// `registrationPending` and the result arrives on /config/stream and
+// /overview/stream.
+const DEFAULT_REGISTRATION_WAIT_MS = 25_000
+
+export interface ConfigControllerOptions {
+  /** How long a request waits for a registration before answering without it. */
+  registrationWaitMs?: number
+}
+
+/** A registration a request waited for, or `registrationPending` when it took too long. */
+export interface RegistrationAnswer {
+  registration: DestinationRegistration | null
+  registrationPending: boolean
+}
 
 function stringifyConnector(c: ServerConnector) {
   return {
@@ -16,7 +38,7 @@ function stringifyConnector(c: ServerConnector) {
   }
 }
 
-function stringifyServer(c: ArrServerConnector) {
+function stringifyServer(c: ArrServerConnector, status?: RegistrationStatus) {
   return {
     ...stringifyConnector(c),
     source: c.canSource,
@@ -25,6 +47,7 @@ function stringifyServer(c: ArrServerConnector) {
     // actually in effect, not just what the file happened to spell out.
     autoregister: { enable: c.autoRegister.enable, priority: c.autoRegister.priority },
     upgrades: { allow: c.upgrades.allow, maxSizeGiB: c.upgrades.maxSizeGiB ?? null },
+    ...serverRegistrationFields(c, status),
   }
 }
 
@@ -36,12 +59,31 @@ export class ConfigController {
   constructor(
     private readonly connectors: { servers: ArrServerConnector[], peers: PeerConnector[], subscribe?: (subscriber: () => void) => () => void },
     private readonly configService?: ConfigService,
+    private readonly registrations?: Pick<RegistrationService, keyof RegistrationStatus | 'ensureRegistrable' | 'register'>,
+    private readonly options: ConfigControllerOptions = {},
   ) {}
+
+  private async awaitRegistration(run: Promise<DestinationRegistration | null>): Promise<RegistrationAnswer> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const deadline = new Promise<'pending'>((resolve) => {
+      timer = setTimeout(resolve, this.options.registrationWaitMs ?? DEFAULT_REGISTRATION_WAIT_MS, 'pending')
+    })
+    try {
+      const result = await Promise.race([run, deadline])
+      return result === 'pending'
+        ? { registration: null, registrationPending: true }
+        : { registration: result, registrationPending: false }
+    }
+    finally {
+      clearTimeout(timer)
+    }
+  }
 
   subscribe(subscriber: () => void): () => void {
     const unsubscribers = [
       this.connectors.subscribe?.(subscriber),
       this.configService?.subscribe(subscriber),
+      this.registrations?.subscribe(subscriber),
     ].filter((unsubscribe): unsubscribe is () => void => Boolean(unsubscribe))
     return () => {
       for (const unsubscribe of unsubscribers)
@@ -62,7 +104,7 @@ export class ConfigController {
 
   listConfig() {
     return {
-      servers: this.connectors.servers.map(s => this.withSecrets('servers', stringifyServer(s))),
+      servers: this.connectors.servers.map(s => this.withSecrets('servers', stringifyServer(s, this.registrations))),
       peers: this.connectors.peers.map(p => this.withSecrets('peers', stringifyPeer(p))),
     }
   }
@@ -72,7 +114,31 @@ export class ConfigController {
   }
 
   listServers() {
-    return { servers: this.connectors.servers.map(s => this.withSecrets('servers', stringifyServer(s))) }
+    return { servers: this.connectors.servers.map(s => this.withSecrets('servers', stringifyServer(s, this.registrations))) }
+  }
+
+  /** Whether POST /servers/:id/register is available (a registration service was injected). */
+  get canRegister() {
+    return this.registrations !== undefined
+  }
+
+  /** Register jack in one server now (queued behind any running registration). */
+  async registerServer(id: string): Promise<{ ok: true } & RegistrationAnswer> {
+    if (!this.registrations)
+      throw new Error('Registering requires a registration service')
+    const server = this.connectors.servers.find(s => s.id === id)
+    if (!server)
+      throw new NotFoundError(`No server found with id "${id}"`)
+    await this.registrations.ensureRegistrable(server)
+    const answer = await this.awaitRegistration(this.registrations.register(server))
+    if (!answer.registration && !answer.registrationPending) {
+      // The server was removed or changed while the registration waited its turn.
+      const live = this.connectors.servers.find(s => s.id === id)
+      if (!live)
+        throw new NotFoundError(`No server found with id "${id}"`)
+      throw new BadRequestError(`${live.name} was changed while the registration waited, and jack no longer registers itself there`)
+    }
+    return { ok: true, ...answer }
   }
 
   /** Refs-intact jack config for an edit form, or null when unset / read-only. */
@@ -93,17 +159,21 @@ export class ConfigController {
   // Single funnel for every mutation: guarantees a service is present and maps a Zod
   // validation failure to a 400. The router only mounts mutation routes when
   // `canMutate`, so the guard here is defensive — direct callers still get a clear error.
-  private async mutate(run: (service: ConfigService) => Promise<void>) {
+  private async run<T>(run: (service: ConfigService) => Promise<T>): Promise<T> {
     if (!this.configService)
       throw new Error('Config mutations require a configured ConfigService')
     try {
-      await run(this.configService)
+      return await run(this.configService)
     }
     catch (err) {
       if (err instanceof z.ZodError)
         throw new BadRequestError(z.prettifyError(err))
       throw err
     }
+  }
+
+  private async mutate(run: (service: ConfigService) => Promise<unknown>) {
+    await this.run(run)
     return { ok: true }
   }
 
@@ -119,16 +189,20 @@ export class ConfigController {
     return this.mutate(s => s.updatePeer(id, input, opts))
   }
 
-  addServer(input: unknown) {
-    return this.mutate(s => s.addServer(input))
+  // Both answer once jack is registered in the saved server (see onServerSaved),
+  // or with `registrationPending` when that takes too long.
+  async addServer(input: unknown): Promise<{ ok: true } & RegistrationAnswer> {
+    const { registration } = await this.run(s => s.addServer(input))
+    return { ok: true, ...await this.awaitRegistration(registration) }
   }
 
   removeServer(id: string) {
     return this.mutate(s => s.removeServer(id))
   }
 
-  updateServer(id: string, input: unknown) {
-    return this.mutate(s => s.updateServer(id, input))
+  async updateServer(id: string, input: unknown): Promise<{ ok: true } & RegistrationAnswer> {
+    const { registration } = await this.run(s => s.updateServer(id, input))
+    return { ok: true, ...await this.awaitRegistration(registration) }
   }
 
   updateJack(input: unknown) {

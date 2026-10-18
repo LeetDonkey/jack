@@ -7,7 +7,9 @@ import type { ImportWatcher } from './modules/downloads/import-watcher'
 import type { PeerHealthMonitor } from './modules/friends/peer-health'
 import type { IntroductionsService } from './modules/introductions/introductions.service'
 import type { NotificationsService } from './modules/notifications/notifications.service'
+import type { RegistrationService } from './modules/registration/registration.service'
 import type { BanList } from './modules/security/ban-list'
+import type { SystemStatus } from './modules/status/status.controller'
 import type { TransfersService } from './modules/transfers/transfers.service'
 import { Hono } from 'hono'
 import { describeRoute, openAPIRouteHandler, resolver } from 'hono-openapi'
@@ -54,6 +56,12 @@ export function getManagementApp(params: {
   notifications?: NotificationsService
   introductions?: IntroductionsService
   bans?: BanList
+  /** Registration results per server, plus POST /config/servers/:id/register. */
+  registrations?: RegistrationService
+  /** How long server saves and POST /config/servers/:id/register wait for the registration (default 25 s). */
+  registrationWaitMs?: number
+  /** overview.system: boot time and settings waiting for a restart. */
+  system?: () => SystemStatus
 }) {
   const app = new Hono()
 
@@ -79,10 +87,16 @@ export function getManagementApp(params: {
     },
   }), c => c.json({ ok: true }))
 
-  const configController = new ConfigController(params.connectors, params.configService)
+  const configController = new ConfigController(params.connectors, params.configService, params.registrations, { registrationWaitMs: params.registrationWaitMs })
   app.route('/config', getConfigRouter(configController))
 
-  const statusController = new StatusController(params.connectors, params.downloadsRepository)
+  const configService = params.configService
+  const statusController = new StatusController(params.connectors, params.downloadsRepository, {
+    registrations: params.registrations,
+    system: params.system,
+    // restartPending changes with every config save.
+    subscriptions: configService ? [subscriber => configService.subscribe(subscriber)] : [],
+  })
   app.route('/', getStatusRouter(statusController))
 
   app.route('/downloads', getDownloadsManagementRouter(new DownloadsManagementController(

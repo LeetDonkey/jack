@@ -18,6 +18,8 @@ export interface QbittorrentControllerDeps {
   repository: DownloadsRepository
   downloadsService?: DownloadsService
   managedKeysRepository?: ManagedKeysRepository
+  /** Called with the server id on every login and every request with a valid session. */
+  onContact?: (serverId: string) => void
 }
 
 // Matches a jack download URL path: /torznab/download/<peerId:itemId>.torrent
@@ -39,7 +41,16 @@ export class QbittorrentController {
       return null
     if (!this.isValidPassword(password, server.id))
       return null
+    this.deps.onContact?.(server.id)
     return this.sessions.create({ serverName: server.name, serverId: server.id })
+  }
+
+  /** The session for a SID cookie, or null. A hit counts as contact from that *arr. */
+  session(sid: string | undefined): QbSession | null {
+    const session = this.sessions.get(sid)
+    if (session)
+      this.deps.onContact?.(session.serverId)
+    return session
   }
 
   // The download client accepts only the master key and managed keys — the same

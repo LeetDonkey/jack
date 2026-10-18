@@ -15,6 +15,7 @@ variables, see [`apps/ui/README.md`](https://github.com/roziscoding/jack/blob/ma
 | [`PORT`](#port) | Public listener port |
 | [`ENVIRONMENT`](#environment) | Pretty vs JSON logs |
 | [`APP_CONFIG_PATH`](#app-config-path) | Config file location |
+| [`JACK_INTERNAL_URL`](#jack-internal-url) | Internal URL for a new config file |
 | [`HTTP_TIMEOUT_MS`](#http-timeout-ms) | Outbound request timeout |
 | [`JACK_MANAGEMENT_KEY`](#jack-management-key) | Enables + guards the management API |
 | [`MANAGEMENT_PORT`](#management-port) | Management listener port |
@@ -52,6 +53,18 @@ Port for the public HTTP listener (peer API, Torznab, qBittorrent).
 
 Path to the [configuration file](/reference/configuration). Written with a
 default config on first boot if it doesn't exist.
+
+### `JACK_INTERNAL_URL`
+
+**Type:** `string`\
+**Format:** `http`/`https` URL; `http://` is added when the scheme is missing\
+**Default:** `http://jack:5225`
+
+The [`jack.internalUrl`](/reference/configuration#jack-internalurl) written
+into the default config file, for example `http://192.168.1.10:5225`. jack
+reads it only when it creates that file. To change the address later, use
+***Settings*** in the management UI. A value that isn't an http(s) URL is
+logged and ignored.
 
 ### `HTTP_TIMEOUT_MS`
 
@@ -173,6 +186,7 @@ Service name attached to emitted telemetry.
 PORT=5225
 ENVIRONMENT=production
 APP_CONFIG_PATH=/config/config.jsonc
+JACK_INTERNAL_URL=http://192.168.1.10:5225
 HTTP_TIMEOUT_MS=30000
 
 JACK_MANAGEMENT_KEY=change-me-to-something-long-and-random

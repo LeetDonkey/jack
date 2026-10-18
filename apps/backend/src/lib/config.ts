@@ -7,6 +7,7 @@ import { jsonc } from 'jsonc'
 import z from 'zod'
 import { logger } from '../logger'
 import { atomicWriteFile } from './atomic-write'
+import { isWritableDirectory } from './fs-checks'
 
 const TRAILING_LINE_ENDINGS = /[\r\n]+$/
 
@@ -253,6 +254,18 @@ export const RawJackConfig = z.object({
 })
 
 export type RawJackConfig = z.infer<typeof RawJackConfig>
+
+// PATCH body for the jack block, merged onto the stored block: an absent key keeps
+// its value and `null` removes it. `internalUrl` has no default, so it can't be
+// removed (the same rule as downloads.completedPath).
+export const RawJackConfigPatch = z.object({
+  internalUrl: z.url().optional(),
+  apiKey: RawConfigSecret.nullish(),
+  tmdbApiKey: RawConfigSecret.nullish(),
+  external: RawExternalJackConfig.nullish(),
+})
+
+export type RawJackConfigPatch = z.infer<typeof RawJackConfigPatch>
 
 export const DownloadsConfig = z.object({
   completedPath: z.string().min(1),
@@ -512,49 +525,94 @@ export function migrateConfig(rawConfigObject: unknown) {
   }, configObject)
 }
 
-const DEFAULT_APP_CONFIG: z.input<typeof AppConfig> = {
-  version: MIGRATIONS.length,
-  jack: {
-    internalUrl: 'http://jack:5225',
-  },
-  servers: [],
-  peers: [],
-}
+export const DEFAULT_INTERNAL_URL = 'http://jack:5225'
+// Where the Unraid template mounts the downloads folder.
+export const DEFAULT_DOWNLOADS_PATH = '/data/jack'
 
 const EMPTY_APP_CONFIG: AppConfig = {
   version: MIGRATIONS.length,
   // jack is required; the resolved fallback carries only an internalUrl (no master key —
   // auto-registration provisions its own managed keys).
-  jack: { internalUrl: 'http://jack:5225' },
+  jack: { internalUrl: DEFAULT_INTERNAL_URL },
   servers: [],
   peers: [],
 }
 
-async function createDefaultAppConfig(path: string) {
-  const configFileExists = await fs.exists(path)
-  if (!configFileExists) {
-    await fs.writeFile(path, jsonc.stringify(DEFAULT_APP_CONFIG, { space: 2 }))
+const URL_SCHEME = /^[a-z][a-z\d+.-]*:\/\//i
+const TRAILING_SLASHES = /\/+$/
+const HTTP_PROTOCOL = /^https?$/
+
+/**
+ * The JACK_INTERNAL_URL value as a config URL: `http://` is added when no scheme is
+ * given, trailing slashes are dropped. Undefined (with a warning) when it still
+ * isn't an http(s) URL, so jack falls back to the default instead of failing to start.
+ */
+export function internalUrlFromEnv(value: string | undefined): string | undefined {
+  const trimmed = value?.trim()
+  if (!trimmed)
+    return undefined
+  const candidate = (URL_SCHEME.test(trimmed) ? trimmed : `http://${trimmed}`).replace(TRAILING_SLASHES, '')
+  const parsed = z.url({ protocol: HTTP_PROTOCOL }).safeParse(candidate)
+  if (parsed.success)
+    return parsed.data
+  logger.warn({ JACK_INTERNAL_URL: value }, `JACK_INTERNAL_URL is not an http(s) URL; using ${DEFAULT_INTERNAL_URL}`)
+  return undefined
+}
+
+export interface DefaultAppConfigOptions {
+  /** Seeds jack.internalUrl (JACK_INTERNAL_URL). */
+  internalUrl?: string
+  /** Turned into downloads.completedPath when it is a writable folder. */
+  downloadsPath?: string
+}
+
+/**
+ * The config a first start writes. Downloads start on when the downloads folder
+ * (`/data/jack` in the Unraid template) exists and jack can write to it.
+ */
+export async function buildDefaultAppConfig({ internalUrl, downloadsPath = DEFAULT_DOWNLOADS_PATH }: DefaultAppConfigOptions = {}): Promise<z.input<typeof AppConfig>> {
+  const downloads = await isWritableDirectory(downloadsPath) ? { completedPath: downloadsPath } : undefined
+  return {
+    version: MIGRATIONS.length,
+    jack: { internalUrl: internalUrlFromEnv(internalUrl) ?? DEFAULT_INTERNAL_URL },
+    ...(downloads ? { downloads } : {}),
+    servers: [],
+    peers: [],
   }
 }
 
-export async function getAppConfig({ APP_CONFIG_PATH }: Pick<Envs, 'APP_CONFIG_PATH'>): Promise<{ appConfig: AppConfig, raw: z.input<typeof AppConfig> }> {
+/** Write the default config to `path` unless a file is already there. Returns what was written, or null. */
+export async function createDefaultAppConfig(path: string, options: DefaultAppConfigOptions = {}): Promise<z.input<typeof AppConfig> | null> {
+  if (await fs.exists(path))
+    return null
+  const config = await buildDefaultAppConfig(options)
+  await fs.writeFile(path, jsonc.stringify(config, { space: 2 }))
+  logger.info({ internalUrl: config.jack.internalUrl, completedPath: config.downloads?.completedPath ?? null }, 'Wrote the default config')
+  return config
+}
+
+export async function getAppConfig(
+  { APP_CONFIG_PATH, JACK_INTERNAL_URL }: Pick<Envs, 'APP_CONFIG_PATH'> & Partial<Pick<Envs, 'JACK_INTERNAL_URL'>>,
+  { downloadsPath }: Pick<DefaultAppConfigOptions, 'downloadsPath'> = {},
+): Promise<{ appConfig: AppConfig, raw: z.input<typeof AppConfig> }> {
   const configFileExists = await fs.exists(APP_CONFIG_PATH)
 
   if (!configFileExists) {
     logger.warn(`Config file not found at ${APP_CONFIG_PATH}. Creating default config file...`)
-    await createDefaultAppConfig(APP_CONFIG_PATH)
+    const defaults = await createDefaultAppConfig(APP_CONFIG_PATH, { internalUrl: JACK_INTERNAL_URL, downloadsPath })
+      ?? await buildDefaultAppConfig({ internalUrl: JACK_INTERNAL_URL, downloadsPath })
 
-    const defaultConfig = AppConfig.safeParse(DEFAULT_APP_CONFIG)
+    const defaultConfig = AppConfig.safeParse(defaults)
     if (defaultConfig.success)
-      return { appConfig: defaultConfig.data, raw: DEFAULT_APP_CONFIG }
+      return { appConfig: defaultConfig.data, raw: defaults }
 
     // The runtime config is empty (the referenced secrets can't be resolved yet),
-    // but `raw` must mirror what we just wrote to disk — DEFAULT_APP_CONFIG, jack
+    // but `raw` must mirror what we just wrote to disk — the default config, jack
     // template included. Seeding ConfigService with EMPTY_APP_CONFIG instead would
     // make the first management mutation persist a config without the jack template,
     // silently clobbering the file that createDefaultAppConfig just created.
     logger.warn('Default config references environment variables that are not set. Starting with an empty config until they are provided.')
-    return { appConfig: EMPTY_APP_CONFIG, raw: DEFAULT_APP_CONFIG }
+    return { appConfig: EMPTY_APP_CONFIG, raw: defaults }
   }
 
   logger.debug(`Loading config file from ${APP_CONFIG_PATH}`)

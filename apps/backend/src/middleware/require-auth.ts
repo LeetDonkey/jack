@@ -23,7 +23,12 @@ export interface AuthVariables {
 // master-key-only (locking out every peer / *arr), so we make that impossible to wire.
 export type ApiKeyScope
   = | { type: 'api_key', repository: ApiKeysRepository }
-    | { type: 'managed_key', repository: ManagedKeysRepository }
+    | {
+      type: 'managed_key'
+      repository: ManagedKeysRepository
+      /** Called with the destination a managed key belongs to, on every request it authenticates. */
+      onAuthenticated?: (destinationId: string) => void
+    }
 
 export function requireApiKey(masterKey: string, scope: ApiKeyScope) {
   return createMiddleware<{ Variables: AuthVariables }>(async (ctx, next) => {
@@ -49,6 +54,7 @@ export function requireApiKey(masterKey: string, scope: ApiKeyScope) {
       if (managed) {
         ctx.set('apiKeyName', 'managed')
         ctx.set('destinationId', managed.serverId)
+        scope.onAuthenticated?.(managed.serverId)
         return next()
       }
       throw new UnauthorizedError('invalid API key')

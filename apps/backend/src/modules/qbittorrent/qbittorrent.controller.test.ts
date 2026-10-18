@@ -66,4 +66,24 @@ describe('QbittorrentController.login', () => {
   test('with no main key, an unknown password is rejected (no longer open)', () => {
     expect(controller('').login('Radarr', 'whatever')).toBeNull()
   })
+
+  test('a login and every request on its session count as contact from that server', () => {
+    const contacts: string[] = []
+    const qb = new QbittorrentController({
+      apiKey: '',
+      completedPath: '/tmp',
+      servers: [RADARR, SONARR],
+      repository: downloads,
+      managedKeysRepository: managed,
+      onContact: id => contacts.push(id),
+    })
+    const key = generateManagedKey()
+    managed.create({ keyHash: hashKey(key), serverId: 'srv-a' })
+
+    expect(qb.login('Radarr', 'wrong')).toBeNull()
+    const sid = qb.login('Radarr', key)
+    expect(qb.session(sid!)?.serverId).toBe('srv-a')
+    expect(qb.session('unknown-sid')).toBeNull()
+    expect(contacts).toEqual(['srv-a', 'srv-a'])
+  })
 })
