@@ -121,3 +121,42 @@ describe('Semaphore', () => {
     expect(() => new Semaphore(1).setPermits(0)).toThrow()
   })
 })
+
+describe('Semaphore pause', () => {
+  test('a paused semaphore admits nobody new; holders keep their permits', async () => {
+    const sem = new Semaphore(2)
+    await sem.acquire()
+    sem.setPaused(true)
+    expect(sem.isPaused).toBe(true)
+    let admitted = 0
+    const waiters = [sem.acquire().then(() => admitted++), sem.acquire().then(() => admitted++)]
+    await Bun.sleep(5)
+    expect(admitted).toBe(0)
+
+    // A release while paused returns the permit instead of handing it on.
+    sem.release()
+    await Bun.sleep(5)
+    expect(admitted).toBe(0)
+
+    sem.setPaused(false)
+    await Promise.all(waiters)
+    expect(admitted).toBe(2)
+  })
+
+  test('waiters keep their order across a pause, and an aborted waiter leaves the queue', async () => {
+    const sem = new Semaphore(1)
+    sem.setPaused(true)
+    const order: number[] = []
+    const controller = new AbortController()
+    const first = sem.acquire().then(() => order.push(1))
+    const aborted = sem.acquire(controller.signal).catch(() => order.push(-1))
+    controller.abort(new Error('cancelled'))
+    await aborted
+    const second = sem.acquire().then(() => order.push(2))
+    sem.setPaused(false)
+    await first
+    sem.release()
+    await second
+    expect(order).toEqual([-1, 1, 2])
+  })
+})

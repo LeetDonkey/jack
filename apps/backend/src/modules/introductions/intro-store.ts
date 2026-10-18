@@ -52,6 +52,10 @@ const SCHEMA = [
     request_id text primary key, direction text not null, peer_id text not null, peer_name text not null,
     peer_key text not null, via_id text not null, via_name text not null, state text not null,
     messages text not null default '[]', api_key_id integer, created_at text not null, updated_at text not null)`,
+  // The identity each of our peers last reported, so the friends view and ended
+  // threads still know it while that peer is down (after a restart, say).
+  `create table if not exists intro_peer_identities (
+    peer_id text primary key, identity_id text not null, seen_at text not null)`,
 ]
 
 interface ThreadRow {
@@ -131,6 +135,48 @@ export class IntroStore {
 
   boundIdentities(): string[] {
     return this.sqlite.query<{ identity_id: string }, []>('select identity_id from intro_bindings').all().map(r => r.identity_id)
+  }
+
+  /** Every pinned key, with the identity it speaks for. */
+  bindings(): Array<{ apiKeyId: number, identityId: string, boundAt: string }> {
+    const rows = this.sqlite.query<{ api_key_id: number, identity_id: string, bound_at: string }, []>('select api_key_id, identity_id, bound_at from intro_bindings').all()
+    return rows.map(r => ({ apiKeyId: r.api_key_id, identityId: r.identity_id, boundAt: r.bound_at }))
+  }
+
+  /** Forget a revoked key's identity, so it no longer counts as a way to reach that jack. */
+  unbind(apiKeyId: number): void {
+    this.sqlite.query('delete from intro_bindings where api_key_id = ?').run(apiKeyId)
+  }
+
+  /** Remember the identity a peer reported, or forget it (null: the peer answered that it has none). */
+  setPeerIdentity(peerId: string, identityId: string | null): void {
+    if (identityId == null) {
+      this.forgetPeer(peerId)
+      return
+    }
+    this.sqlite.query('insert into intro_peer_identities (peer_id, identity_id, seen_at) values (?, ?, ?) on conflict (peer_id) do update set identity_id = excluded.identity_id, seen_at = excluded.seen_at')
+      .run(peerId, identityId, this.stamp())
+  }
+
+  /** The identity a peer last reported, or null when it never did. */
+  peerIdentity(peerId: string): string | null {
+    return this.sqlite.query<{ identity_id: string }, [string]>('select identity_id from intro_peer_identities where peer_id = ?').get(peerId)?.identity_id ?? null
+  }
+
+  /** A peer's id changed with its url: it is still the same jack until it reports otherwise. */
+  movePeer(oldPeerId: string, newPeerId: string): void {
+    if (oldPeerId === newPeerId)
+      return
+    this.sqlite.transaction(() => {
+      // What the new id already reported (a sync got there first) wins.
+      this.sqlite.query('insert or ignore into intro_peer_identities (peer_id, identity_id, seen_at) select ?, identity_id, seen_at from intro_peer_identities where peer_id = ?')
+        .run(newPeerId, oldPeerId)
+      this.forgetPeer(oldPeerId)
+    })()
+  }
+
+  forgetPeer(peerId: string): void {
+    this.sqlite.query('delete from intro_peer_identities where peer_id = ?').run(peerId)
   }
 
   queue(envelope: IntroEnvelope): void {

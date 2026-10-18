@@ -22,13 +22,18 @@ export interface AuthVariables {
 // required: a scope that can't validate its own key class would silently degrade to
 // master-key-only (locking out every peer / *arr), so we make that impossible to wire.
 export type ApiKeyScope
-  = | { type: 'api_key', repository: ApiKeysRepository }
-    | {
-      type: 'managed_key'
-      repository: ManagedKeysRepository
-      /** Called with the destination a managed key belongs to, on every request it authenticates. */
-      onAuthenticated?: (destinationId: string) => void
-    }
+  = | {
+    type: 'api_key'
+    repository: ApiKeysRepository
+    /** Called with the api_key row id on every request it authenticates (not for the master key). */
+    onAuthenticated?: (apiKeyId: number) => void
+  }
+  | {
+    type: 'managed_key'
+    repository: ManagedKeysRepository
+    /** Called with the destination a managed key belongs to, on every request it authenticates. */
+    onAuthenticated?: (destinationId: string) => void
+  }
 
 export function requireApiKey(masterKey: string, scope: ApiKeyScope) {
   return createMiddleware<{ Variables: AuthVariables }>(async (ctx, next) => {
@@ -76,6 +81,7 @@ export function requireApiKey(masterKey: string, scope: ApiKeyScope) {
 
     ctx.set('apiKeyName', resolution.row.name ?? 'unnamed')
     ctx.set('apiKeyId', resolution.row.id)
+    scope.onAuthenticated?.(resolution.row.id)
     return next()
   })
 }

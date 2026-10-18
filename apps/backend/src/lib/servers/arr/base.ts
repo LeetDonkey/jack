@@ -113,6 +113,27 @@ export function findJackIndexer(indexers: unknown, name: string, baseUrl: string
   return named.find(idx => hasBaseUrl(idx, baseUrl)) ?? named[0] ?? indexers.find(idx => hasBaseUrl(idx, baseUrl))
 }
 
+/**
+ * Up to `limit` values, one per root folder first (so a second library folder
+ * is checked too), then the rest in order. Items without a value are skipped.
+ */
+export function pickSamples<T>(items: Array<{ root: string | null, value: T | null | undefined }>, limit: number): T[] {
+  const usable = items.filter((item): item is { root: string | null, value: T } => item.value != null)
+  const picked: T[] = []
+  const roots = new Set<string | null>()
+  for (const item of usable) {
+    if (picked.length < limit && !roots.has(item.root)) {
+      roots.add(item.root)
+      picked.push(item.value)
+    }
+  }
+  for (const item of usable) {
+    if (picked.length < limit && !picked.includes(item.value))
+      picked.push(item.value)
+  }
+  return picked
+}
+
 export function basename(path: string): string {
   return path.split(BASENAME_SEPARATOR_REGEX).pop() ?? path
 }
@@ -274,11 +295,48 @@ export abstract class ArrServerConnector extends ServerConnector {
   @requiresDestination
   @requiresInitialization
   async getRootFolders(): Promise<Array<{ path: string, freeSpace?: number }>> {
-    const folders = await this.arrGet<Array<{ path: string, freeSpace?: number }>>('/api/v3/rootfolder')
+    return this.rootFolders()
+  }
+
+  /** The library's root folders, whatever the role (the folder check reads a source's too). */
+  @requiresInitialization
+  async rootFolders({ timeoutMs }: { timeoutMs?: number } = {}): Promise<Array<{ path: string, freeSpace?: number }>> {
+    const folders = await this.fetch('/api/v3/rootfolder', { method: 'GET', timeoutMs }) as Array<{ path: string, freeSpace?: number }>
     return (Array.isArray(folders) ? folders : [])
       .filter(f => typeof f.path === 'string')
       .map(f => ({ path: f.path, freeSpace: f.freeSpace }))
   }
+
+  /**
+   * The files in a folder as this *arr sees it in its own container (its
+   * filesystem browser). A folder it can't see lists nothing, the same as an
+   * empty one.
+   */
+  @requiresInitialization
+  async listFolderFiles(path: string, { timeoutMs }: { timeoutMs?: number } = {}): Promise<Array<{ name: string, path: string }>> {
+    // A trailing separator makes the *arr list the folder itself rather than
+    // the names in its parent that start with the last segment.
+    const folder = path.endsWith('/') ? path : `${path}/`
+    const listing = await this.fetch('/api/v3/filesystem', {
+      method: 'GET',
+      query: { path: folder, includeFiles: 'true', allowFoldersWithoutTrailingSlashes: 'true' },
+      timeoutMs,
+    }) as { files?: Array<{ name?: unknown, path?: unknown }> } | null
+    return (Array.isArray(listing?.files) ? listing.files : [])
+      .filter((f): f is { name: string, path: string } => typeof f?.name === 'string' && typeof f.path === 'string')
+      .map(f => ({ name: f.name, path: f.path }))
+  }
+
+  /**
+   * Paths of up to `limit` files in the library, from different root folders
+   * where there are several, for checking that jack can read what it shares.
+   */
+  @requiresInitialization
+  async sampleFilePaths(limit: number, { timeoutMs }: { timeoutMs?: number } = {}): Promise<string[]> {
+    return this.doSampleFilePaths(limit, timeoutMs)
+  }
+
+  protected abstract doSampleFilePaths(limit: number, timeoutMs?: number): Promise<string[]>
 
   /** Add a title to this *arr (monitored) WITHOUT a search; returns the created or existing entity id. */
   @requiresDestination

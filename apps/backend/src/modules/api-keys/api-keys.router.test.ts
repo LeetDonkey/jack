@@ -5,6 +5,7 @@ import { Hono } from 'hono'
 import { runMigrations } from '../../database/connection'
 import * as schema from '../../database/schema'
 import { handleError } from '../../middleware/handle-error'
+import { ApiKeyMeta } from './api-key-meta'
 import { ApiKeysController } from './api-keys.controller'
 import { ApiKeysRepository } from './api-keys.repository'
 import { getApiKeysRouter } from './api-keys.router'
@@ -184,5 +185,78 @@ describe('API Keys Router', () => {
 
       expect(res.status).toBe(404)
     })
+  })
+})
+
+describe('API key links and usage', () => {
+  function linkedApp() {
+    const sqlite = new Database(':memory:')
+    const db = drizzle({ client: sqlite, schema })
+    runMigrations(db)
+    const meta = new ApiKeyMeta(sqlite, () => new Date('2026-10-18T10:00:00Z'))
+    const forgotten: number[] = []
+    const controller = new ApiKeysController(new ApiKeysRepository(db), {
+      meta,
+      bindings: { keyBindings: () => [{ apiKeyId: 1, identityId: 'id-alice', boundAt: '2026-10-18T09:00:00.000Z' }], forgetKey: id => forgotten.push(id) },
+      peerExists: id => id === 'alice-peer',
+    })
+    const app = new Hono()
+    app.route('/api-keys', getApiKeysRouter(controller))
+    app.onError(handleError('test', { exposeDetails: true }))
+    const json = (method: string, path: string, body?: unknown) => app.request(path, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    })
+    return { json, meta, forgotten }
+  }
+
+  test('lists last use, peer link, origin and bound identity', async () => {
+    const { json, meta } = linkedApp()
+    await json('POST', '/api-keys', { name: 'Alice' })
+    meta.touch(1)
+
+    const [key] = await (await json('GET', '/api-keys')).json() as any[]
+    expect(key).toMatchObject({ id: 1, lastUsedAt: '2026-10-18T10:00:00.000Z', peerId: null, origin: null, boundIdentityId: 'id-alice' })
+  })
+
+  test('PATCH peerId links a key to a configured peer, null unlinks it', async () => {
+    const { json } = linkedApp()
+    await json('POST', '/api-keys', { name: 'Alice', description: 'kept' })
+
+    const linked = await json('PATCH', '/api-keys/1', { peerId: 'alice-peer' })
+    expect(linked.status).toBe(200)
+    expect(await linked.json()).toMatchObject({ peerId: 'alice-peer', name: 'Alice', description: 'kept' })
+
+    const unlinked = await json('PATCH', '/api-keys/1', { peerId: null })
+    expect((await unlinked.json() as any).peerId).toBeNull()
+  })
+
+  test('PATCH with an unknown peerId answers 400 on that field, and a missing key 404', async () => {
+    const { json } = linkedApp()
+    await json('POST', '/api-keys', { name: 'Alice' })
+
+    const res = await json('PATCH', '/api-keys/1', { peerId: 'nobody' })
+    expect(res.status).toBe(400)
+    expect((await res.json() as any).error).toMatchObject({ code: 'VALIDATION_ERROR', field: 'peerId' })
+    expect((await json('PATCH', '/api-keys/9', { peerId: 'alice-peer' })).status).toBe(404)
+  })
+
+  test('a body that fails validation answers in the shared format', async () => {
+    const { json } = linkedApp()
+    const res = await json('POST', '/api-keys', { expiresAt: 'tomorrow' })
+    expect(res.status).toBe(400)
+    expect((await res.json() as any).error).toMatchObject({ code: 'VALIDATION_ERROR', field: 'expiresAt' })
+  })
+
+  test('revoking a key forgets its link, last use and identity binding', async () => {
+    const { json, meta, forgotten } = linkedApp()
+    await json('POST', '/api-keys', { name: 'Alice' })
+    await json('PATCH', '/api-keys/1', { peerId: 'alice-peer' })
+    meta.touch(1)
+
+    expect((await json('DELETE', '/api-keys/1')).status).toBe(200)
+    expect(meta.get(1)).toEqual({ keyId: 1, peerId: null, origin: null, lastUsedAt: null })
+    expect(forgotten).toEqual([1])
   })
 })

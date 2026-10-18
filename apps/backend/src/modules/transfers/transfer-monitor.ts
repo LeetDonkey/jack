@@ -12,6 +12,8 @@ export interface TransferInfo {
   bytesPerSecond: number
   etaSeconds: number | null
   startedAt: string
+  /** The download row this transfer belongs to (downloads only); null for uploads. */
+  downloadId: number | null
 }
 
 export interface TransferHandle {
@@ -31,6 +33,8 @@ export interface TransferStart {
   offsetBytes?: number
   /** Who is on the other end (a peer connector or an api key), for per-peer limits. */
   party?: string
+  /** The download row a download belongs to, so the UI can put speed and actions together. */
+  downloadId?: number
   /**
    * Identifies one file transfer across requests. A transfer fetched in Range
    * windows ends and restarts every window; a start with the same key shortly
@@ -97,6 +101,7 @@ export class TransferMonitor {
           totalBytes: input.totalBytes ?? null,
           transferredBytes: offset,
           startedAt: this.now().toISOString(),
+          downloadId: input.downloadId ?? null,
         },
         party: input.party,
         resumeKey: input.resumeKey,
@@ -143,6 +148,21 @@ export class TransferMonitor {
         count++
     }
     return count
+  }
+
+  /**
+   * Whether the transfer with this resumeKey is running, or ended its last
+   * window recently enough that the next one continues it.
+   */
+  isContinuing(resumeKey: string): boolean {
+    this.purgeLingering()
+    if (this.lingering.has(resumeKey))
+      return true
+    for (const transfer of this.transfers.values()) {
+      if (transfer.resumeKey === resumeKey)
+        return true
+    }
+    return false
   }
 
   list(): TransferInfo[] {

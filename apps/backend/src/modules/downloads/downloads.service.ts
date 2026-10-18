@@ -4,6 +4,7 @@ import type { ManualImportTarget } from '../../lib/servers/arr/base'
 import type { PeerDownloadProgressEvent } from '../../lib/servers/peer'
 import type { TransfersService } from '../transfers/transfers.service'
 import type { DownloadOperationCoordinator } from './download-operation-coordinator'
+import type { DownloadPhase, DownloadPhaseState } from './download-state'
 import type { DownloadRecord, DownloadsRepository } from './downloads.repository'
 import { basename, join, resolve } from 'node:path'
 import { ConflictError } from '../../lib/errors/ConflictError'
@@ -14,6 +15,7 @@ import { logger } from '../../logger'
 import { unlinkDownloadArtifact } from './artifact-cleanup'
 import { coordinatorFor } from './download-operation-coordinator'
 import { DownloadSources } from './download-sources'
+import { DOWNLOAD_CANCELLED_MESSAGE, isCancelledByUser } from './download-state'
 import { verifyAndRepair } from './piece-verifier'
 import { downloadRetryAfterMs, isTransientDownloadError } from './retry-policy'
 
@@ -39,6 +41,21 @@ const UNSAFE_FILENAME_CHARS = /[^\w.-]/g
  */
 export type StartQbDownloadResult = 'started' | 'duplicate' | 'failed'
 
+// The abort reason of a cancel, so the row gets DOWNLOAD_CANCELLED_MESSAGE whatever
+// error the aborted transfer happened to throw.
+class DownloadCancelledError extends Error {
+  constructor() {
+    super(DOWNLOAD_CANCELLED_MESSAGE)
+    this.name = 'DownloadCancelledError'
+  }
+}
+
+function failureMessage(err: unknown, signal: AbortSignal): string {
+  if (signal.aborted && signal.reason instanceof DownloadCancelledError)
+    return DOWNLOAD_CANCELLED_MESSAGE
+  return err instanceof Error ? err.message : String(err)
+}
+
 // createDownload's internal outcome: a record to run, a benign duplicate, or no peer.
 type CreateDownloadOutcome
   = | { kind: 'created', record: DownloadRecord }
@@ -54,6 +71,9 @@ export class DownloadsService {
   private readonly transfers = new Map<number, { controller: AbortController, task: Promise<void> }>()
   private readonly coordinator?: DownloadOperationCoordinator
   private readonly failedListeners = new Set<(record: DownloadRecord, error: string) => void>()
+  private readonly phases = new Map<number, DownloadPhaseState>()
+  private readonly phaseSubscribers = new Set<() => void>()
+  private readonly now: () => number
 
   constructor(
     private readonly config: DownloadsServiceConfig,
@@ -65,7 +85,9 @@ export class DownloadsService {
     // Live speed tracking and the shared download rate limit. Optional so the
     // service still works standalone (tests, no management API).
     private readonly transfersService?: Pick<TransfersService, 'monitor' | 'downloadLimiter' | 'ledger'>,
+    options: { now?: () => number } = {},
   ) {
+    this.now = options.now ?? Date.now
     this.semaphore = new Semaphore(config.maxConcurrentDownloads)
     this.maxConcurrent = config.maxConcurrentDownloads
     this.coordinator = coordinator ?? (downloadsRepository ? coordinatorFor(downloadsRepository) : undefined)
@@ -79,6 +101,52 @@ export class DownloadsService {
 
   get maxConcurrentDownloads(): number {
     return this.maxConcurrent
+  }
+
+  /**
+   * Pause or resume new downloads. While paused no download takes a slot, so
+   * new and retrying ones stay `queued`; running transfers finish.
+   */
+  setPaused(paused: boolean): void {
+    this.semaphore.setPaused(paused)
+  }
+
+  get isPaused(): boolean {
+    return this.semaphore.isPaused
+  }
+
+  /** The phase of a download this process is running, or null when it runs none for that id. */
+  phaseOf(id: number): DownloadPhaseState | null {
+    const state = this.phases.get(id)
+    return state ? { ...state } : null
+  }
+
+  /** Called whenever a download changes phase (queued, transferring, waiting to retry, done). */
+  subscribe(subscriber: () => void): () => void {
+    this.phaseSubscribers.add(subscriber)
+    return () => this.phaseSubscribers.delete(subscriber)
+  }
+
+  private setPhase(id: number, phase: DownloadPhase | null, retryAt: string | null = null): void {
+    const current = this.phases.get(id)
+    if (phase === null) {
+      if (!current)
+        return
+      this.phases.delete(id)
+    }
+    else {
+      if (current?.phase === phase && current.retryAt === retryAt)
+        return
+      this.phases.set(id, { phase, retryAt })
+    }
+    for (const subscriber of this.phaseSubscribers) {
+      try {
+        subscriber()
+      }
+      catch {
+        // Observers must not break a running download.
+      }
+    }
   }
 
   /** Change the concurrency limit without a restart. Running transfers are never interrupted. */
@@ -316,14 +384,14 @@ export class DownloadsService {
     const record = repo.get(id)
     if (!record)
       throw new NotFoundError(`Download ${id} not found`)
-    if (record.status === 'failed' && record.operationFailed && record.lastOperation === 'transfer' && record.error?.includes('cancelled'))
+    if (isCancelledByUser(record))
       return record
     if (record.status !== 'downloading')
       throw new ConflictError(`Download ${id} is not active`)
     const transfer = this.transfers.get(id)
     if (!transfer)
       throw new ConflictError(`Download ${id} is not active in this process`)
-    transfer.controller.abort(new Error('Download cancelled by user'))
+    transfer.controller.abort(new DownloadCancelledError())
     await transfer.task
     return repo.get(id) ?? record
   }
@@ -377,15 +445,16 @@ export class DownloadsService {
     if (this.active.has(record.destPath))
       return
     this.active.add(record.destPath)
+    this.setPhase(record.id, 'queued')
     try {
       await this.downloadWithRetry(record, controller.signal)
     }
     catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      this.downloadsRepository?.markFailed(record.id, message, 'transfer')
+      this.downloadsRepository?.markFailed(record.id, failureMessage(err, controller.signal), 'transfer')
     }
     finally {
       this.active.delete(record.destPath)
+      this.setPhase(record.id, null)
     }
   }
 
@@ -449,68 +518,73 @@ export class DownloadsService {
       // Each attempt takes a download slot and gives it back before the backoff,
       // so a peer that is down doesn't block downloads from the others. A retry
       // rejoins the head of the queue, so it doesn't wait behind fresh downloads.
-      await retry(attempt => this.semaphore.run(async () => {
-        lastProgressAt ??= Date.now()
-        // Clear the "waiting to retry" note now that the next attempt is running.
-        if (repo?.get(record.id)?.error?.startsWith(RETRY_WAIT_PREFIX))
-          repo.setError(record.id, null)
-        // After a failed attempt, continue from another peer with the same file if there is one.
-        const source = attempt > 1 ? await sources.advance() : sources.current
-        const sourceName = source.peer.name ?? source.peer.url
-        // A transient failure that still grew the .part resumes right away and
-        // doesn't use up a retry attempt. Otherwise a link that drops every GiB
-        // could never finish a file larger than maxDownloadAttempts GiB. Only
-        // attempts that make no progress count toward the limit.
-        while (true) {
-          signal.throwIfAborted()
-          repo?.incrementAttempts(record.id)
-          const bytesBefore = await partBytes()
-          const transfer = this.transfersService?.monitor.start({
-            direction: 'download',
-            peer: sourceName,
-            filename: record.filename,
-            totalBytes: record.releaseSize ?? null,
-            offsetBytes: bytesBefore,
-            party: `peer:${source.peer.id}`,
-          })
-          try {
-            await source.peer.downloadFile(source.itemId, record.destPath, {
-              beforeFinalize: () => this.verifyPart(record, sources, signal),
-              torrentFilename: record.torrentFilename,
-              partPath: record.partPath,
-              releaseSize: record.releaseSize,
-              idleTimeoutMs: this.config.idleTimeoutMs,
-              onProgress: async (event) => {
-                if (event.type === 'headers')
-                  transfer?.setTotalBytes(event.expectedBytes)
-                else if (event.type === 'restart')
-                  transfer?.add(-event.discardedBytes)
-                await onProgress(event)
-              },
-              onChunk: async (bytes) => {
-                lastProgressAt = Date.now()
-                transfer?.add(bytes)
-                this.transfersService?.ledger?.add('in', `peer:${source.peer.id}`, sourceName, bytes)
-                await this.transfersService?.downloadLimiter.take(bytes, signal)
-              },
-              signal,
+      await retry((attempt) => {
+        this.setPhase(record.id, 'queued')
+        return this.semaphore.run(async () => {
+          this.setPhase(record.id, 'transferring')
+          lastProgressAt ??= this.now()
+          // Clear the "waiting to retry" note now that the next attempt is running.
+          if (repo?.get(record.id)?.error?.startsWith(RETRY_WAIT_PREFIX))
+            repo.setError(record.id, null)
+          // After a failed attempt, continue from another peer with the same file if there is one.
+          const source = attempt > 1 ? await sources.advance() : sources.current
+          const sourceName = source.peer.name ?? source.peer.url
+          // A transient failure that still grew the .part resumes right away and
+          // doesn't use up a retry attempt. Otherwise a link that drops every GiB
+          // could never finish a file larger than maxDownloadAttempts GiB. Only
+          // attempts that make no progress count toward the limit.
+          while (true) {
+            signal.throwIfAborted()
+            repo?.incrementAttempts(record.id)
+            const bytesBefore = await partBytes()
+            const transfer = this.transfersService?.monitor.start({
+              direction: 'download',
+              peer: sourceName,
+              filename: record.filename,
+              totalBytes: record.releaseSize ?? null,
+              offsetBytes: bytesBefore,
+              party: `peer:${source.peer.id}`,
+              downloadId: record.id > 0 ? record.id : undefined,
             })
-            return
+            try {
+              await source.peer.downloadFile(source.itemId, record.destPath, {
+                beforeFinalize: () => this.verifyPart(record, sources, signal),
+                torrentFilename: record.torrentFilename,
+                partPath: record.partPath,
+                releaseSize: record.releaseSize,
+                idleTimeoutMs: this.config.idleTimeoutMs,
+                onProgress: async (event) => {
+                  if (event.type === 'headers')
+                    transfer?.setTotalBytes(event.expectedBytes)
+                  else if (event.type === 'restart')
+                    transfer?.add(-event.discardedBytes)
+                  await onProgress(event)
+                },
+                onChunk: async (bytes) => {
+                  lastProgressAt = this.now()
+                  transfer?.add(bytes)
+                  this.transfersService?.ledger?.add('in', `peer:${source.peer.id}`, sourceName, bytes)
+                  await this.transfersService?.downloadLimiter.take(bytes, signal)
+                },
+                signal,
+              })
+              return
+            }
+            catch (err) {
+              if (signal.aborted || !isTransientDownloadError(err) || await partBytes() <= bytesBefore)
+                throw err
+              lastProgressAt = this.now()
+              const message = err instanceof Error ? err.message : String(err)
+              logger.warn({ torrentFilename: record.torrentFilename, error: message }, 'Peer download interrupted after progress; resuming')
+            }
+            finally {
+              transfer?.end()
+            }
           }
-          catch (err) {
-            if (signal.aborted || !isTransientDownloadError(err) || await partBytes() <= bytesBefore)
-              throw err
-            lastProgressAt = Date.now()
-            const message = err instanceof Error ? err.message : String(err)
-            logger.warn({ torrentFilename: record.torrentFilename, error: message }, 'Peer download interrupted after progress; resuming')
-          }
-          finally {
-            transfer?.end()
-          }
-        }
-      }, signal, { front: attempt > 1 }), {
+        }, signal, { front: attempt > 1 })
+      }, {
         maxAttempts: this.config.maxDownloadAttempts,
-        keepRetrying: () => lastProgressAt != null && Date.now() - lastProgressAt < retryWindowMs,
+        keepRetrying: () => lastProgressAt != null && this.now() - lastProgressAt < retryWindowMs,
         baseDelayMs: this.config.retryBaseDelayMs,
         maxDelayMs: this.config.retryMaxDelayMs,
         isRetryable: isTransientDownloadError,
@@ -518,7 +592,9 @@ export class DownloadsService {
         onRetry: ({ attempt, delayMs, error }) => {
           const message = error instanceof Error ? error.message : String(error)
           logger.warn({ torrentFilename: record.torrentFilename, attempt, delayMs, error: message }, 'Retrying peer download after transient failure')
-          repo?.setError(record.id, `${RETRY_WAIT_PREFIX} ${retryTimeFormat.format(Date.now() + delayMs)}: ${message}`)
+          const retryAt = this.now() + delayMs
+          this.setPhase(record.id, 'retry_wait', new Date(retryAt).toISOString())
+          repo?.setError(record.id, `${RETRY_WAIT_PREFIX} ${retryTimeFormat.format(retryAt)}: ${message}`)
         },
         signal,
       })
@@ -528,7 +604,7 @@ export class DownloadsService {
       logger.info({ torrentFilename: record.torrentFilename, filename: record.filename }, 'Download complete')
     }
     catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
+      const message = failureMessage(err, signal)
       // The .part file is preserved by downloadFile on failure, so a later
       // restart re-enqueue can resume from it.
       repo?.markFailed(record.id, message)

@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { accepts } from 'hono/accepts'
+import { HTTPException } from 'hono/http-exception'
 import { xml } from '../helpers/xml'
 import { AppError } from '../lib/errors/AppError'
 import { BadRequestError } from '../lib/errors/BadRequestError'
@@ -10,10 +11,12 @@ import { FetchError } from '../lib/errors/FetchError'
 import { NotFoundError } from '../lib/errors/NotFoundError'
 import { UnauthorizedError } from '../lib/errors/UnauthorizedError'
 import { redactObject } from '../lib/redact'
+import { ValidationError, validationErrorBody } from '../lib/validation'
 
 const STATUS_CODE_MAP = [
   [UnauthorizedError, 401] as const,
   [BadRequestError, 400] as const,
+  [ValidationError, 400] as const,
   [ConflictError, 409] as const,
   [NotFoundError, 404] as const,
   [FetchError, 503] as const,
@@ -60,6 +63,24 @@ interface HandleErrorOptions {
 
 export function handleError(environment: string, { exposeDetails = false }: HandleErrorOptions = {}) {
   return (error: Error, c: Context) => {
+    // Hono's own errors, such as the validator's 400 for a body that isn't valid
+    // JSON. On the management side a 400 answers in the validation format, with
+    // no field: the body as a whole is the problem.
+    if (error instanceof HTTPException) {
+      // A middleware that built its own response (a challenge header, say) keeps it.
+      if (error.res)
+        return error.getResponse()
+      if (exposeDetails && error.status === 400)
+        return c.json(validationErrorBody([{ field: null, message: error.message || 'The request body is invalid' }]), 400)
+      return c.json({
+        ok: false,
+        error: {
+          code: 'HTTP_ERROR',
+          message: exposeDetails && error.message ? error.message : (GENERIC_MESSAGE_BY_STATUS[error.status] ?? 'Request failed'),
+        },
+      }, error.status)
+    }
+
     const status = getStatusCode(error)
     const contentType = accepts(c, {
       default: 'application/json',

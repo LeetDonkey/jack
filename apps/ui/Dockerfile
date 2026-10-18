@@ -51,4 +51,15 @@ USER bun
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD wget -q -O /dev/null "http://127.0.0.1:${PORT}/api/ping" || exit 1
 
+# Build identity for the About page. Nitro maps JACK_ variables only onto
+# runtimeConfig keys that exist, so nuxt.config.ts needs `buildRevision` and
+# `buildDate` before the UI can read these. Pass --build-arg
+# REVISION=$(git rev-parse HEAD) and --build-arg
+# BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ). Last, so a new revision rebuilds
+# only this layer.
+ARG REVISION=""
+ARG BUILD_DATE=""
+ENV JACK_BUILD_REVISION=$REVISION \
+    JACK_BUILD_DATE=$BUILD_DATE
+
 CMD ["bun", ".output/server/index.mjs"]

@@ -58,6 +58,10 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Build identity for GET /version and the peer handshake (see the Dockerfile).
+          build-args: |
+            REVISION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.revision'] }}
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
           # Distinct cache scope so the two images don't overwrite each other's GHA cache.
           cache-from: type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend
@@ -83,6 +87,9 @@ jobs:
           push: true
           tags: ${{ steps.meta-ui.outputs.tags }}
           labels: ${{ steps.meta-ui.outputs.labels }}
+          build-args: |
+            REVISION=${{ fromJSON(steps.meta-ui.outputs.json).labels['org.opencontainers.image.revision'] }}
+            BUILD_DATE=${{ fromJSON(steps.meta-ui.outputs.json).labels['org.opencontainers.image.created'] }}
           cache-from: type=gha,scope=ui
           cache-to: type=gha,mode=max,scope=ui
 

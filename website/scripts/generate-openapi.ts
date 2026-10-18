@@ -44,6 +44,7 @@ const managementApp = getManagementApp({
   downloadsService: stub(),
   apiKeysRepository: stub(),
   registrations: stub(),
+  transfersService: stub(),
 })
 
 const peerSpec = await generateSpecs(peerApp, { documentation: peerDocumentation })
