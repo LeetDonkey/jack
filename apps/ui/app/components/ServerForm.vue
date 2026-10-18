@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FormError } from '@nuxt/ui'
+import type { Form, FormError, FormSchema } from '@nuxt/ui'
 import type { SecretRef, ServerInput, ServerItem } from '~/types/management'
 
 const props = defineProps<{
@@ -7,13 +7,21 @@ const props = defineProps<{
   submitting?: boolean
   error?: string | null
 }>()
-const emit = defineEmits<{ submit: [ServerInput], cancel: [] }>()
+// `dirty` lets the dialog refuse an outside click or Escape once something was edited.
+const emit = defineEmits<{ submit: [ServerInput], cancel: [], dirty: [boolean] }>()
 
 const editing = computed(() => Boolean(props.initial))
 
-// `null` means the config has no downloads block, so jack registers only its indexer
-// and Radarr/Sonarr gets no download client to hand grabs to.
+const form = useTemplateRef<Form<FormSchema>>('form')
+const { onError, showFixHint } = useFormErrorFocus(form)
+
+// `null` means the config has no downloads block, so jack adds nothing to
+// Radarr/Sonarr until downloads are turned on.
 const { data: downloadsConfig } = useDownloadsConfig()
+// restartPending lists 'downloads' when they were turned on after jack started:
+// jack serves its download client only after a restart. An older jack sends no
+// `system`.
+const { overview } = useOverview()
 
 const typeItems = [
   { label: 'Radarr', value: 'radarr' },
@@ -41,21 +49,53 @@ const state = reactive({
   headers: { ...(props.initial?.headers ?? {}) } as Record<string, SecretRef>,
 })
 
+// The form as it opened; any difference counts as an edit.
+const baseline = JSON.stringify(state)
+const dirty = computed(() => JSON.stringify(state) !== baseline)
+watch(dirty, isDirty => emit('dirty', isDirty), { immediate: true })
+
 // Copy names the type picked above ("this Radarr"), not a generic *arr.
 const arr = computed(() => arrName(state.type))
 const showDownloadsAlert = computed(() => state.destination && downloadsConfig.value === null)
+const showRestartAlert = computed(() => state.destination && downloadsConfig.value != null
+  && (overview.value?.system?.restartPending.includes('downloads') ?? false))
+const restartAlertTitle = computed(() => {
+  const after = `After you restart the jack container, ${arr.value} gets jack's download client.`
+  return editing.value ? after : `You can connect ${arr.value} now. ${after}`
+})
+// Saving waits for jack to add itself and for the *arr to test it. With downloads
+// off jack adds nothing, so the save is quick.
+const savingRegisters = computed(() => state.destination && state.autoEnable && downloadsConfig.value != null)
 
 const isPriority = (value: number) => Number.isInteger(value) && value >= 1 && value <= 50
+// Radarr and Sonarr API keys are 32 hex characters.
+const API_KEY = /^[0-9a-f]{32}$/i
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const { protocol } = new URL(value)
+    return protocol === 'http:' || protocol === 'https:'
+  }
+  catch {
+    return false
+  }
+}
 
 // Only visible fields are validated, so an error never points at a hidden one.
 function validate(s: typeof state): FormError[] {
   const errors: FormError[] = []
   if (!s.name.trim())
     errors.push({ name: 'name', message: `Give this ${arr.value} a name.` })
-  if (!s.url.trim())
+  const url = s.url.trim()
+  if (!url)
     errors.push({ name: 'url', message: `Enter the URL jack uses to reach ${arr.value}.` })
+  else if (!isHttpUrl(url))
+    errors.push({ name: 'url', message: `Start the URL with http:// or https://, for example http://192.168.1.10:${s.type === 'sonarr' ? 8989 : 7878}.` })
   if (!s.apiKey)
     errors.push({ name: 'apiKey', message: `Paste the API key from ${arr.value}.` })
+  // A container variable or file is read by jack, so only a typed key can be checked.
+  else if (typeof s.apiKey === 'string' && !API_KEY.test(s.apiKey))
+    errors.push({ name: 'apiKey', message: `That doesn't look like a ${arr.value} API key. Copy it from ${arr.value} -> Settings -> General -> API Key.` })
   if (s.destination && s.autoEnable && !isPriority(s.autoPriority))
     errors.push({ name: 'autoPriority', message: 'Pick a priority from 1 to 50.' })
   if (s.destination && s.upgradeMode === 'capped' && !(s.upgradeMaxGiB != null && s.upgradeMaxGiB > 0))
@@ -83,14 +123,21 @@ function onSubmit() {
 </script>
 
 <template>
-  <UForm :state="state" :validate="validate" class="space-y-4" @submit="onSubmit">
+  <UForm ref="form" :state="state" :validate="validate" class="space-y-4" @submit="onSubmit" @error="onError">
     <UAlert
       v-if="showDownloadsAlert"
       color="warning"
       variant="soft"
       icon="i-ph-warning"
-      :title="`Turn on Downloads first, or jack can't add its download client to this ${arr}.`"
-      :actions="[{ label: 'Go to Downloads', color: 'warning', variant: 'outline', to: settingsLink('downloads'), onClick: () => emit('cancel') }]"
+      :title="`Turn on downloads first, or jack can't add its download client to this ${arr}.`"
+      :actions="[{ label: 'Turn on downloads', color: 'warning', variant: 'outline', to: settingsLink('downloads'), onClick: () => emit('cancel') }]"
+    />
+    <UAlert
+      v-else-if="showRestartAlert"
+      color="info"
+      variant="soft"
+      icon="i-ph-info"
+      :title="restartAlertTitle"
     />
 
     <UFormField name="name" label="Name" required>
@@ -99,6 +146,16 @@ function onSubmit() {
 
     <div class="flex gap-3">
       <UFormField name="url" label="URL" required class="flex-1">
+        <template #hint>
+          <ULink
+            :to="docsUrl('unraid', '5-connect-radarr-and-sonarr')"
+            target="_blank"
+            class="inline-flex items-center gap-1 text-xs"
+          >
+            <UIcon name="i-ph-question" class="size-3.5" />
+            Help
+          </ULink>
+        </template>
         <UInput v-model="state.url" :placeholder="state.type === 'sonarr' ? 'http://sonarr:8989' : 'http://radarr:7878'" class="w-full" />
       </UFormField>
       <UFormField name="type" label="Type">
@@ -107,7 +164,7 @@ function onSubmit() {
     </div>
 
     <UFormField name="apiKey" label="API key" :description="`In ${arr}: Settings -> General -> API Key.`" required>
-      <SecretInput v-model="state.apiKey" :editing="editing" />
+      <SecretInput v-model="state.apiKey" placeholder="Paste the API key" />
     </UFormField>
 
     <div class="space-y-3">
@@ -161,9 +218,15 @@ function onSubmit() {
 
     <UAlert v-if="error" color="error" variant="soft" icon="i-ph-warning" :title="error" />
 
-    <div class="flex justify-end gap-2 pt-2">
+    <div class="flex flex-wrap items-center justify-end gap-2 pt-2">
+      <p v-if="showFixHint" class="text-xs text-error">
+        Fix the highlighted fields to save.
+      </p>
+      <p v-else-if="submitting && savingRegisters" class="text-xs text-muted">
+        Waiting for {{ arr }} to test jack. This can take up to 30 seconds.
+      </p>
       <UButton label="Cancel" color="neutral" variant="ghost" @click="emit('cancel')" />
-      <UButton type="submit" :loading="submitting" :label="submitting ? 'Saving…' : editing ? 'Save changes' : `Connect ${arr}`" />
+      <UButton type="submit" :loading="submitting" :label="submitting ? (savingRegisters ? 'Connecting and testing…' : 'Saving…') : editing ? 'Save changes' : `Connect ${arr}`" />
     </div>
   </UForm>
 </template>

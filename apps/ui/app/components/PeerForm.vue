@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FormError } from '@nuxt/ui'
+import type { Form, FormError, FormSchema } from '@nuxt/ui'
 import type { PeerInput, PeerItem, SecretRef } from '~/types/management'
 
 const props = defineProps<{
@@ -10,9 +10,15 @@ const props = defineProps<{
   // `?force=true` can get past (the friend's jack didn't answer, not a bad field).
   offerForce?: boolean
 }>()
-const emit = defineEmits<{ submit: [PeerInput, boolean], cancel: [], dismissError: [], quickLink: [] }>()
+// `dirty` lets the dialog refuse an outside click or Escape once something was edited.
+const emit = defineEmits<{ submit: [PeerInput, boolean], cancel: [], dismissError: [], quickLink: [], dirty: [boolean] }>()
 
 const editing = computed(() => Boolean(props.initial && 'id' in props.initial))
+
+const form = useTemplateRef<Form<FormSchema>>('form')
+const { onError, showFixHint } = useFormErrorFocus(form)
+
+const guideUrl = docsUrl('unraid', '7-connect-to-a-friend')
 
 const state = reactive({
   name: props.initial?.name ?? '',
@@ -20,6 +26,10 @@ const state = reactive({
   apiKey: (props.initial?.apiKey ?? null) as SecretRef | null,
   headers: { ...(props.initial?.headers ?? {}) } as Record<string, SecretRef>,
 })
+
+const baseline = JSON.stringify(state)
+const dirty = computed(() => JSON.stringify(state) !== baseline)
+watch(dirty, isDirty => emit('dirty', isDirty), { immediate: true })
 
 // Headers are rare, so they stay folded away unless this friend already has some
 // (an edit, or a quick link that carried them).
@@ -33,12 +43,25 @@ watch(state, () => {
     emit('dismissError')
 }, { deep: true })
 
+function isHttpUrl(value: string): boolean {
+  try {
+    const { protocol } = new URL(value)
+    return protocol === 'http:' || protocol === 'https:'
+  }
+  catch {
+    return false
+  }
+}
+
 function validate(s: typeof state): FormError[] {
   const errors: FormError[] = []
   if (!s.name.trim())
     errors.push({ name: 'name', message: 'Enter a name for this friend.' })
-  if (!s.url.trim())
+  const url = s.url.trim()
+  if (!url)
     errors.push({ name: 'url', message: 'Enter their jack address.' })
+  else if (!isHttpUrl(url))
+    errors.push({ name: 'url', message: 'Start the address with http:// or https://, for example https://jack.example.com.' })
   if (!s.apiKey)
     errors.push({ name: 'apiKey', message: 'Paste the key your friend created for you.' })
   return errors
@@ -63,7 +86,7 @@ function saveAnyway() {
 </script>
 
 <template>
-  <UForm :state="state" :validate="validate" class="space-y-4" @submit="onSubmit">
+  <UForm ref="form" :state="state" :validate="validate" class="space-y-4" @submit="onSubmit" @error="onError">
     <p v-if="!initial" class="text-sm text-muted">
       Easiest: ask your friend for a quick link and use
       <UButton variant="link" size="sm" label="Add via quick link" class="p-0 align-baseline" @click="emit('quickLink')" />.
@@ -76,7 +99,7 @@ function saveAnyway() {
       <UInput v-model="state.url" placeholder="https://jack.example.com" class="w-full" />
     </UFormField>
     <UFormField name="apiKey" label="Access key" description="The key your friend created for you in their jack." required>
-      <SecretInput v-model="state.apiKey" :editing="editing" />
+      <SecretInput v-model="state.apiKey" placeholder="Paste the access key" />
     </UFormField>
 
     <UCollapsible v-model:open="advancedOpen">
@@ -100,33 +123,37 @@ function saveAnyway() {
       </template>
     </UCollapsible>
 
-    <template v-if="error && offerForce">
+    <div v-if="error" class="space-y-1.5">
       <UAlert color="error" variant="soft" icon="i-ph-warning" :title="error">
-        <template #description>
+        <template v-if="offerForce" #description>
           If {{ displayName }}'s jack isn't reachable yet, {{ editing ? 'save' : 'add' }} anyway: jack keeps trying
           to connect in the background. Otherwise go back and check the address and key.
         </template>
       </UAlert>
-      <div class="flex flex-wrap justify-end gap-2 pt-2">
-        <UButton label="Back to edit" color="neutral" variant="ghost" :disabled="submitting" @click="emit('dismissError')" />
-        <UButton
-          :label="editing ? 'Save anyway, keep trying' : 'Add anyway, keep trying'"
-          :loading="submitting"
-          @click="saveAnyway"
-        />
-      </div>
-    </template>
+      <ULink :to="guideUrl" target="_blank" class="inline-flex items-center gap-1 text-xs text-muted underline">
+        <UIcon name="i-ph-question" class="size-3.5 shrink-0" />
+        Help: Connect to a friend
+      </ULink>
+    </div>
 
-    <template v-else>
-      <UAlert v-if="error" color="error" variant="soft" icon="i-ph-warning" :title="error" />
-      <div class="flex justify-end gap-2 pt-2">
-        <UButton label="Cancel" color="neutral" variant="ghost" @click="emit('cancel')" />
-        <UButton
-          type="submit"
-          :loading="submitting"
-          :label="submitting ? 'Saving…' : editing ? 'Save changes' : 'Add friend'"
-        />
-      </div>
-    </template>
+    <div v-if="error && offerForce" class="flex flex-wrap justify-end gap-2 pt-2">
+      <UButton label="Back to edit" color="neutral" variant="ghost" :disabled="submitting" @click="emit('dismissError')" />
+      <UButton
+        :label="editing ? 'Save anyway, keep trying' : 'Add anyway, keep trying'"
+        :loading="submitting"
+        @click="saveAnyway"
+      />
+    </div>
+    <div v-else class="flex flex-wrap items-center justify-end gap-2 pt-2">
+      <p v-if="showFixHint" class="text-xs text-error">
+        Fix the highlighted fields to save.
+      </p>
+      <UButton label="Cancel" color="neutral" variant="ghost" @click="emit('cancel')" />
+      <UButton
+        type="submit"
+        :loading="submitting"
+        :label="submitting ? 'Saving…' : editing ? 'Save changes' : 'Add friend'"
+      />
+    </div>
   </UForm>
 </template>

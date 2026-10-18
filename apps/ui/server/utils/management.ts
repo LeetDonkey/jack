@@ -1,4 +1,6 @@
 import type { H3Event } from 'h3'
+import { lookup } from 'node:dns/promises'
+import { isIP } from 'node:net'
 
 const SESSION_NAME = 'jack_management'
 
@@ -79,15 +81,67 @@ export function assertSameOrigin(event: H3Event): void {
     throw createError({ statusCode: 403, statusMessage: 'cross-origin request rejected' })
 }
 
-/** Probe the upstream management API; a connection error means it's disabled. */
-export async function probeUpstream(event: H3Event, key: string | null): Promise<{ reachable: boolean, status: number }> {
+const PROBE_TIMEOUT_MS = 5000
+
+/** Why jack-ui can't reach jack's management API. */
+export type ProbeFailure = 'dns' | 'down' | 'timeout'
+
+export type ProbeResult = { reachable: true, status: number } | { reachable: false, reason: ProbeFailure }
+
+/** The management API's origin as configured, for the "can't reach jack" screen. */
+export function upstreamOrigin(event: H3Event): string {
+  const { managementApiUrl } = useRuntimeConfig(event)
   try {
-    const res = await fetch(upstreamUrl(event, '/ping'), {
+    return new URL(managementApiUrl).origin
+  }
+  catch {
+    return managementApiUrl
+  }
+}
+
+// URL.hostname keeps the brackets around an IPv6 literal.
+const IPV6_BRACKETS = /^\[(.*)\]$/
+
+// Resolving the host first tells a name that doesn't resolve apart from a jack
+// that resolves but doesn't answer. Docker's DNS drops a container's name while
+// it is stopped, so a stopped jack lands here too. IP literals skip the lookup.
+function lookupHost(hostname: string, signal: AbortSignal): Promise<unknown> {
+  const bare = hostname.replace(IPV6_BRACKETS, '$1')
+  if (isIP(bare))
+    return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason)
+    signal.addEventListener('abort', onAbort, { once: true })
+    lookup(bare)
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener('abort', onAbort))
+  })
+}
+
+/**
+ * Probe the upstream management API, within 5 s for the lookup and the request
+ * together. jack only starts that API when its Management key is set, so an
+ * empty key there shows up as `down`.
+ */
+export async function probeUpstream(event: H3Event, key: string | null): Promise<ProbeResult> {
+  const target = upstreamUrl(event, '/ping')
+  const signal = AbortSignal.timeout(PROBE_TIMEOUT_MS)
+
+  try {
+    await lookupHost(new URL(target).hostname, signal)
+  }
+  catch {
+    return { reachable: false, reason: signal.aborted ? 'timeout' : 'dns' }
+  }
+
+  try {
+    const res = await fetch(target, {
       headers: key ? { 'X-Management-Key': key } : {},
+      signal,
     })
     return { reachable: true, status: res.status }
   }
   catch {
-    return { reachable: false, status: 0 }
+    return { reachable: false, reason: signal.aborted ? 'timeout' : 'down' }
   }
 }

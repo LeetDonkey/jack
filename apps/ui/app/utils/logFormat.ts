@@ -1,4 +1,6 @@
 import type { LogRecord } from '~/types/management'
+import { docsUrl } from './docs'
+import { settingsLink } from './settings-links'
 
 // Keys that carry structural meaning and are rendered in dedicated columns, so
 // they're excluded from the "extra fields" detail dump.
@@ -208,4 +210,29 @@ export function rawJson(record: LogRecord): string {
     clean[k] = v
   }
   return JSON.stringify(clean, null, 2)
+}
+
+export interface LogHelp {
+  label: string
+  to: string
+  // The guide on GitHub opens in a new tab; settings stay in the app.
+  external: boolean
+}
+
+const TROUBLESHOOTING: LogHelp = { label: 'Troubleshooting guide', to: docsUrl('unraid', 'troubleshooting'), external: true }
+
+// Log lines with a known fix, matched on jack's wording in index.ts,
+// lib/autoregister.ts, modules/registration/registration.service.ts and
+// modules/security/lan-guard.ts. A changed message there needs a change here.
+const LOG_HELP: Array<{ pattern: RegExp, help: LogHelp }> = [
+  { pattern: /^Downloads are off\b/, help: TROUBLESHOOTING },
+  { pattern: /^Turned off the Jack indexer\b/, help: TROUBLESHOOTING },
+  { pattern: /^Failed to register\b|^Registration failed\b/, help: TROUBLESHOOTING },
+  { pattern: / can't use jack: /, help: TROUBLESHOOTING },
+  { pattern: /^Refused the Radarr\/Sonarr API\b/, help: { label: 'Open Security settings', to: settingsLink('security'), external: false } },
+]
+
+export function logHelp(record: LogRecord): LogHelp | null {
+  const message = typeof record.message === 'string' ? record.message : ''
+  return LOG_HELP.find(entry => entry.pattern.test(message))?.help ?? null
 }

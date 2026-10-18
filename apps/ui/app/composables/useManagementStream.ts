@@ -1,5 +1,5 @@
 type SnapshotSubscriber = (snapshot: unknown) => void
-type ConnectionSubscriber = (connected: boolean) => void
+type ConnectionSubscriber = (connected: boolean, hasConnectedOnce: boolean) => void
 type AuthorizationCheck = () => Promise<void>
 
 // How long to wait before reopening a stream the browser gave up on.
@@ -34,7 +34,7 @@ function connect(path: string, stream: SharedManagementStream, checkAuthorizatio
     if (connected)
       stream.hasConnectedOnce = true
     for (const subscriber of stream.connectionSubscribers)
-      subscriber(connected)
+      subscriber(connected, stream.hasConnectedOnce)
   }
 
   source.onopen = () => setConnected(true)
@@ -98,6 +98,36 @@ function closeStream(path: string, stream: SharedManagementStream) {
 }
 
 /**
+ * Subscribe to a management SSE path outside a component's lifecycle, for app-wide
+ * state such as useOverview. `onConnection` is called right away with the current
+ * state, then on every change. Returns the unsubscribe function; the last
+ * subscriber to leave closes the connection.
+ */
+export function subscribeManagementStream<T>(
+  path: string,
+  handlers: { onSnapshot: (snapshot: T) => void, onConnection?: ConnectionSubscriber },
+  checkAuthorization: AuthorizationCheck,
+): () => void {
+  const stream = openStream(path, checkAuthorization)
+  const snapshotSubscriber: SnapshotSubscriber = snapshot => handlers.onSnapshot(snapshot as T)
+  const connectionSubscriber: ConnectionSubscriber = (connected, hasConnectedOnce) => handlers.onConnection?.(connected, hasConnectedOnce)
+  stream.snapshotSubscribers.add(snapshotSubscriber)
+  stream.connectionSubscribers.add(connectionSubscriber)
+  connectionSubscriber(stream.connected, stream.hasConnectedOnce)
+
+  let subscribed = true
+  return () => {
+    if (!subscribed)
+      return
+    subscribed = false
+    stream.snapshotSubscribers.delete(snapshotSubscriber)
+    stream.connectionSubscribers.delete(connectionSubscriber)
+    if (stream.snapshotSubscribers.size === 0 && streams.get(path) === stream)
+      closeStream(path, stream)
+  }
+}
+
+/**
  * Share one management SSE connection per path while components are subscribed.
  * `hasConnectedOnce` stays false until the first open, so callers can show a neutral
  * "Connecting…" first and the "Reconnecting…" warning only after a real drop.
@@ -106,32 +136,23 @@ export function useManagementStream<T>(path: string, onSnapshot: (snapshot: T) =
   const { request } = useManagement()
   const connected = ref(false)
   const hasConnectedOnce = ref(false)
-  let stream: SharedManagementStream | undefined
-  const snapshotSubscriber: SnapshotSubscriber = snapshot => onSnapshot(snapshot as T)
-  const connectionSubscriber: ConnectionSubscriber = (value) => {
-    connected.value = value
-    if (value)
-      hasConnectedOnce.value = true
-  }
+  let unsubscribe: (() => void) | undefined
 
   onMounted(() => {
-    stream = openStream(path, async () => {
+    unsubscribe = subscribeManagementStream<T>(path, {
+      onSnapshot,
+      onConnection: (isConnected, once) => {
+        connected.value = isConnected
+        hasConnectedOnce.value = once
+      },
+    }, async () => {
       await request('ping')
     })
-    stream.snapshotSubscribers.add(snapshotSubscriber)
-    stream.connectionSubscribers.add(connectionSubscriber)
-    connected.value = stream.connected
-    hasConnectedOnce.value = stream.hasConnectedOnce
   })
 
   onUnmounted(() => {
-    if (!stream)
-      return
-    stream.snapshotSubscribers.delete(snapshotSubscriber)
-    stream.connectionSubscribers.delete(connectionSubscriber)
-    if (stream.snapshotSubscribers.size === 0)
-      closeStream(path, stream)
-    stream = undefined
+    unsubscribe?.()
+    unsubscribe = undefined
     connected.value = false
     hasConnectedOnce.value = false
   })

@@ -264,13 +264,16 @@ reports container health automatically.)
 
 Then open the management UI at **http://localhost:3000**. The ***Dashboard***
 lists your servers under ***Radarr & Sonarr*** and whether each one connected.
-Above it, a ***Finish setting up jack*** card stays until setup is complete. It
-flags ***Tell jack how Radarr/Sonarr reach it*** while `jack.internalUrl` is the
-default `http://jack:5225`; with this compose file Radarr and Sonarr are on the
-jack network, so click ***Yes, on the jack network***. In Radarr/Sonarr, you'll
-find a new **Jack** indexer under ***Settings -> Indexers*** and a **Jack**
-download client under ***Settings -> Download Clients***. Both tests should
-pass.
+Above it, a ***Finish setting up jack*** card stays until setup is complete.
+While `jack.internalUrl` is the default `http://jack:5225` and no Radarr or
+Sonarr has tested jack's address yet, it flags ***Tell jack how Radarr/Sonarr
+reach it***; with this compose file Radarr and Sonarr are on the jack network,
+so click ***Yes, on the jack network*** if it asks. In Radarr/Sonarr,
+you'll find a new **Jack** indexer under ***Settings -> Indexers*** and a
+**Jack** download client under ***Settings -> Download Clients***. jack asks
+each of them to test both, and the server's card under ***Settings -> Radarr &
+Sonarr*** shows the result, for example
+`jack in Main Radarr: indexer ✓ · download client ✓`.
 
 If something's off, the [troubleshooting guide](/guide/troubleshooting) covers
 the common failures.

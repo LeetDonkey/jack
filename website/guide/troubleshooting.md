@@ -5,7 +5,9 @@ description: Diagnose jack connectivity, Radarr or Sonarr registration, qBittorr
 # Troubleshooting
 
 Registration runs on every startup and logs the *arr response body, so check
-`docker compose logs jack` first. The common failures:
+`docker compose logs jack` first. In the management UI, each card under
+***Settings -> Radarr & Sonarr*** shows jack's last registration in that server
+and the *arr's own test of it. The common failures:
 
 ## Radarr/Sonarr report failures talking to Jack
 
@@ -31,8 +33,9 @@ The usual causes:
   [below](#qbittorrent-download-client-test-fails-failed-to-register-download-client):
   `jack.internalUrl` must resolve from the Radarr/Sonarr side.
 - **The managed key is no longer valid**, for example after wiping jack's
-  database. **Restart jack**: auto-registration runs again on startup and
-  updates the registration with a fresh, valid key.
+  database. Click ***Register again*** on the server's card under ***Settings
+  -> Radarr & Sonarr***, or restart jack: both register jack again with a
+  fresh, valid key.
 - **jack answers 403 `Not available from this address`.** jack only answers
   the Torznab and qBittorrent APIs to your LAN
   ([`security.lanOnlyArrApis`](../reference/configuration.md#security)), and
@@ -55,10 +58,16 @@ side**. On a shared Docker network use the container name (`http://jack:5225`);
 otherwise the host IP/domain. If *arr and jack are on different networks, attach
 jack to *arr's network (the `networks:` block in the example compose).
 
+jack runs the same test after each registration, and the server's card in the
+management UI says what failed in plain words, for example ***Radarr can't
+resolve jack. Use your server's IP in Address Radarr/Sonarr use to reach
+jack.*** A new address saved under ***Settings -> jack*** applies right away:
+jack updates every *arr and tests again.
+
 When *arr refuses the download client itself (`Failed to register download
 client` in the log), jack leaves the indexer as it was, so it stays bound to
-jack's client. Fix the cause, then save the server in the management UI again or
-restart jack.
+jack's client. Fix the cause, then click ***Register again*** on the server's
+card in the management UI, or restart jack.
 
 ## Grabs download but never import
 
@@ -116,7 +125,9 @@ client.
 **Fix:** add a `downloads` block with `completedPath`, or click ***Turn on
 downloads*** under ***Settings -> Downloads*** in the management UI, and
 restart jack. Saving it in the management UI registers both right away; the
-restart starts the download client.
+restart starts the download client. Until then, the management UI names
+***Downloads*** in a bar at the top of every page, and each server's card reads
+`download client waits for a restart`.
 
 If registration fails with `Failed to register indexer`, check that the
 destination server is reachable and its API key is correct. Registration logs
@@ -171,6 +182,28 @@ This only affects downloads imported **after** you enable it. Files already in
 the folder are yours to clear out; deleting the download rows from the
 management UI's Downloads page removes their files too.
 
+## jack-ui shows a connection error
+
+jack-ui checks jack's management API when it loads, and shows what went wrong
+instead of the console. The address in each message is
+`JACK_MANAGEMENT_API_URL`, `http://jack:5226` in the example compose file:
+
+- ***jack-ui can't find jack at http://jack:5226***: that name doesn't
+  resolve. jack is stopped (Docker drops a stopped container's name), or the
+  two services aren't on the same network.
+- ***jack isn't answering at http://jack:5226***: the name resolves, but
+  nothing answers on that port. jack is still starting or has stopped, or it
+  runs without `JACK_MANAGEMENT_KEY` and so never started the management API.
+- ***jack didn't answer at http://jack:5226 within 5 seconds***: check
+  `JACK_MANAGEMENT_API_URL` on the jack-ui service. It must point at jack's
+  [`MANAGEMENT_PORT`](/reference/environment-variables#management-port).
+- ***jack rejected jack-ui's key***: `JACK_MANAGEMENT_KEY` differs between the
+  two services. The example compose file reads both from one `.env` entry.
+
+The checks listed on that screen use the names from the Unraid templates:
+***Management key*** is `JACK_MANAGEMENT_KEY`, and ***Management API*** is
+`JACK_MANAGEMENT_API_URL`. ***Retry*** checks again.
+
 ## Management UI stuck on "Reconnecting..."
 
 The ***Dashboard***, ***Downloads*** and ***Live traffic*** pages show a
@@ -190,9 +223,9 @@ The usual causes:
 - **The proxy's idle timeout is too short.** Streams are idle between changes,
   with only a `ping` every 15 seconds. Give the UI route a read/idle timeout
   well above that, 60 seconds or more.
-- **The management API is down or unreachable.** The BFF answers `503` when it
-  can't reach jack. Check `docker compose ps` and the backend logs for
-  `Management API listening`.
+- **The management API is down or unreachable.** The BFF answers `503`
+  (***jack isn't answering***) when it can't reach jack. Check
+  `docker compose ps` and the backend logs for `Management API listening`.
 
 ## Seeing what jack is doing
 

@@ -17,9 +17,10 @@ export function useManagement() {
       if (status === 401) {
         // In env-inject mode a 401 means the injected key was rejected — prompting
         // for a key the operator can't change from the browser is useless, so show
-        // the error screen. In cookie mode it means the session lapsed → login gate.
+        // the same screen as a rejected key at sign-in. In cookie mode it means the
+        // session lapsed → login gate.
         auth.value = auth.value.mode === 'env'
-          ? { ...auth.value, status: 'error', message: 'The management key configured for the UI was rejected by the management API.' }
+          ? { ...auth.value, status: 'error', reason: 'unauthorized', message: 'The Management key in the jack-ui template doesn\'t match the one in the jack template.' }
           : { ...auth.value, status: 'needs-key' }
       }
       throw error

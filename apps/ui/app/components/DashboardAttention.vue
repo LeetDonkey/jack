@@ -7,12 +7,18 @@ const props = withDefaults(defineProps<{
   // The required setup steps (SetupChecklist). The green all-clear needs `done`:
   // with steps open, "no problems" would mislead even when nothing is failing, and
   // while the answer is unknown or a server is still connecting it would be a guess.
+  // With only the restart left (`restart`), the restart banner says it all.
   setupState?: SetupRequiredState
   // Whether config/downloads exists; null when unknown.
   downloadsOn?: boolean | null
   // The user said "I only share" on the setup card.
   shareOnly?: boolean
-}>(), { setupState: 'done', downloadsOn: null, shareOnly: false })
+  // What the setup card shows right now, so it isn't said twice: the servers whose
+  // registration result it quotes, and whether it asks for a server that receives
+  // downloads.
+  setupServerIds?: string[]
+  setupAsksForReceiver?: boolean
+}>(), { setupState: 'done', downloadsOn: null, shareOnly: false, setupServerIds: () => [], setupAsksForReceiver: false })
 
 // How many example rows to list before collapsing the rest into "and N more".
 const PREVIEW = 3
@@ -38,16 +44,47 @@ const mismatches = computed(() =>
 // land anywhere and it counts as an issue.
 const onlyShares = computed(() =>
   !props.shareOnly
+  && !props.setupAsksForReceiver
   && props.overview.peers.total > 0
   && props.overview.servers.sources > 0
   && props.overview.servers.destinations === 0)
 const onlySharesIsIssue = computed(() => onlyShares.value && props.downloadsOn === true)
 
-// Each unreachable connector is its own fixable thing; download problems collapse
-// to one line each. The count drives the badge.
+interface RegistrationProblem {
+  id: string
+  name: string
+  // jack's own sentence, which names the server and the fix. `step` and `error`
+  // only build a line when jack sent none.
+  message: string | null
+  step: 'a download client' | 'an indexer' | null
+  error: string | null
+  // The setting the message names, such as the address Radarr/Sonarr use.
+  fix: ReturnType<typeof registrationFix>
+}
+
+// jack's own setup inside each reachable Radarr/Sonarr: a part jack couldn't add, or
+// the *arr's test of jack failing. A server jack can't reach has its row above.
+const registrationProblems = computed(() => props.overview.servers.items.flatMap((server): RegistrationProblem[] => {
+  const registration = server.registration
+  if (!registration || !server.initialized || props.setupServerIds.includes(server.id))
+    return []
+  const problem = { id: server.id, name: server.name, message: registration.message, fix: registrationFix(registration) }
+  if (registration.downloadClient.status === 'failed')
+    return [{ ...problem, step: 'a download client', error: registration.downloadClient.error ?? null }]
+  if (registration.indexer.status === 'failed')
+    return [{ ...problem, step: 'an indexer', error: registration.indexer.error ?? null }]
+  if (registration.clientTest === 'failed' || registration.indexerTest === 'failed')
+    return [{ ...problem, message: problem.message ?? `${server.name} couldn't reach jack.`, step: null, error: null }]
+  return []
+}))
+
+// Each unreachable connector and each server jack isn't set up in is its own
+// fixable thing; download problems collapse to one line each. The count drives the
+// badge.
 const issueCount = computed(() =>
   unreachablePeers.value.length
   + unreachableServers.value.length
+  + registrationProblems.value.length
   + (queuedCount.value ? 1 : 0)
   + (failedCount.value ? 1 : 0)
   + (mismatchCount.value ? 1 : 0)
@@ -102,6 +139,23 @@ function plural(n: number, word: string) {
                 <span v-if="server.initializationError" class="font-mono text-xs break-words text-error">{{ server.initializationError }}</span>
               </p>
               <UButton :to="settingsLink('servers')" label="Edit" trailing-icon="i-ph-arrow-right" variant="link" size="sm" class="ml-7 shrink-0 px-0 sm:ml-0 sm:px-2.5" />
+            </div>
+
+            <!-- jack not set up in a Radarr/Sonarr, or that *arr can't reach jack -->
+            <div v-for="problem in registrationProblems" :key="`registration-${problem.id}`" class="flex flex-wrap items-start gap-x-3 gap-y-1 px-4 py-3">
+              <UIcon name="i-ph-warning-circle" class="mt-0.5 size-4 shrink-0 text-error" />
+              <p class="min-w-0 flex-1 basis-[calc(100%-1.75rem)] text-sm break-words text-default sm:basis-0">
+                <template v-if="problem.message">
+                  {{ problem.message }}
+                </template>
+                <template v-else>
+                  <span class="font-semibold">{{ problem.name }}</span>: jack couldn't add itself as {{ problem.step }}<span v-if="problem.error"> (<span class="font-mono text-xs break-words text-error">{{ problem.error }}</span>)</span>. Register again on its card.
+                </template>
+              </p>
+              <!-- A failed test names the setting that fixes it; a failed step is fixed
+                   with Register again on the server's card. -->
+              <UButton v-if="problem.fix" :to="settingsLink(problem.fix.section)" :label="problem.fix.label" trailing-icon="i-ph-arrow-right" variant="link" size="sm" class="ml-7 shrink-0 px-0 sm:ml-0 sm:px-2.5" />
+              <UButton v-else :to="settingsLink('servers')" label="Edit Radarr & Sonarr" trailing-icon="i-ph-arrow-right" variant="link" size="sm" class="ml-7 shrink-0 px-0 sm:ml-0 sm:px-2.5" />
             </div>
 
             <!-- Downloads on, but nothing receives them -->
@@ -193,7 +247,8 @@ function plural(n: number, word: string) {
       :title="nothingConfigured ? 'Nothing is failing. Finish setup to start sharing.' : 'Nothing is failing. Setup isn\'t finished yet.'"
     />
 
-    <!-- All clear: one calm, factual line. -->
+    <!-- All clear: one calm, factual line. Not while a server is still being set up
+         (`pending`) or jack waits for a restart (`restart`, the banner says so). -->
     <UAlert
       v-else-if="setupState === 'done'"
       color="success"

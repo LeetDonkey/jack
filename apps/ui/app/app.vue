@@ -6,10 +6,12 @@ const state = useAuthState()
 // Resolve the auth state once on load (SSR + client). The BFF probes the
 // management API and tells us which of the three states we're in.
 const { data } = await useAsyncData('ping', () =>
-  $fetch<{ status: AuthState['status'], mode: AuthState['mode'], message?: string }>('/api/ping'))
+  $fetch<{ status: AuthState['status'], mode: AuthState['mode'], message?: string, reason?: AuthState['reason'], url?: string }>('/api/ping'))
 
-if (data.value)
-  state.value = { status: data.value.status, mode: data.value.mode, message: data.value.message }
+if (data.value) {
+  const { status, mode, message, reason, url } = data.value
+  state.value = { status, mode, message, reason, url }
+}
 </script>
 
 <template>

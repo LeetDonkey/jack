@@ -18,12 +18,16 @@ const { connected, hasConnectedOnce } = useManagementStream<{ downloads: Downloa
 
 // Only words the empty state: with no downloads block, no download can start.
 const { data: downloadsConfig, status: downloadsConfigStatus, refresh: refreshDownloadsConfig } = useDownloadsConfig()
-const emptyState = computed<'loading' | 'off' | 'none'>(() => {
+// Downloads turned on since jack started only start working after a restart.
+const { overview } = useOverview()
+const emptyState = computed<'loading' | 'off' | 'restart' | 'none'>(() => {
   if (downloadsConfig.value === null)
     return 'off'
   // Wait for the answer rather than flash "Nothing downloaded yet" on a fresh install.
   if (downloadsConfig.value === undefined && downloadsConfigStatus.value !== 'error')
     return 'loading'
+  if (overview.value?.system?.restartPending.includes('downloads'))
+    return 'restart'
   return 'none'
 })
 
@@ -168,6 +172,15 @@ const columns: TableColumn<DownloadItem>[] = [
             Downloads are off, so Radarr/Sonarr can't start downloads from friends.
           </p>
           <UButton label="Turn on downloads" icon="i-ph-power" :to="settingsLink('downloads')" />
+        </div>
+        <div v-else-if="emptyState === 'restart'" class="flex flex-col items-center gap-3 py-6 text-center">
+          <UIcon name="i-ph-arrow-clockwise" class="size-8 text-dimmed" />
+          <p class="max-w-md text-sm text-muted">
+            Restart the jack container to start downloading.
+          </p>
+          <p class="max-w-md text-xs text-dimmed">
+            Unraid: <span class="whitespace-nowrap">{{ RESTART_STEPS }}</span>. jack-ui doesn't need a restart.
+          </p>
         </div>
         <div v-else class="flex flex-col items-center gap-3 py-6 text-center">
           <UIcon name="i-ph-download-simple" class="size-8 text-dimmed" />

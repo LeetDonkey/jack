@@ -149,12 +149,13 @@ A new config file gets `"downloads": { "completedPath": "/data/jack" }` when
 downloads folder there.
 
 Every key here is also editable from the management UI
-(***Settings -> Downloads***).
-Clearing a field there removes the key from the file, so the default below
-applies again. `unlinkImportedFiles` and `maxConcurrentDownloads` take effect
-immediately; the rest are read at startup, so restart jack after changing them.
-Adding the block in the management UI registers jack in your *arr apps right
-away, but grabs only work after the restart.
+(***Settings -> Downloads***), which takes the `...Ms` durations in seconds,
+minutes or hours. Clearing a field there removes the key from the file, so the
+default below applies again. `unlinkImportedFiles` and `maxConcurrentDownloads`
+take effect immediately; the rest are read at startup, so restart jack after
+changing them. Until then, the management UI names them in a bar at the top of
+every page. Adding the block in the management UI registers jack in your *arr
+apps right away, but grabs only work after the restart.
 
 ### `downloads.completedPath`
 
@@ -514,7 +515,9 @@ servers. jack registers itself:
 
 After each registration jack asks the *arr to test its download client and
 indexer, the same check as their ***Test*** buttons, and reports the result as
-`registration` on each server in the management API.
+`registration` on each server in the management API. The management UI shows
+it on the server's card under ***Settings -> Radarr & Sonarr***, where
+***Register again*** registers jack in that server once more.
 
 - **`enable`**: set `false` to register jack in that *arr yourself.
 - **`priority`**: indexer priority in *arr, from 1 (preferred) to 50. *arr uses
@@ -609,10 +612,14 @@ reference to a secret file, so secrets can stay out of the config file:
 ```
 
 All three forms are interchangeable everywhere a secret appears (`jack`,
-`servers`, `peers`, and `headers` values). File paths must be absolute;
-trailing line endings are ignored. If a referenced variable is unset/empty, or
-a secret file cannot be read or resolves to an empty value at startup, jack
-reports the problem and refuses to load that config.
+`servers`, `peers`, `headers` values and webhook URLs). File paths must be
+absolute; trailing line endings are ignored. If a referenced variable is
+unset/empty, or a secret file cannot be read or resolves to an empty value at
+startup, jack reports the problem and refuses to load that config.
+
+In the management UI, a secret field stores a plain string. ***Use a container
+variable or file instead*** under the field switches it to an `env` or `file`
+reference ([Secret fields](/guide/management-ui#secret-fields)).
 
 ## Full example
 

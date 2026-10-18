@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import type { FormError } from '@nuxt/ui'
+import type { Form, FormError, FormSchema } from '@nuxt/ui'
 import type { BandwidthConfig, BandwidthConfigPatch, Weekday } from '~/types/management'
 
 const { request, extractError } = useManagement()
+const form = useTemplateRef<Form<FormSchema>>('form')
+const { onError, showFixHint } = useFormErrorFocus(form)
 
 const { data: bandwidth, pending, error: loadError, refresh } = useLazyAsyncData(
   'bandwidth-config',
@@ -69,7 +71,11 @@ function seed(config: BandwidthConfig | null | undefined) {
 
 watch(() => bandwidth.value, seed, { immediate: true })
 
+// The number inputs store `v ?? null`: an empty input reports undefined when it
+// loses focus, which JSON leaves out. The form would then look edited, and the
+// PATCH would keep the stored limit instead of removing it.
 const dirty = computed(() => JSON.stringify(state) !== baseline.value)
+useUnsavedGuard().track('Bandwidth', dirty)
 
 const saving = ref(false)
 const saveError = ref<string | null>(null)
@@ -83,14 +89,19 @@ function addPeriod() {
   state.schedule.push({ days: ['mon', 'tue', 'wed', 'thu', 'fri'], start: '07:00', end: '23:00', downloadMb: null, uploadMb: null })
 }
 
+const SCHEDULE_ERROR = /^schedule\./
+
 function removePeriod(index: number) {
   state.schedule.splice(index, 1)
+  // Errors are keyed by period index, which just shifted.
+  recheck(SCHEDULE_ERROR)
 }
 
-function toggleDay(period: PeriodState, day: Weekday) {
+function toggleDay(period: PeriodState, index: number, day: Weekday) {
   period.days = period.days.includes(day)
     ? period.days.filter(d => d !== day)
     : WEEKDAYS.map(w => w.key).filter(d => d === day || period.days.includes(d))
+  recheck(`schedule.${index}.days`)
 }
 
 const TIME = /^(?:[01]\d|2[0-3]):[0-5]\d$/
@@ -99,11 +110,20 @@ function validate(s: State): FormError[] {
   const errors: FormError[] = []
   s.schedule.forEach((period, i) => {
     if (period.days.length === 0)
-      errors.push({ name: `schedule.${i}`, message: `Period ${i + 1}: pick at least one day.` })
+      errors.push({ name: `schedule.${i}.days`, message: 'Pick at least one day.' })
     if (!TIME.test(period.start) || !TIME.test(period.end))
-      errors.push({ name: `schedule.${i}`, message: `Period ${i + 1}: enter times as HH:MM.` })
+      errors.push({ name: `schedule.${i}.time`, message: 'Enter a start and end time.' })
   })
   return errors
+}
+
+// The day buttons aren't form inputs, so the form doesn't check them again on
+// its own. Only errors already on screen are updated.
+function recheck(target: string | RegExp) {
+  if (!form.value?.getErrors(target).length)
+    return
+  const matches = (name?: string) => (typeof target === 'string' ? name === target : Boolean(name && target.test(name)))
+  form.value.setErrors(validate(state).filter(e => matches(e.name)), target)
 }
 
 function periodSummary(period: PeriodState): string {
@@ -146,6 +166,7 @@ async function save() {
 
 function revert() {
   seed(bandwidth.value ?? null)
+  form.value?.clear()
   saveError.value = null
   saved.value = false
 }
@@ -164,14 +185,14 @@ function revert() {
       Loading…
     </p>
 
-    <UForm v-else :state="state" :validate="validate" class="space-y-3" @submit="save">
+    <UForm v-else ref="form" :state="state" :validate="validate" class="space-y-3" @submit="save" @error="onError">
       <UCard variant="subtle" :ui="{ body: 'space-y-4' }">
         <div class="grid gap-4 sm:grid-cols-2">
           <UFormField name="downloadMb" label="Download limit" description="Across all friends. Empty means unlimited." hint="MB/s" :ui="{ hint: 'font-mono text-xs text-dimmed' }">
-            <UInputNumber v-model="state.downloadMb" :disabled="saving" :min="0" :step="0.5" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" />
+            <UInputNumber :model-value="state.downloadMb" :disabled="saving" :min="0" :step="0.5" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" @update:model-value="v => (state.downloadMb = v ?? null)" />
           </UFormField>
           <UFormField name="uploadMb" label="Upload limit" description="Across all friends. Empty means unlimited." hint="MB/s" :ui="{ hint: 'font-mono text-xs text-dimmed' }">
-            <UInputNumber v-model="state.uploadMb" :disabled="saving" :min="0" :step="0.5" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" />
+            <UInputNumber :model-value="state.uploadMb" :disabled="saving" :min="0" :step="0.5" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" @update:model-value="v => (state.uploadMb = v ?? null)" />
           </UFormField>
         </div>
 
@@ -180,7 +201,7 @@ function revert() {
           label="Uploads at once"
           description="How many friends may download from you at once. Others are asked to retry a minute later. Empty means unlimited."
         >
-          <UInputNumber v-model="state.maxConcurrentUploads" :disabled="saving" :min="1" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" />
+          <UInputNumber :model-value="state.maxConcurrentUploads" :disabled="saving" :min="1" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" @update:model-value="v => (state.maxConcurrentUploads = v ?? null)" />
         </UFormField>
 
         <div class="grid gap-4 sm:grid-cols-2">
@@ -189,7 +210,7 @@ function revert() {
             label="Uploads at once per friend"
             description="So one friend can't take every upload slot. Each friend access key counts as one friend."
           >
-            <UInputNumber v-model="state.maxConcurrentUploadsPerPeer" :disabled="saving" :min="1" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" />
+            <UInputNumber :model-value="state.maxConcurrentUploadsPerPeer" :disabled="saving" :min="1" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" @update:model-value="v => (state.maxConcurrentUploadsPerPeer = v ?? null)" />
           </UFormField>
           <UFormField
             name="dailyUploadLimitGiBPerPeer"
@@ -198,7 +219,7 @@ function revert() {
             hint="GB"
             :ui="{ hint: 'font-mono text-xs text-dimmed' }"
           >
-            <UInputNumber v-model="state.dailyUploadLimitGiBPerPeer" :disabled="saving" :min="1" :step="10" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" />
+            <UInputNumber :model-value="state.dailyUploadLimitGiBPerPeer" :disabled="saving" :min="1" :step="10" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" @update:model-value="v => (state.dailyUploadLimitGiBPerPeer = v ?? null)" />
           </UFormField>
         </div>
       </UCard>
@@ -211,7 +232,8 @@ function revert() {
             </p>
             <p class="text-xs text-muted">
               The first period that matches the current day and time wins. A limit left empty in a
-              period uses the limit above. Times are in the server's time zone (the container's TZ).
+              period uses the limit above. Times use jack's time zone, which comes from the TZ
+              variable in the jack template.
             </p>
           </div>
           <UButton label="Add period" icon="i-ph-plus" size="sm" variant="soft" :disabled="saving" @click="addPeriod" />
@@ -229,31 +251,42 @@ function revert() {
             <UButton icon="i-ph-trash" size="xs" color="error" variant="ghost" :disabled="saving" aria-label="Remove period" @click="removePeriod(i)" />
           </div>
 
-          <div class="flex flex-wrap gap-1">
-            <UButton
-              v-for="day in WEEKDAYS"
-              :key="day.key"
-              :label="day.label"
-              size="xs"
-              :color="period.days.includes(day.key) ? 'primary' : 'neutral'"
-              :variant="period.days.includes(day.key) ? 'solid' : 'outline'"
-              :disabled="saving"
-              @click="toggleDay(period, day.key)"
-            />
-          </div>
+          <UFormField :name="`schedule.${i}.days`">
+            <div class="flex flex-wrap gap-1">
+              <UButton
+                v-for="day in WEEKDAYS"
+                :key="day.key"
+                :label="day.label"
+                size="xs"
+                :color="period.days.includes(day.key) ? 'primary' : 'neutral'"
+                :variant="period.days.includes(day.key) ? 'solid' : 'outline'"
+                :aria-pressed="period.days.includes(day.key)"
+                :disabled="saving"
+                @click="toggleDay(period, i, day.key)"
+              />
+            </div>
+          </UFormField>
 
           <div class="grid gap-3 sm:grid-cols-4">
-            <UFormField label="From">
-              <UInput v-model="period.start" type="time" :disabled="saving" class="w-full" />
-            </UFormField>
-            <UFormField label="To">
-              <UInput v-model="period.end" type="time" :disabled="saving" class="w-full" />
+            <!-- One field holds both times, so the error shows once under the pair
+                 and both inputs turn red. Each input brings its own id and label. -->
+            <UFormField :name="`schedule.${i}.time`" class="sm:col-span-2">
+              <div class="grid grid-cols-2 gap-3">
+                <div class="space-y-1">
+                  <label :for="`period-${i}-start`" class="block font-medium text-default">From</label>
+                  <UInput :id="`period-${i}-start`" v-model="period.start" type="time" :disabled="saving" class="w-full" />
+                </div>
+                <div class="space-y-1">
+                  <label :for="`period-${i}-end`" class="block font-medium text-default">To</label>
+                  <UInput :id="`period-${i}-end`" v-model="period.end" type="time" :disabled="saving" class="w-full" />
+                </div>
+              </div>
             </UFormField>
             <UFormField label="Download" hint="MB/s" :ui="{ hint: 'font-mono text-xs text-dimmed' }">
-              <UInputNumber v-model="period.downloadMb" :disabled="saving" :min="0" :step="0.5" :increment="false" :decrement="false" placeholder="Default" class="w-full" />
+              <UInputNumber :model-value="period.downloadMb" :disabled="saving" :min="0" :step="0.5" :increment="false" :decrement="false" placeholder="Same as above" class="w-full" @update:model-value="v => (period.downloadMb = v ?? null)" />
             </UFormField>
             <UFormField label="Upload" hint="MB/s" :ui="{ hint: 'font-mono text-xs text-dimmed' }">
-              <UInputNumber v-model="period.uploadMb" :disabled="saving" :min="0" :step="0.5" :increment="false" :decrement="false" placeholder="Default" class="w-full" />
+              <UInputNumber :model-value="period.uploadMb" :disabled="saving" :min="0" :step="0.5" :increment="false" :decrement="false" placeholder="Same as above" class="w-full" @update:model-value="v => (period.uploadMb = v ?? null)" />
             </UFormField>
           </div>
 
@@ -267,6 +300,9 @@ function revert() {
       <UAlert v-else-if="saved" color="success" variant="soft" icon="i-ph-check-circle" title="Saved." description="Bandwidth settings apply right away." />
 
       <div class="flex flex-wrap items-center justify-end gap-2 pt-1">
+        <p v-if="showFixHint" class="text-xs text-error">
+          Fix the highlighted fields to save.
+        </p>
         <UButton v-if="dirty" label="Revert" color="neutral" variant="ghost" :disabled="saving" @click="revert" />
         <UButton type="submit" :disabled="!dirty" :loading="saving" :label="saving ? 'Saving…' : 'Save changes'" />
       </div>

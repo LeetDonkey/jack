@@ -21,17 +21,23 @@ const SERVER_STEP_TITLES = {
   'no-source': 'Let Radarr or Sonarr share with friends',
 } as const
 
+type RequiredStepId = 'internal-url' | 'downloads' | 'servers' | 'restart'
+
 const requiredSteps = computed(() => {
   const { reason, state } = props.status.serversStep
-  return [
-    { id: 'internal-url', title: 'Tell jack how Radarr/Sonarr reach it', state: props.status.internalUrlStep },
+  const steps: Array<{ id: RequiredStepId, title: string, state: SetupStepState }> = [
+    { id: 'internal-url', title: 'Tell jack how Radarr/Sonarr reach it', state: props.status.internalUrlStep.state },
     { id: 'downloads', title: 'Turn on downloads', state: props.status.downloadsStep },
     {
       id: 'servers',
       title: reason === 'no-destination' || reason === 'no-source' ? SERVER_STEP_TITLES[reason] : 'Connect Radarr or Sonarr',
       state,
     },
-  ] as const
+  ]
+  // Last, so one restart picks up everything the steps above changed.
+  if (props.status.restartStep)
+    steps.push({ id: 'restart', title: 'Restart the jack container', state: props.status.restartStep })
+  return steps
 })
 
 const sharingSteps = computed(() => [
@@ -39,15 +45,18 @@ const sharingSteps = computed(() => [
   { id: 'friend', title: 'Invite or add a friend', state: props.status.friendStep },
 ] as const)
 
+const restartLabels = computed(() => restartReasonLabels(props.status.restartReasons).join(', '))
+
+// Server names inside a sentence: "Radarr and Sonarr".
+const nameList = new Intl.ListFormat('en', { style: 'long', type: 'conjunction' })
+const listNames = (names: readonly string[]) => nameList.format(names)
+
 // jack-ui usually runs on the same server as jack, so when this page was opened by
 // IPv4 address, that address is the likely answer. Otherwise show a placeholder.
 const requestHost = useRequestURL().hostname
 const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHost.startsWith('127.')
   ? `http://${requestHost}:5225`
   : 'http://<server-ip>:5225'
-
-// Kept on one line, so "->" never breaks between its two characters.
-const RESTART_HOW = '(Unraid: Docker tab -> jack -> Restart)'
 </script>
 
 <template>
@@ -79,23 +88,17 @@ const RESTART_HOW = '(Unraid: Docker tab -> jack -> Restart)'
         />
       </div>
 
-      <!-- Everything done: keep the one reminder people miss until it is hidden. -->
-      <div v-if="status.requiredComplete" class="border-t border-default px-4 py-3.5">
-        <template v-if="status.shareOnly">
-          <p class="text-sm text-muted">
-            You only share. Turn on downloads when you want friends' movies and episodes in Radarr/Sonarr.
-          </p>
-          <div class="pt-2">
-            <UButton :to="settingsLink('downloads')" label="Turn on downloads" size="sm" color="neutral" variant="outline" />
-          </div>
-        </template>
-        <p v-else class="text-sm text-muted">
-          If you turned on downloads after jack started, restart the jack container once
-          <span class="whitespace-nowrap">{{ RESTART_HOW }}</span>.
+      <!-- Everything done: someone who only shares still gets the way back to downloading. -->
+      <div v-if="status.requiredComplete && status.shareOnly" class="border-t border-default px-4 py-3.5">
+        <p class="text-sm text-muted">
+          You only share. Turn on downloads when you want friends' movies and episodes in Radarr/Sonarr.
         </p>
+        <div class="pt-2">
+          <UButton :to="settingsLink('downloads')" label="Turn on downloads" size="sm" color="neutral" variant="outline" />
+        </div>
       </div>
 
-      <ol v-else class="divide-y divide-default border-t border-default">
+      <ol v-else-if="!status.requiredComplete" class="divide-y divide-default border-t border-default">
         <li v-for="(step, index) in requiredSteps" :key="step.id" class="flex gap-3 px-4 py-3.5">
           <span class="flex size-5 shrink-0 items-center justify-center">
             <span
@@ -113,9 +116,18 @@ const RESTART_HOW = '(Unraid: Docker tab -> jack -> Restart)'
               <UBadge v-if="step.state === 'check'" color="warning" variant="subtle" size="sm" label="Check this" />
             </p>
 
-            <!-- 1. Internal URL -->
+            <!-- 1. Internal URL. A Radarr/Sonarr test of jack decides it when there is one. -->
             <template v-if="step.id === 'internal-url'">
-              <template v-if="step.state === 'check'">
+              <template v-if="status.internalUrlStep.failures.length">
+                <p v-for="failure in status.internalUrlStep.failures" :key="failure.id" class="text-sm break-words text-default">
+                  {{ failure.message }}
+                </p>
+                <div class="flex flex-wrap gap-2 pt-1">
+                  <UButton :to="settingsLink('internal-url')" label="Change the address" size="sm" variant="soft" />
+                  <UButton :to="settingsLink('servers')" label="Edit Radarr & Sonarr" size="sm" color="neutral" variant="outline" />
+                </div>
+              </template>
+              <template v-else-if="step.state === 'check'">
                 <p class="text-sm text-muted">
                   Is Radarr/Sonarr on the jack Docker network? If not, use
                   <span class="font-mono text-xs text-toned">{{ suggestedUrl }}</span>.
@@ -125,8 +137,12 @@ const RESTART_HOW = '(Unraid: Docker tab -> jack -> Restart)'
                   <UButton label="Yes, on the jack network" size="sm" color="neutral" variant="outline" @click="status.ackInternalUrl()" />
                 </div>
               </template>
+              <p v-else-if="status.internalUrlStep.reachedBy.length" class="text-sm text-muted">
+                {{ listNames(status.internalUrlStep.reachedBy) }} reached jack at
+                <span class="font-mono text-xs break-all text-toned">{{ status.internalUrl }}</span>.
+              </p>
               <p v-else class="text-sm text-muted">
-                Radarr/Sonarr reach jack at <span class="font-mono text-xs text-toned">{{ status.internalUrl }}</span>.
+                Radarr/Sonarr reach jack at <span class="font-mono text-xs break-all text-toned">{{ status.internalUrl }}</span>.
               </p>
             </template>
 
@@ -145,19 +161,21 @@ const RESTART_HOW = '(Unraid: Docker tab -> jack -> Restart)'
                 Skipped, because you only share.
                 <UButton label="Undo" size="sm" variant="link" class="p-0 align-baseline" @click="status.setShareOnly(false)" />
               </p>
-              <p v-else class="text-sm text-muted">
-                If you turned this on after jack started, restart the jack container once
-                <span class="whitespace-nowrap">{{ RESTART_HOW }}</span>.
+              <p v-else-if="status.completedPath" class="text-sm text-muted">
+                Finished downloads go to <span class="font-mono text-xs break-all text-toned">{{ status.completedPath }}</span>.
               </p>
             </template>
 
-            <!-- 3. Radarr / Sonarr -->
-            <template v-else>
+            <!-- 3. Radarr / Sonarr. Receiving needs jack's download client in one of them. -->
+            <template v-else-if="step.id === 'servers'">
               <p v-if="step.state === 'done'" class="text-sm text-muted">
                 Connected: {{ status.serversStep.names.join(', ') }}.
               </p>
+              <p v-else-if="status.serversStep.reason === 'registering'" class="text-sm text-muted">
+                Adding jack to {{ listNames(status.serversStep.names) }}…
+              </p>
               <p v-else-if="step.state === 'pending'" class="text-sm text-muted">
-                Connecting to {{ status.serversStep.names.join(', ') }}…
+                Connecting to {{ listNames(status.serversStep.names) }}…
               </p>
               <template v-else-if="status.serversStep.reason === 'none'">
                 <p class="text-sm text-muted">
@@ -165,6 +183,17 @@ const RESTART_HOW = '(Unraid: Docker tab -> jack -> Restart)'
                 </p>
                 <div class="pt-1">
                   <UButton :to="settingsLink('servers')" label="Connect Radarr or Sonarr" size="sm" variant="soft" />
+                </div>
+              </template>
+              <p v-else-if="status.serversStep.reason === 'downloads-off'" class="text-sm text-muted">
+                jack adds itself to {{ listNames(status.serversStep.names) }} once downloads are on.
+              </p>
+              <template v-else-if="status.serversStep.reason === 'no-client'">
+                <p v-for="problem in status.serversStep.problems" :key="problem.id" class="text-sm break-words text-default">
+                  {{ problem.message }}
+                </p>
+                <div class="pt-1">
+                  <UButton :to="settingsLink('servers')" label="Edit Radarr & Sonarr" size="sm" variant="soft" />
                 </div>
               </template>
               <template v-else>
@@ -175,13 +204,24 @@ const RESTART_HOW = '(Unraid: Docker tab -> jack -> Restart)'
                   None of them shares its library with friends, so friends find nothing to download from you.
                 </p>
                 <p v-else class="text-sm text-muted">
-                  jack can't reach {{ status.serversStep.names.join(', ') }}. Check the address and API key.
+                  jack can't reach {{ listNames(status.serversStep.names) }}. Check the address and API key.
                 </p>
                 <div class="pt-1">
                   <UButton :to="settingsLink('servers')" label="Edit Radarr & Sonarr" size="sm" variant="soft" />
                 </div>
               </template>
             </template>
+
+            <!-- 4. Restart, only while jack reports saved settings it hasn't loaded. -->
+            <p v-else class="text-sm text-muted">
+              <template v-if="status.restartReasons.includes('downloads')">
+                Radarr/Sonarr can't use jack's download client until jack restarts.
+              </template>
+              <template v-else>
+                These settings apply after the restart: {{ restartLabels }}.
+              </template>
+              Unraid: <span class="whitespace-nowrap">{{ RESTART_STEPS }}</span>.
+            </p>
           </div>
         </li>
       </ol>

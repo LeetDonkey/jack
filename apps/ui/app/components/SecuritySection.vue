@@ -54,6 +54,7 @@ function seed(config: SecurityConfig | null | undefined) {
 watch(() => security.value, seed, { immediate: true })
 
 const dirty = computed(() => JSON.stringify(state) !== baseline.value)
+useUnsavedGuard().track('Security', dirty)
 const saving = ref(false)
 const saveError = ref<string | null>(null)
 const saved = ref(false)

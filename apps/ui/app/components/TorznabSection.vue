@@ -31,6 +31,7 @@ function seed(config: TorznabConfig | null | undefined) {
 watch(() => torznab.value, seed, { immediate: true })
 
 const dirty = computed(() => JSON.stringify(state) !== baseline.value)
+useUnsavedGuard().track('RSS feed', dirty)
 const saving = ref(false)
 const saveError = ref<string | null>(null)
 const saved = ref(false)

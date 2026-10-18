@@ -33,11 +33,12 @@ Generating links requires a `jack.external` profile, editable under
   credentials embedded.
 - ***Proxy headers***: optional headers a friend's jack must send to get
   through your proxy, such as Cloudflare Access service tokens. Each value is a
-  [`ConfigSecret`](/reference/configuration#configsecret), so prefer an `env` or
-  `file` reference over a literal.
+  [`ConfigSecret`](/reference/configuration#configsecret): ***Use a container
+  variable or file instead*** under a value reads it from a variable or a file
+  in the jack container, so the secret stays out of the config file.
 
-Every link you generate reuses the saved profile. Full schema:
-[`jack.external`](/reference/configuration#jack-external).
+Click ***Save changes***. Every link you generate reuses the saved profile.
+Full schema: [`jack.external`](/reference/configuration#jack-external).
 
 ::: tip Use HTTPS
 The API key in a quick link, and in every request the peer later makes, travels

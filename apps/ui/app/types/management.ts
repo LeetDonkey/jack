@@ -16,7 +16,51 @@ export interface PeerItem extends ConnectorBase {
   version: string | null
 }
 
-export interface ServerItem extends ConnectorBase {
+// One step of jack registering itself in a Radarr/Sonarr (registration.schema.ts).
+export interface RegistrationStep {
+  status: 'ok' | 'failed' | 'skipped'
+  // What the *arr (or the network) reported, on 'failed'.
+  error?: string
+  // On 'skipped': no downloads block, or (indexer only) the download client step failed.
+  reason?: 'downloads-off' | 'client-failed'
+  // Indexer only, with downloads off: jack turned off a Jack indexer an earlier jack added.
+  disabledUnbound?: true
+}
+
+export type RegistrationTest = 'ok' | 'failed' | 'skipped'
+
+// What jack registered in one Radarr/Sonarr at its last registration this boot,
+// with that *arr's own Test results for jack's client and indexer.
+export interface DestinationRegistration {
+  at: string
+  indexer: RegistrationStep
+  downloadClient: RegistrationStep
+  reason?: 'downloads-off'
+  clientTest: RegistrationTest
+  indexerTest: RegistrationTest
+  // Plain-language text about the first failed test, failed step or skip.
+  message: string | null
+  testErrors: { downloadClient: string | null, indexer: string | null }
+}
+
+// Every server entry in /config/servers and /overview carries these.
+export interface ServerRegistrationFields {
+  // Null before the first registration this boot, and for a server jack doesn't register itself in.
+  registration: DestinationRegistration | null
+  // When this *arr last authenticated with the key jack gave it (Torznab or qBittorrent). Null until it happens this boot.
+  lastContactAt: string | null
+}
+
+// POST/PATCH /config/servers and POST /config/servers/:id/register.
+export interface ServerSaveResponse {
+  ok: true
+  // Null when the server isn't an auto-register destination, or while registrationPending.
+  registration: DestinationRegistration | null
+  // True when registration took over 25 s; the result then arrives on the streams.
+  registrationPending: boolean
+}
+
+export interface ServerItem extends ConnectorBase, ServerRegistrationFields {
   source: boolean
   destination: boolean
   autoregister: { enable: boolean, priority: number }
@@ -28,6 +72,15 @@ export interface ServerItem extends ConnectorBase {
 // only comes back on the full /config/servers payload). Keep the type honest so
 // nothing reaches for a field the overview never sends.
 export type OverviewServerItem = Omit<ServerItem, 'autoregister' | 'upgrades'>
+
+// Settings saved since jack started that only apply after a restart of the jack container.
+export type RestartReason = 'downloads' | 'downloads.completedPath' | 'downloads.retries' | 'jack.tmdbApiKey' | 'jack.apiKey'
+
+export interface SystemStatus {
+  // When this jack process started. A new value means jack restarted.
+  bootedAt: string
+  restartPending: RestartReason[]
+}
 
 export interface DownloadItem {
   id: number
@@ -118,6 +171,7 @@ export interface CatalogRequestPayload {
 export interface Overview {
   peers: { total: number, initialized: number, items: PeerItem[] }
   servers: { total: number, initialized: number, sources: number, destinations: number, items: OverviewServerItem[] }
+  system: SystemStatus
   downloads: {
     total: number
     byStatus: Record<string, number>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FormError } from '@nuxt/ui'
+import type { Form, FormError, FormSchema } from '@nuxt/ui'
 import type { ExternalJackConfig, SecretRef } from '~/types/management'
 
 const props = defineProps<{
@@ -16,11 +16,36 @@ const emit = defineEmits<{
   remove: []
 }>()
 
-const state = reactive({
-  instanceName: props.initial?.instanceName ?? '',
-  url: props.initial?.url ?? '',
-  headers: { ...(props.initial?.headers ?? {}) } as Record<string, SecretRef>,
-})
+const form = useTemplateRef<Form<FormSchema>>('form')
+const { onError, showFixHint } = useFormErrorFocus(form)
+
+function initialState() {
+  return {
+    instanceName: props.initial?.instanceName ?? '',
+    url: props.initial?.url ?? '',
+    headers: { ...(props.initial?.headers ?? {}) } as Record<string, SecretRef>,
+  }
+}
+
+const state = reactive(initialState())
+// The parent re-keys this section after a save or remove, so the saved values are
+// the baseline and Save stays disabled until something differs from them.
+const baseline = JSON.stringify(initialState())
+const dirty = computed(() => JSON.stringify(state) !== baseline)
+useUnsavedGuard().track('Quick linking', dirty)
+
+// The confirmation belongs to the saved values; editing again retires it.
+const showSaved = computed(() => props.saved && !dirty.value)
+
+// HeadersEditor keeps its own rows, seeded once, so Revert remounts it.
+const headersRevision = ref(0)
+function revert() {
+  Object.assign(state, initialState())
+  headersRevision.value++
+  form.value?.clear()
+}
+
+const guideUrl = docsUrl('unraid', '6-open-jack-to-your-friends')
 
 // Links carry the saved name and URL, so generating needs both saved. The reason
 // is shown as text under the button: a title tooltip never shows on touch screens.
@@ -28,7 +53,7 @@ const generateBlockedReason = computed(() => {
   if (!props.available)
     return 'To generate a link, save the jack section first.'
   if (!props.initial?.url || !props.initial?.instanceName)
-    return 'To generate a link, fill in Instance name and External URL, then Save.'
+    return 'To generate a link, fill in Instance name and External URL, then save.'
   return null
 })
 
@@ -99,7 +124,7 @@ function onSubmit() {
     </UCard>
 
     <UCard v-else variant="subtle" :ui="{ body: 'space-y-4' }">
-      <UForm :state="state" :validate="validate" class="space-y-4" @submit="onSubmit">
+      <UForm ref="form" :state="state" :validate="validate" class="space-y-4" @submit="onSubmit" @error="onError">
         <UFormField
           name="instanceName"
           label="Instance name"
@@ -115,30 +140,38 @@ function onSubmit() {
           description="Your public jack address. Friends' jacks use it to reach yours."
           required
         >
+          <template #hint>
+            <UButton :to="guideUrl" target="_blank" label="Help" icon="i-ph-question" color="neutral" variant="link" size="xs" class="p-0" />
+          </template>
           <UInput v-model="state.url" placeholder="https://jack.example.com" class="w-full" />
         </UFormField>
 
         <UFormField label="Proxy headers" hint="Optional">
-          <HeadersEditor v-model="state.headers" />
+          <HeadersEditor :key="headersRevision" v-model="state.headers" />
           <template #help>
             <span>Only if your reverse proxy needs extra headers (e.g. Cloudflare Access). Every link you create includes them.</span>
           </template>
         </UFormField>
 
         <UAlert v-if="error" color="error" variant="soft" icon="i-ph-warning" :title="error" />
-        <UAlert v-if="saved" color="success" variant="soft" icon="i-ph-check-circle" title="Quick linking settings saved." />
+        <UAlert v-else-if="showSaved" color="success" variant="soft" icon="i-ph-check-circle" title="Quick linking settings saved." />
 
-        <div class="flex justify-between gap-2 pt-2">
+        <div class="flex flex-wrap items-center justify-end gap-2 pt-2">
           <UButton
             v-if="initial"
             type="button"
             label="Remove configuration"
             color="error"
             variant="ghost"
+            class="mr-auto"
             :disabled="submitting"
             @click="emit('remove')"
           />
-          <UButton type="submit" :loading="submitting" :label="submitting ? 'Saving…' : 'Save'" />
+          <p v-if="showFixHint" class="text-xs text-error">
+            Fix the highlighted fields to save.
+          </p>
+          <UButton v-if="dirty" label="Revert" color="neutral" variant="ghost" :disabled="submitting" @click="revert" />
+          <UButton type="submit" :disabled="!dirty" :loading="submitting" :label="submitting ? 'Saving…' : 'Save changes'" />
         </div>
       </UForm>
     </UCard>

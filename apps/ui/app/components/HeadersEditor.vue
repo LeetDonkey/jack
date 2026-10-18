@@ -4,10 +4,13 @@ import type { SecretRef } from '~/types/management'
 const props = defineProps<{ modelValue: Record<string, SecretRef> }>()
 const emit = defineEmits<{ 'update:modelValue': [Record<string, SecretRef>] }>()
 
-interface Row { key: string, value: SecretRef | null }
+// `id` keys the row: SecretInput copies its value once, so an index key would
+// show a removed row's value in the row that moved up.
+interface Row { id: number, key: string, value: SecretRef | null }
 
+let nextId = 0
 const rows = ref<Row[]>(
-  Object.entries(props.modelValue ?? {}).map(([key, value]) => ({ key, value })),
+  Object.entries(props.modelValue ?? {}).map(([key, value]) => ({ id: nextId++, key, value })),
 )
 
 function sync() {
@@ -22,7 +25,7 @@ function sync() {
 }
 
 function add() {
-  rows.value.push({ key: '', value: null })
+  rows.value.push({ id: nextId++, key: '', value: null })
 }
 function remove(index: number) {
   rows.value.splice(index, 1)
@@ -34,10 +37,10 @@ watch(rows, sync, { deep: true })
 
 <template>
   <div class="space-y-2">
-    <div v-for="(row, index) in rows" :key="index" class="flex items-start gap-2">
+    <div v-for="(row, index) in rows" :key="row.id" class="flex items-start gap-2">
       <UInput v-model="row.key" placeholder="Header" class="w-1/3 shrink-0" />
-      <div class="flex-1">
-        <SecretInput v-model="row.value" />
+      <div class="min-w-0 flex-1">
+        <SecretInput v-model="row.value" placeholder="Value" optional cleared-hint="Saving with this empty removes the header." />
       </div>
       <UButton
         color="neutral"

@@ -1,8 +1,9 @@
-import type { PeerItem, ServerItem } from '~/types/management'
+import type { DestinationRegistration, PeerItem, ServerItem } from '~/types/management'
 import type { PeerColor } from '~/utils/peerColor'
 
 export interface SettingsState {
   peers: PeerItem[]
+  // Each server carries `registration` and `lastContactAt`, kept live by /config/stream.
   servers: ServerItem[]
   // Distinct, view-consistent colors derived once from the full peer set so callers
   // don't recompute them on every render. See buildPeerColorMap.
@@ -52,6 +53,22 @@ export function useSettings() {
     }
   }
 
+  /**
+   * Show a registration a request just answered with (Register again) without waiting
+   * for the stream. The stream usually carries the same result already, so an older
+   * one never replaces what's there.
+   */
+  function applyServerRegistration(id: string, registration: DestinationRegistration) {
+    const current = settings.value
+    const server = current?.servers.find(s => s.id === id)
+    if (!current || !server || (server.registration && server.registration.at >= registration.at))
+      return
+    settings.value = {
+      ...current,
+      servers: current.servers.map(s => s.id === id ? { ...s, registration } : s),
+    }
+  }
+
   useManagementStream<{ peers: PeerItem[], servers: ServerItem[] }>('config/stream', (snapshot) => {
     settingsRevision++
     settings.value = toSettingsState(snapshot.peers, snapshot.servers)
@@ -63,5 +80,5 @@ export function useSettings() {
     }
   })
 
-  return { settings, pending, error, reload }
+  return { settings, pending, error, reload, applyServerRegistration }
 }

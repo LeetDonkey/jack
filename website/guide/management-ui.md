@@ -12,7 +12,9 @@ operate jack day to day:
 
 - ***Dashboard***: a setup checklist until jack is ready, then your
   Radarr/Sonarr and friends and whether each one connected, with download
-  activity updating live.
+  activity updating live. Each Radarr/Sonarr shows when it last reached jack,
+  and ***Needs attention*** lists what is failing, including a Radarr/Sonarr
+  that jack couldn't set itself up in.
 - ***Friends' library***: browse everything your friends share, and request
   titles into your library.
 - ***Downloads***: inspect, cancel, retry, and delete in-flight or finished
@@ -20,7 +22,8 @@ operate jack day to day:
 - ***Live traffic***: what is moving right now, in both directions.
 - ***Friends***: who you download from, who can download from you, their
   traffic, and friends of friends.
-- ***Logs***: live-tail the backend's logs.
+- ***Logs***: live-tail the backend's logs. A line with a known fix has a help
+  icon; click the line for a link to the fix.
 - ***Settings***: one page, with these sections in this order:
   - ***jack***: ***Address Radarr/Sonarr use to reach jack***
     ([`jack.internalUrl`](/reference/configuration#jack-internalurl)). It
@@ -30,7 +33,8 @@ operate jack day to day:
     finished files land, how many downloads run at once, whether jack drops its
     copy after an import, and the retry and import-watcher tuning.
   - ***Radarr & Sonarr***: add, edit, and remove your Radarr/Sonarr
-    connections.
+    connections, and see what jack set up in each
+    ([below](#settings-radarr-sonarr)).
   - ***Quick linking***: how friends reach this instance, plus the buttons that
     generate and import [quick links](/guide/quick-links).
   - ***Friends you download from***: add, edit, and remove the friends whose
@@ -48,6 +52,19 @@ operate jack day to day:
 
 Links to a setting from elsewhere in the UI, such as the setup card on the
 ***Dashboard***, open ***Settings*** scrolled to that section.
+
+Each section of ***Settings*** saves on its own. Leaving ***Settings*** while
+a section has unsaved changes asks first, naming the sections, for example
+***Leave without saving Downloads?*** with ***Stay*** and ***Leave without
+saving***. Reloading or closing the tab gets the browser's own prompt instead.
+A dialog such as ***Connect Radarr or Sonarr*** stays open on a click outside
+it or on Escape once you've changed a field; close it with its own buttons.
+
+Some settings only apply when jack starts, such as turning on downloads or a
+new ***Completed folder***. Once you save one, a bar at the top of every page
+names them, for example ***jack needs a restart to apply: Downloads***, until
+you restart the jack container. jack-ui then shows ***jack restarted. New
+settings are active.*** jack-ui itself never needs a restart.
 
 Don't want it? Delete the `jack-ui` service and the backend's
 `JACK_MANAGEMENT_KEY` line to run jack headless.
@@ -74,10 +91,49 @@ the folder the Unraid template mounts; with the compose file from
 [Getting started](/guide/getting-started), change it to a path under
 `/data/torrents`.
 
+Each duration field shows its unit after the number: seconds, minutes or
+hours. jack-ui converts the value to the milliseconds the config file stores.
+
+jack only saves a ***Completed folder*** it can write to. Otherwise the field
+shows ***jack can't write to /data/jack. Check the Downloads path in the jack
+template.*** and nothing is saved.
+
 One ***Save changes*** covers the form and only lights up once something
 changed; ***Revert*** discards your edits. ***Downloads at once*** and
 ***Remove jack's copy*** take effect the moment you save. **Every other key
-here is read at startup, so restart the jack container** to apply it.
+here is read at startup, so restart the jack container** to apply it. After
+saving, the message names what still needs a restart, and so does the bar at
+the top of every page until you restart.
+
+## Settings -> Radarr & Sonarr
+
+With downloads on, saving a Radarr or Sonarr that has ***Download from friends
+into this Radarr*** and ***Auto-register jack in this Radarr*** on adds jack
+there as an indexer and a download client. jack then asks Radarr to test both,
+the check behind Radarr's own ***Test*** buttons. The dialog waits for the
+tests, up to about 30 seconds, and shows the result: ***jack is set up in
+Radarr.***, or what failed with a button to the setting that fixes it. If the
+tests take longer, the card shows the result once it's in. While downloads are
+off, the dialog says so and offers ***Turn on downloads***.
+
+The server's card then shows:
+
+- What jack set up there, for example
+  `jack in Radarr: indexer ✓ · download client ✓`. Other states:
+  - `skipped (downloads off)`: downloads are off, so jack added nothing.
+  - `download client waits for a restart`: downloads were turned on after
+    jack started.
+  - `failed`: jack couldn't add that part, or Radarr's test of it failed. The
+    reason follows on the next line.
+- When Radarr last reached jack with the key jack gave it, for example
+  ***Radarr last reached jack 3 min ago***. If it still hasn't ten minutes
+  after jack added itself, the card says so, with a ***Change the address***
+  link.
+- ***Register again***, which adds jack and runs the tests again, for example
+  after you fixed the address or Radarr was down.
+
+[`servers[].autoregister`](/reference/configuration#servers-autoregister)
+lists every time jack registers itself.
 
 ## Settings -> Quick linking
 
@@ -93,8 +149,28 @@ use it:
 - ***Add via quick link*** decodes a link a friend sent you and opens the
   ***Add a friend*** form prefilled, for you to review before saving.
 
+***Save changes*** stores the profile and only lights up once something
+changed; ***Revert*** discards your edits.
+
 Treat a generated link as a credential. [Quick links](/guide/quick-links) covers
 the full workflow and how to revoke one.
+
+## Secret fields
+
+Fields that hold a secret, such as an API key, an access key, a proxy header
+value or a webhook URL, are masked; the eye button shows the value. ***Use a
+container variable or file instead*** under the field picks where jack reads
+it from:
+
+- ***Typed here***: the value itself, stored in the config file.
+- ***Container variable***: the name of an environment variable in the jack
+  container, stored as `{ "env": "NAME" }`.
+- ***File in the container***: a path inside the jack container, such as a
+  Docker secret, stored as `{ "file": "/run/secrets/name" }`.
+
+A field whose stored value already comes from a variable or file opens with
+that choice shown. These are the
+[`ConfigSecret`](/reference/configuration#configsecret) forms.
 
 ## Access control
 
@@ -106,9 +182,15 @@ from:
    request and the browser is never prompted, so put a proxy such as Cloudflare
    Access or Traefik forward-auth in front of it to gate access.
 2. **Cookie prompt.** Leave `JACK_MANAGEMENT_KEY` unset. The browser is
-   prompted for the key once; it's validated against the management API and
-   stored in a sealed `HttpOnly` cookie. Set `JACK_SESSION_KEY` in production,
-   at least 32 characters, to seal that cookie.
+   prompted for the key once (***Enter the Management key***); it's validated
+   against the management API and stored in a sealed `HttpOnly` cookie. Set
+   `JACK_SESSION_KEY` in production, at least 32 characters, to seal that
+   cookie.
+
+When the UI can't use the management API, it shows ***jack-ui can't reach
+jack***, with the address it tried and what to check, or ***jack rejected
+jack-ui's key*** when the injected key doesn't match jack's. See
+[Troubleshooting](/guide/troubleshooting#jack-ui-shows-a-connection-error).
 
 ## How it works
 
@@ -130,13 +212,13 @@ for the full UI configuration reference.
 
 ## Live updates
 
-The UI doesn't poll. ***Dashboard***, ***Downloads***, ***Live traffic*** and
-***Settings*** each hold a
+The UI doesn't poll. Every page keeps the overview
 [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events)
-stream open through the BFF, and jack pushes a fresh snapshot the moment
-something changes: a download's progress, a connection's state, or a friend or
-Radarr/Sonarr you just edited. There is no refresh interval to tune and no
-manual refresh button.
+stream open through the BFF, for the restart bar and the ***Dashboard***.
+***Downloads***, ***Live traffic*** and ***Settings*** open a stream of their
+own. jack pushes a fresh snapshot the moment something changes: a download's
+progress, a connection's state, or a friend or Radarr/Sonarr you just edited.
+There is no refresh interval to tune and no manual refresh button.
 
 The streams are plain `GET` endpoints on the management API:
 

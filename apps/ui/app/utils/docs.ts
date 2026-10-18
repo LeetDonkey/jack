@@ -1,7 +1,8 @@
 /**
  * Links into the fork's guide on GitHub. The VitePress site still describes
  * upstream, so the guide is linked where it is maintained. Anchors are GitHub's
- * heading slugs; keep this list in step with the headings in website/guide/.
+ * heading slugs; docs.test.ts fails when one no longer matches a heading in
+ * website/guide/.
  */
 const DOCS_BASE = 'https://github.com/LeetDonkey/jack/blob/main/website/guide/'
 

@@ -33,7 +33,8 @@ export default defineEventHandler(async (event) => {
     res = await fetch(target, { method, headers, body, signal: upstreamAbort.signal })
   }
   catch {
-    throw createError({ statusCode: 503, statusMessage: 'management API is unreachable' })
+    // Shown as-is on the page that made the call (extractError reads `message`).
+    throw createError({ statusCode: 503, statusMessage: 'jack isn\'t answering. Check that the jack container is running (Docker tab).' })
   }
 
   setResponseStatus(event, res.status)

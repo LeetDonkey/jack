@@ -44,5 +44,8 @@ defineEmits<{ edit: [], remove: [] }>()
       :ui="{ description: 'font-mono text-xs' }"
       :description="error"
     />
+
+    <!-- Below the error: what follows from the connection, such as what jack set up in a Radarr/Sonarr. -->
+    <slot name="details" />
   </UCard>
 </template>

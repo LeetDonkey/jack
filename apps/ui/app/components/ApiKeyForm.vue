@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FormError } from '@nuxt/ui'
+import type { Form, FormError, FormSchema } from '@nuxt/ui'
 import type { ApiKey, ApiKeyInput } from '~/types/management'
 
 const props = defineProps<{
@@ -7,9 +7,13 @@ const props = defineProps<{
   submitting?: boolean
   error?: string | null
 }>()
-const emit = defineEmits<{ submit: [ApiKeyInput], cancel: [] }>()
+// `dirty` tells the dialog to stop closing on a click outside once something is typed.
+const emit = defineEmits<{ submit: [ApiKeyInput], cancel: [], dirty: [boolean] }>()
 
 const editing = computed(() => Boolean(props.initial))
+
+const form = useTemplateRef<Form<FormSchema>>('form')
+const { onError, showFixHint } = useFormErrorFocus(form)
 
 type Preset = 'never' | '30d' | '90d' | '1y' | 'custom'
 const PRESET_DAYS: Record<'30d' | '90d' | '1y', number> = { '30d': 30, '90d': 90, '1y': 365 }
@@ -30,6 +34,11 @@ const state = reactive({
   preset: (props.initial?.expiresAt ? 'custom' : 'never') as Preset,
   customAt: props.initial?.expiresAt ? toDatetimeLocal(props.initial.expiresAt) : '',
 })
+
+// Compared with the values the dialog opened with.
+const openedWith = JSON.stringify(state)
+const dirty = computed(() => JSON.stringify(state) !== openedWith)
+watch(dirty, value => emit('dirty', value), { immediate: true })
 
 // datetime-local wants local wall-clock `YYYY-MM-DDTHH:mm`, not an ISO instant.
 function toDatetimeLocal(iso: string): string {
@@ -71,7 +80,7 @@ function onSubmit() {
 </script>
 
 <template>
-  <UForm :state="state" :validate="validate" class="space-y-4" @submit="onSubmit">
+  <UForm ref="form" :state="state" :validate="validate" class="space-y-4" @submit="onSubmit" @error="onError">
     <UFormField
       name="name"
       label="Name"
@@ -95,7 +104,10 @@ function onSubmit() {
 
     <UAlert v-if="error" color="error" variant="soft" icon="i-ph-warning" :title="error" />
 
-    <div class="flex justify-end gap-2 pt-2">
+    <div class="flex flex-wrap items-center justify-end gap-2 pt-2">
+      <p v-if="showFixHint" class="text-xs text-error">
+        Fix the highlighted fields to save.
+      </p>
       <UButton label="Cancel" color="neutral" variant="ghost" @click="emit('cancel')" />
       <UButton type="submit" :loading="submitting" :label="submitting ? 'Saving…' : editing ? 'Save changes' : 'Create key'" />
     </div>

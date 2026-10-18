@@ -28,6 +28,7 @@ function seed(config: DiscoveryConfig | null | undefined) {
 watch(() => discovery.value, seed, { immediate: true })
 
 const dirty = computed(() => JSON.stringify(state) !== baseline.value)
+useUnsavedGuard().track('Friends of friends', dirty)
 const saving = ref(false)
 const saveError = ref<string | null>(null)
 const saved = ref(false)

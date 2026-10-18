@@ -1,20 +1,11 @@
 <script setup lang="ts">
-import type { Overview } from '~/types/management'
-
-const { request } = useManagement()
-
-const overviewRequest = useAsyncData('overview', () => request<Overview>('overview'))
-const { data: overview, error, refresh } = overviewRequest
+// The shared overview: the layout keeps its stream open on every page.
+const { overview, error, refresh, connected, hasConnectedOnce, whenLoaded } = useOverview()
 
 // Setup checklist state. Awaited together with the overview so the first render
 // already knows whether setup is open: no card popping in, no green flash.
 const setup = useSetupStatus(overview)
-await Promise.all([overviewRequest, setup.whenLoaded()])
-
-const { connected, hasConnectedOnce } = useManagementStream<Overview>('overview/stream', (snapshot) => {
-  overview.value = snapshot
-  error.value = undefined
-})
+await Promise.all([whenLoaded(), setup.whenLoaded()])
 
 // Requests that failed while jack was unreachable get another go once the stream
 // reaches it again.
@@ -38,6 +29,15 @@ watch(() => Boolean(overview.value) && setup.settled, (shown) => {
 // Peer colors from the shared settings store (single source, consistent across views).
 const { settings } = useSettings()
 const peerTextClass = (id: string) => settings.value?.peerColors.get(id)?.text ?? peerColorTextClass(id)
+
+// "last reached jack 3 min ago" has to move on while Radarr/Sonarr stay quiet, so
+// it reads a clock that ticks instead of the time of the last snapshot.
+const now = ref(Date.now())
+let clock: ReturnType<typeof setInterval> | undefined
+onMounted(() => {
+  clock = setInterval(() => now.value = Date.now(), 30_000)
+})
+onBeforeUnmount(() => clearInterval(clock))
 </script>
 
 <template>
@@ -64,6 +64,8 @@ const peerTextClass = (id: string) => settings.value?.peerColors.get(id)?.text ?
             :setup-state="setup.requiredState"
             :downloads-on="setup.ready ? setup.downloadsOn : null"
             :share-only="setup.shareOnly"
+            :setup-server-ids="setup.cardServerIds"
+            :setup-asks-for-receiver="setup.cardAsksForReceiver"
           />
         </div>
 
@@ -176,7 +178,15 @@ const peerTextClass = (id: string) => settings.value?.peerColors.get(id)?.text ?
               <div v-else class="divide-y divide-default">
                 <div v-for="server in overview.servers.items" :key="server.id" class="flex items-center gap-3 px-4 py-2.5">
                   <ConnDot :initialized="server.initialized" :error="server.initializationError" />
-                  <span class="min-w-0 flex-1 truncate text-sm text-default" :title="server.name">{{ server.name }}</span>
+                  <span class="min-w-0 flex-1">
+                    <span class="block truncate text-sm text-default" :title="server.name">{{ server.name }}</span>
+                    <!-- Set when this *arr last used the key jack gave it (Torznab or its download client). -->
+                    <span
+                      v-if="server.lastContactAt"
+                      class="block truncate text-xs text-muted"
+                      :title="formatDate(server.lastContactAt)"
+                    >last reached jack {{ formatTimeAgo(server.lastContactAt, now) }}</span>
+                  </span>
                   <span v-if="server.initialized" class="text-right text-xs text-muted">{{ serverRoleLabel(server) }}</span>
                   <span v-else-if="server.initializationError" class="text-xs text-error">unreachable</span>
                   <span v-else class="text-xs text-muted">connecting…</span>

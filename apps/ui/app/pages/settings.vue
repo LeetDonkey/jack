@@ -2,6 +2,10 @@
 import type { BadgeProps } from '@nuxt/ui'
 import type { ApiKey, ApiKeyInput, CreatedApiKey, ExternalJackConfig, JackConfig, PeerInput } from '~/types/management'
 
+// Sections register their unsaved edits here, and leaving Settings with any of
+// them asks first.
+provideUnsavedGuard()
+
 const { request, extractError } = useManagement()
 const version = useRuntimeConfig().public.appVersion
 
@@ -151,6 +155,8 @@ onBeforeUnmount(() => {
 })
 
 const showForm = ref(false)
+// Set by the form once something is typed: the dialog then only closes through its buttons.
+const keyFormDirty = ref(false)
 const editTarget = ref<ApiKey | null>(null)
 const submitting = ref(false)
 const formError = ref<string | null>(null)
@@ -289,7 +295,9 @@ async function confirmRevoke() {
         >
           <UAlert v-if="jackLoadError" color="error" variant="soft" icon="i-ph-warning" title="Failed to load the jack settings." />
 
-          <p v-else-if="jackPending" class="flex items-center gap-2 text-sm text-muted">
+          <!-- Only on the first load. A save refreshes the config too, and hiding the
+               forms then would discard unsaved edits in the other one. -->
+          <p v-else-if="jackPending && jack === undefined" class="flex items-center gap-2 text-sm text-muted">
             <UIcon name="i-ph-circle-notch" class="size-4 animate-spin" />
             Loading…
           </p>
@@ -301,14 +309,8 @@ async function confirmRevoke() {
               :initial="jack"
               :submitting="jackSubmitting"
               :error="jackError"
+              :saved="jackSaved"
               @submit="saveJack"
-            />
-            <UAlert
-              v-if="jackSaved"
-              color="success"
-              variant="soft"
-              icon="i-ph-check-circle"
-              title="Saved. jack updates Radarr/Sonarr with the new address."
             />
           </UCard>
         </SettingsSection>
@@ -323,7 +325,7 @@ async function confirmRevoke() {
 
         <USeparator />
 
-        <template v-if="!jackPending && !jackLoadError">
+        <template v-if="!(jackPending && jack === undefined) && !jackLoadError">
           <QuickLinkingSection
             :key="quickLinkFormRevision"
             :available="Boolean(jack)"
@@ -457,7 +459,11 @@ async function confirmRevoke() {
     </template>
   </UDashboardPanel>
 
-  <UModal v-model:open="showForm" :title="editTarget ? 'Edit friend access key' : 'Create friend access key'">
+  <UModal
+    v-model:open="showForm"
+    :title="editTarget ? 'Edit friend access key' : 'Create friend access key'"
+    :dismissible="!keyFormDirty"
+  >
     <template #body>
       <ApiKeyForm
         :initial="editTarget"
@@ -465,6 +471,7 @@ async function confirmRevoke() {
         :error="formError"
         @submit="submit"
         @cancel="showForm = false"
+        @dirty="(value) => { keyFormDirty = value }"
       />
     </template>
   </UModal>

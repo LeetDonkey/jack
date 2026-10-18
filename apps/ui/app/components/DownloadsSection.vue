@@ -1,26 +1,25 @@
 <script setup lang="ts">
-import type { FormError } from '@nuxt/ui'
+import type { Form, FormError, FormSchema } from '@nuxt/ui'
 import type { DownloadsConfig, DownloadsConfigPatch } from '~/types/management'
 
 const { request, extractError } = useManagement()
+const form = useTemplateRef<Form<FormSchema>>('form')
+const { onError, showFixHint } = useFormErrorFocus(form)
 
 // `null` is a real answer here: no downloads block in the config file, so downloads
 // are off and the section offers to turn them on.
 const { data: downloads, pending, error: loadError } = useDownloadsConfig()
 
+// jack's own record of what still waits for a restart (overview.system.restartPending).
+const { overview, refresh: refreshOverview } = useOverview()
+
 // The Container Path the Unraid template maps jack's Downloads folder to.
 const TEMPLATE_DOWNLOADS_PATH = '/data/jack'
 
-// Same shape as the jack section's Saved alert in settings.vue.
-const RESTART_TITLE = 'Saved. Restart the jack container to apply this.'
-const RESTART_NOTE = 'Unraid: Docker tab -> jack -> Restart. jack-ui doesn\'t need a restart.'
-
-// Read live by the running downloads service. Everything else in the block is
-// captured when jack starts.
-const LIVE_KEYS = new Set(['maxConcurrentDownloads', 'unlinkImportedFiles'])
+const RESTART_NOTE = `Unraid: ${RESTART_STEPS}. jack-ui doesn't need a restart.`
 
 // Every tuning knob is `number | null`, where null means "absent from the file" and
-// jack's default applies. The switch has no such state — absent and false behave the
+// jack's default applies. The switch has no such state: absent and false behave the
 // same, so it stays a plain boolean and is written as an absent key when off.
 function blankState() {
   return {
@@ -61,6 +60,7 @@ function seed(config: DownloadsConfig | null | undefined) {
 watch(() => downloads.value, seed, { immediate: true })
 
 const dirty = computed(() => JSON.stringify(state) !== baseline.value)
+useUnsavedGuard().track('Downloads', dirty)
 
 const saving = ref(false)
 const saveError = ref<string | null>(null)
@@ -71,16 +71,45 @@ watch(dirty, (isDirty) => {
     saved.value = false
 })
 
+// jack refuses a Completed folder it can't write to with a 400. The message is
+// shown on the field, where the fix is, and cleared as soon as the path changes.
+const completedPathError = ref<string | null>(null)
+watch(() => state.completedPath, () => {
+  completedPathError.value = null
+})
+const completedPathInput = useTemplateRef<{ inputRef: HTMLInputElement | null }>('completedPathInput')
+
+function isCompletedPathRefusal(err: unknown, message: string): boolean {
+  const e = err as { statusCode?: number, response?: { status?: number }, data?: { error?: { field?: string } } } | null
+  if ((e?.response?.status ?? e?.statusCode) !== 400)
+    return false
+  // `field` once the management API names the field in its errors (plan 3.2).
+  return e?.data?.error?.field === 'completedPath' || message.startsWith('jack can\'t write to ')
+}
+
+// After a successful save: what a restart of jack would still apply from this
+// section, named as the restart banner names it. Read from jack, so it stays right
+// across reloads and tabs, and clears once jack has restarted. Null while the
+// overview isn't loaded.
+const restartLabels = computed(() => {
+  const pending = overview.value?.system?.restartPending
+  if (!pending)
+    return null
+  return restartReasonLabels(pending.filter(reason => reason === 'downloads' || reason.startsWith('downloads.')))
+})
+
+const savedAlert = computed(() => {
+  const labels = restartLabels.value
+  if (!labels)
+    return { title: 'Saved.', description: undefined }
+  if (labels.length)
+    return { title: `Saved. Restart the jack container to apply: ${labels.join(', ')}.`, description: RESTART_NOTE }
+  return { title: 'Saved.', description: 'Applied right away.' }
+})
+
 // A config file with no downloads block gets an invitation to add one rather than a
 // dead end, since writing the block is exactly what this form does.
 const adding = ref(false)
-// Set when the save that just succeeded needs a jack restart to take effect: it
-// created the block, or it changed a value jack only reads at startup.
-const restartNeeded = ref(false)
-// jack only starts its downloads service when the block exists at startup, so
-// after turning downloads on nothing applies a "live" value until the restart
-// either. Batch 2's restartPending can replace this.
-const createdThisSession = ref(false)
 
 // The template always mounts the Downloads folder, so the path is known. Prefilling
 // leaves the form dirty, and Save works straight away.
@@ -103,11 +132,12 @@ function validate(s: State): FormError[] {
 
 // Every control is disabled for the duration of this call. The read-back below re-seeds
 // the form from the server's answer, which would otherwise silently discard anything
-// typed while the request was in flight — and reset the baseline with it, so the lost
+// typed while the request was in flight, and reset the baseline with it, so the lost
 // edit wouldn't even leave the form dirty.
 async function save() {
   saving.value = true
   saveError.value = null
+  completedPathError.value = null
   saved.value = false
   const patch: DownloadsConfigPatch = {
     completedPath: state.completedPath.trim(),
@@ -124,12 +154,6 @@ async function save() {
     // Off is the default, so write it as an absent key rather than an explicit false.
     unlinkImportedFiles: state.unlinkImportedFiles ? true : null,
   }
-  const creating = !downloads.value
-  // Compare against the last saved values to tell whether this save needs a restart.
-  const before = JSON.parse(baseline.value) as State
-  const after: State = { ...state, completedPath: state.completedPath.trim() }
-  const changedAtStartup = (Object.keys(before) as Array<keyof State>)
-    .some(key => !LIVE_KEYS.has(key) && before[key] !== after[key])
   try {
     await request('config/downloads', { method: 'PATCH', body: patch })
     // Read back what was written. A failed asyncData refresh would empty
@@ -137,23 +161,38 @@ async function save() {
     // was just saved if jack can't be reached right now.
     downloads.value = await request<DownloadsConfig | null>('config/downloads')
       .catch(() => configFromPatch(patch))
-    if (creating)
-      createdThisSession.value = true
-    restartNeeded.value = createdThisSession.value || changedAtStartup
+    // The stream pushes the new restartPending too, but maybe only after this
+    // returns. Fetching it first keeps the alert from flashing "Applied right away".
+    // refresh() never rejects.
+    await refreshOverview()
     adding.value = false
     saved.value = true
   }
   catch (err) {
-    saveError.value = extractError(err, 'Could not save the downloads settings.')
+    const message = extractError(err, 'Could not save the downloads settings.')
+    if (isCompletedPathRefusal(err, message)) {
+      completedPathError.value = message
+      saveError.value = 'Not saved. Check the Completed folder.'
+    }
+    else {
+      saveError.value = message
+    }
   }
   finally {
     saving.value = false
+  }
+  // The field sits at the top of a long form, and was disabled until now.
+  if (completedPathError.value) {
+    await nextTick()
+    completedPathInput.value?.inputRef?.focus()
   }
 }
 
 function revert() {
   seed(downloads.value ?? null)
+  form.value?.clear()
   saveError.value = null
+  completedPathError.value = null
   saved.value = false
   // Reverting a block that was never saved means backing out of adding it entirely.
   if (!downloads.value)
@@ -188,6 +227,8 @@ function customCount(keys: readonly string[]) {
 
 const transferOpen = ref(false)
 const importOpen = ref(false)
+
+const guideUrl = docsUrl('unraid', '5-connect-radarr-and-sonarr')
 </script>
 
 <template>
@@ -216,7 +257,7 @@ const importOpen = ref(false)
       </div>
     </UCard>
 
-    <UForm v-else :state="state" :validate="validate" class="space-y-3" @submit="save">
+    <UForm v-else ref="form" :state="state" :validate="validate" class="space-y-3" @submit="save" @error="onError">
       <p class="flex items-start gap-1.5 text-xs text-muted">
         <UIcon name="i-ph-info" class="mt-px size-3.5 shrink-0" />
         <span>
@@ -231,9 +272,19 @@ const importOpen = ref(false)
           name="completedPath"
           label="Completed folder"
           description="The Container Path of jack's Downloads folder in the Unraid template. Radarr/Sonarr must see this folder at the same path."
+          :error="completedPathError ?? undefined"
           required
         >
-          <UInput v-model="state.completedPath" :disabled="saving" :placeholder="TEMPLATE_DOWNLOADS_PATH" class="w-full font-mono" />
+          <template #hint>
+            <UButton :to="guideUrl" target="_blank" label="Help" icon="i-ph-question" color="neutral" variant="link" size="xs" class="p-0" />
+          </template>
+          <UInput
+            ref="completedPathInput"
+            v-model="state.completedPath"
+            :disabled="saving"
+            :placeholder="TEMPLATE_DOWNLOADS_PATH"
+            class="w-full font-mono"
+          />
         </UFormField>
 
         <ConfigNumberField
@@ -294,7 +345,8 @@ const importOpen = ref(false)
               label="Retry window"
               description="After a network error or an error from the friend's jack, keep retrying until this long has passed since the download last received data, even when the attempts above are used up. Waiting downloads don't take a download slot. 0 turns it off."
               :default-value="DEFAULTS.retryWindowMs!"
-              unit="ms"
+              display-unit="h"
+              zero-label="Off"
             />
             <ConfigNumberField
               v-model="state.idleTimeoutMs"
@@ -303,7 +355,7 @@ const importOpen = ref(false)
               label="Stall timeout"
               description="How long a download may receive no data before jack treats it as stalled and retries."
               :default-value="DEFAULTS.idleTimeoutMs!"
-              unit="ms"
+              display-unit="s"
               :min="1000"
             />
             <ConfigNumberField
@@ -313,7 +365,7 @@ const importOpen = ref(false)
               label="First retry delay"
               description="Starting point for the backoff between retries. Each further attempt waits longer."
               :default-value="DEFAULTS.retryBaseDelayMs!"
-              unit="ms"
+              display-unit="s"
             />
             <ConfigNumberField
               v-model="state.retryMaxDelayMs"
@@ -322,7 +374,7 @@ const importOpen = ref(false)
               label="Longest retry delay"
               description="Ceiling for that backoff."
               :default-value="DEFAULTS.retryMaxDelayMs!"
-              unit="ms"
+              display-unit="min"
             />
           </UCard>
         </template>
@@ -355,7 +407,7 @@ const importOpen = ref(false)
               label="Import check interval"
               description="How often jack reads the import history of each Radarr/Sonarr."
               :default-value="DEFAULTS.importPollIntervalMs!"
-              unit="ms"
+              display-unit="s"
               :min="1000"
             />
             <ConfigNumberField
@@ -374,7 +426,7 @@ const importOpen = ref(false)
               label="First import retry delay"
               description="Starting point for the backoff between those attempts."
               :default-value="DEFAULTS.manualImportBackoffBaseMs!"
-              unit="ms"
+              display-unit="min"
             />
             <ConfigNumberField
               v-model="state.manualImportBackoffMaxMs"
@@ -383,7 +435,7 @@ const importOpen = ref(false)
               label="Longest import retry delay"
               description="Ceiling for that backoff."
               :default-value="DEFAULTS.manualImportBackoffMaxMs!"
-              unit="ms"
+              display-unit="min"
             />
           </UCard>
         </template>
@@ -396,12 +448,15 @@ const importOpen = ref(false)
         color="success"
         variant="soft"
         icon="i-ph-check-circle"
-        :title="restartNeeded ? RESTART_TITLE : 'Saved.'"
-        :description="restartNeeded ? RESTART_NOTE : 'Applied right away.'"
+        :title="savedAlert.title"
+        :description="savedAlert.description"
       />
 
       <div class="flex flex-wrap items-center justify-end gap-2 pt-1">
-        <p class="mr-auto text-xs text-muted">
+        <p v-if="showFixHint" class="mr-auto text-xs text-error">
+          Fix the highlighted fields to save.
+        </p>
+        <p v-else class="mr-auto text-xs text-muted">
           Clear a field to use jack's default.
         </p>
         <UButton v-if="dirty" label="Revert" color="neutral" variant="ghost" :disabled="saving" @click="revert" />

@@ -34,7 +34,9 @@ Both are supported on one axis — where the key comes from:
    BFF.
 
 `/api/ping` resolves to one of: `ok`, `needs-key`, `disabled` (management API
-unreachable or disabled), or `error`.
+unreachable or disabled), or `error`. `disabled` carries a `reason` (`dns`,
+`down` or `timeout`) and the `url` jack-ui tried. In env mode, a key jack
+rejects is `error` with `reason: 'unauthorized'`.
 
 ## Environment
 

@@ -1,14 +1,33 @@
 <script setup lang="ts">
 import type { BadgeProps } from '@nuxt/ui'
-import type { ServerInput, ServerItem } from '~/types/management'
+import type { DestinationRegistration, ServerInput, ServerItem, ServerSaveResponse } from '~/types/management'
+import type { RegistrationTone } from '~/utils/server-role'
 
 const { request, extractError } = useManagement()
-const { settings, pending, error, reload } = useSettings()
+const { settings, pending, error, reload, applyServerRegistration } = useSettings()
+const toast = useToast()
 
 const showForm = ref(false)
 const editTarget = ref<ServerItem | null>(null)
 const submitting = ref(false)
 const formError = ref<string | null>(null)
+// Set by ServerForm once a field differs from what the dialog opened with.
+const formDirty = ref(false)
+// What the last save set up in the server, shown in the dialog in place of the
+// form until Done.
+const saved = ref<{ name: string, registration: DestinationRegistration | null, pending: boolean } | null>(null)
+// An outside click or Escape must not throw away edits or hide a save in progress.
+const formDismissible = computed(() => saved.value !== null || !(formDirty.value || submitting.value))
+const formTitle = computed(() => {
+  if (saved.value)
+    return saved.value.name
+  return editTarget.value ? `Edit ${editTarget.value.name}` : 'Connect Radarr or Sonarr'
+})
+watch(showForm, (open) => {
+  if (!open)
+    formDirty.value = false
+})
+useUnsavedGuard().track('Radarr & Sonarr', computed(() => showForm.value && formDirty.value && !saved.value))
 
 const confirmTarget = ref<ServerItem | null>(null)
 const deleting = ref(false)
@@ -29,39 +48,111 @@ watch(confirmTarget, (server) => {
 })
 const confirmArr = computed(() => arrName(lastConfirm.value?.type ?? 'radarr'))
 
+// "3 min ago" and the 10-minute "never" have to move on their own; they read the
+// clock, which Vue doesn't track.
+const now = ref(Date.now())
+const clockTimer = ref<ReturnType<typeof setInterval>>()
+onMounted(() => {
+  clockTimer.value = setInterval(() => {
+    now.value = Date.now()
+  }, 30_000)
+})
+onBeforeUnmount(() => clearInterval(clockTimer.value))
+
 function closeConfirm() {
   confirmTarget.value = null
   deleteError.value = null
 }
 
-function openAdd() {
-  editTarget.value = null
-  formError.value = null
-  showForm.value = true
-}
-function openEdit(server: ServerItem) {
+function openForm(server: ServerItem | null) {
   editTarget.value = server
   formError.value = null
+  formDirty.value = false
+  saved.value = null
   showForm.value = true
+}
+
+// A registration that outlived the request's wait (about 25 s) arrives on the
+// stream. Until a result newer than `previousAt` shows up, the card says it's
+// still testing, for two minutes at most.
+const PENDING_MAX_MS = 2 * 60_000
+const pendingRegistrations = reactive(new Map<string, { previousAt: string | null, since: number }>())
+function markPending(id: string, previousAt: string | null) {
+  pendingRegistrations.set(id, { previousAt, since: Date.now() })
+}
+function isTesting(server: ServerItem): boolean {
+  const waiting = pendingRegistrations.get(server.id)
+  return Boolean(waiting && (server.registration?.at ?? null) === waiting.previousAt && now.value - waiting.since < PENDING_MAX_MS)
 }
 
 async function submit(input: ServerInput) {
   submitting.value = true
   formError.value = null
   const arr = arrName(input.type)
+  const target = editTarget.value
+  const previousAt = target ? (settings.value?.servers.find(s => s.id === target.id)?.registration?.at ?? null) : null
   try {
-    if (editTarget.value)
-      await request(`config/servers/${editTarget.value.id}`, { method: 'PATCH', body: input })
+    const res = target
+      ? await request<ServerSaveResponse>(`config/servers/${target.id}`, { method: 'PATCH', body: input })
+      : await request<ServerSaveResponse>('config/servers', { method: 'POST', body: input })
+    // A server jack doesn't add itself to has nothing to report.
+    if (res.registration || res.registrationPending)
+      saved.value = { name: input.name, registration: res.registration, pending: res.registrationPending }
     else
-      await request('config/servers', { method: 'POST', body: input })
-    showForm.value = false
+      showForm.value = false
     await reload()
+    if (res.registrationPending) {
+      const id = target?.id ?? settings.value?.servers.find(s => s.name === input.name)?.id
+      if (id)
+        markPending(id, previousAt)
+    }
   }
   catch (err) {
     formError.value = extractError(err, `Could not save this ${arr}.`)
   }
   finally {
     submitting.value = false
+  }
+}
+
+const registering = reactive(new Set<string>())
+// A failed Register again stays on the card until the server's registration
+// changes, for example when jack reaches a server that was down and registers there.
+const registerErrors = reactive(new Map<string, { message: string, previousAt: string | null }>())
+function registerError(server: ServerItem): string | null {
+  const failed = registerErrors.get(server.id)
+  return failed && (server.registration?.at ?? null) === failed.previousAt ? failed.message : null
+}
+
+async function registerAgain(server: ServerItem) {
+  if (registering.has(server.id))
+    return
+  registering.add(server.id)
+  registerErrors.delete(server.id)
+  const previousAt = server.registration?.at ?? null
+  try {
+    const res = await request<ServerSaveResponse>(`config/servers/${server.id}/register`, { method: 'POST' })
+    if (res.registration) {
+      applyServerRegistration(server.id, res.registration)
+      // Worded as the result dialog after a save words the same outcome.
+      const { tone } = registrationSummary(res.registration)
+      toast.add({
+        color: tone === 'ok' ? 'success' : tone,
+        icon: tone === 'ok' ? 'i-ph-check-circle' : 'i-ph-warning',
+        title: tone === 'ok'
+          ? `jack is set up in ${server.name}.`
+          : res.registration.message ?? `jack couldn't finish setting itself up in ${server.name}.`,
+      })
+    }
+    else if (res.registrationPending) {
+      markPending(server.id, previousAt)
+    }
+  }
+  catch (err) {
+    registerErrors.set(server.id, { message: extractError(err, `Could not register jack in ${server.name} again.`), previousAt })
+  }
+  finally {
+    registering.delete(server.id)
   }
 }
 
@@ -98,6 +189,24 @@ function statusBadge(server: ServerItem): { color: BadgeProps['color'], label: s
   return { color: 'warning', label: 'Connecting' }
 }
 
+const TONE_CLASS: Record<RegistrationTone, string> = { ok: 'text-success', warning: 'text-warning', error: 'text-error' }
+
+// What jack set up in a server it adds itself to, and whether that server has
+// used it since.
+function registrationView(server: ServerItem) {
+  const registration = server.registration
+  const summary = registration ? registrationSummary(registration) : null
+  return {
+    testing: isTesting(server),
+    parts: summary?.parts ?? null,
+    message: registration?.message ?? null,
+    messageClass: summary && summary.tone !== 'ok' ? TONE_CLASS[summary.tone] : 'text-muted',
+    fix: registration ? registrationFix(registration) : null,
+    contact: arrContact(server, now.value),
+    registerError: registerError(server),
+  }
+}
+
 // Unreachable servers first (a broken *arr connector stops searches/imports),
 // then connecting, then healthy.
 function sortKey(server: ServerItem) {
@@ -108,6 +217,8 @@ function sortKey(server: ServerItem) {
   return 2
 }
 const servers = computed(() => [...(settings.value?.servers ?? [])].sort((a, b) => sortKey(a) - sortKey(b)))
+// `registration` only for a server jack adds itself to.
+const cards = computed(() => servers.value.map(server => ({ server, registration: registersJack(server) ? registrationView(server) : null })))
 const connected = computed(() => servers.value.filter(s => s.initialized).length)
 const unreachable = computed(() => servers.value.filter(s => !s.initialized && s.initializationError).length)
 const sources = computed(() => servers.value.filter(s => s.source).length)
@@ -121,7 +232,7 @@ const destinations = computed(() => servers.value.filter(s => s.destination).len
     description="Each Radarr or Sonarr can share its library with friends, receive downloads from them, or both."
   >
     <template #aside>
-      <UButton label="Connect Radarr or Sonarr" icon="i-ph-plus" @click="openAdd" />
+      <UButton label="Connect Radarr or Sonarr" icon="i-ph-plus" @click="openForm(null)" />
     </template>
 
     <UAlert v-if="error && !settings" color="error" variant="soft" icon="i-ph-warning" title="Failed to load Radarr and Sonarr." />
@@ -138,7 +249,7 @@ const destinations = computed(() => servers.value.filter(s => s.destination).len
           No Radarr or Sonarr yet. Connect one to share its library with friends or to download
           from them into it.
         </p>
-        <UButton label="Connect Radarr or Sonarr" icon="i-ph-plus" @click="openAdd" />
+        <UButton label="Connect Radarr or Sonarr" icon="i-ph-plus" @click="openForm(null)" />
       </div>
     </UCard>
 
@@ -153,14 +264,14 @@ const destinations = computed(() => servers.value.filter(s => s.destination).len
 
       <div class="space-y-2">
         <ConnectorCard
-          v-for="server in servers"
+          v-for="{ server, registration: view } in cards"
           :key="server.id"
           :name="server.name"
           :url="server.url"
           :initialized="server.initialized"
           :error="server.initializationError"
           :status="statusBadge(server)"
-          @edit="openEdit(server)"
+          @edit="openForm(server)"
           @remove="confirmTarget = server"
         >
           <template #badge>
@@ -179,19 +290,81 @@ const destinations = computed(() => servers.value.filter(s => s.destination).len
               </template>
             </div>
           </template>
+          <!-- What jack set up in this server and whether the server has used it. -->
+          <template v-if="view" #details>
+            <div class="mt-2 space-y-1 pl-8 text-xs">
+              <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span class="text-muted">jack in {{ server.name }}:</span>
+                <span v-if="view.testing" class="flex items-center gap-1 text-muted">
+                  <UIcon name="i-ph-circle-notch" class="size-3.5 animate-spin" />
+                  still testing
+                </span>
+                <template v-else-if="view.parts">
+                  <template v-for="(part, i) in view.parts" :key="part.text">
+                    <span v-if="i" class="text-dimmed">·</span>
+                    <span :class="TONE_CLASS[part.tone]">{{ part.text }}</span>
+                  </template>
+                </template>
+                <span v-else class="text-muted">not added yet</span>
+                <UButton
+                  label="Register again"
+                  icon="i-ph-arrows-clockwise"
+                  color="neutral"
+                  variant="link"
+                  size="xs"
+                  class="p-0"
+                  :loading="registering.has(server.id)"
+                  @click="registerAgain(server)"
+                />
+              </div>
+
+              <p v-if="view.message && !view.testing" :class="view.messageClass">
+                {{ view.message }}
+                <ULink v-if="view.fix" :to="settingsLink(view.fix.section)" raw class="font-medium underline">
+                  {{ view.fix.label }}
+                </ULink>
+              </p>
+
+              <p v-if="view.contact.state === 'reached'" class="text-muted" :title="formatDate(view.contact.at)">
+                {{ server.name }} last reached jack {{ formatTimeAgo(view.contact.at, now) }}.
+              </p>
+              <p v-else-if="view.contact.state === 'waiting'" class="text-muted">
+                {{ server.name }} hasn't reached jack yet.
+              </p>
+              <p v-else-if="view.contact.state === 'never'" class="text-warning">
+                {{ server.name }} hasn't reached jack since jack added itself.
+                <ULink :to="settingsLink('internal-url')" raw class="font-medium underline">
+                  Change the address
+                </ULink>
+              </p>
+
+              <p v-if="view.registerError" class="text-error">
+                {{ view.registerError }}
+              </p>
+            </div>
+          </template>
         </ConnectorCard>
       </div>
     </div>
   </SettingsSection>
 
-  <UModal v-model:open="showForm" :title="editTarget ? `Edit ${editTarget.name}` : 'Connect Radarr or Sonarr'">
+  <UModal v-model:open="showForm" :title="formTitle" :dismissible="formDismissible">
     <template #body>
+      <ServerRegistrationResult
+        v-if="saved"
+        :name="saved.name"
+        :registration="saved.registration"
+        :pending="saved.pending"
+        @done="showForm = false"
+      />
       <ServerForm
+        v-else
         :initial="editTarget"
         :submitting="submitting"
         :error="formError"
         @submit="submit"
         @cancel="showForm = false"
+        @dirty="formDirty = $event"
       />
     </template>
   </UModal>

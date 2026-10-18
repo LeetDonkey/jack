@@ -3,6 +3,10 @@ import type { NavigationMenuItem } from '@nuxt/ui'
 
 const { state, logout } = useAuth()
 
+// Keeps the shared overview (and its one stream) open on every page while the tab
+// is visible; the restart banner reads it, and so can any page.
+useOverview()
+
 // Friends have their own page; Radarr/Sonarr and the rest of the configuration live
 // under Settings. Daily pages come first, and Logs and Settings form a second group
 // below a separator.
@@ -92,6 +96,14 @@ async function onLogout() {
       </template>
     </UDashboardSidebar>
 
-    <slot />
+    <!-- The page column: the restart banner on top, then the page's UDashboardPanel.
+         The panel's own min-h-svh is reset, or the panel would be the banner's height
+         taller than the screen and its last lines unreachable. -->
+    <div class="flex min-w-0 flex-1 flex-col">
+      <RestartBanner />
+      <div class="flex min-h-0 flex-1 *:min-h-0">
+        <slot />
+      </div>
+    </div>
   </UDashboardGroup>
 </template>

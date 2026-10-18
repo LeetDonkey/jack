@@ -14,10 +14,13 @@ const submitting = ref(false)
 const formError = ref<string | null>(null)
 // Whether the last failure was one a forced save can get past (see submit).
 const formOfferForce = ref(false)
+// An edited form keeps the dialog open on an outside click or Escape.
+const formDirty = ref(false)
 const showImport = ref(false)
 watch(showForm, (isOpen) => {
   if (!isOpen) {
     importedInput.value = null
+    formDirty.value = false
     clearFormError()
   }
 })
@@ -206,7 +209,7 @@ async function confirmDelete() {
     </div>
   </SettingsSection>
 
-  <UModal v-model:open="showForm" :title="editTarget ? `Edit ${editTarget.name}` : 'Add a friend'">
+  <UModal v-model:open="showForm" :title="editTarget ? `Edit ${editTarget.name}` : 'Add a friend'" :dismissible="!formDirty">
     <template #body>
       <PeerForm
         :key="formRevision"
@@ -218,6 +221,7 @@ async function confirmDelete() {
         @cancel="closeForm"
         @dismiss-error="clearFormError"
         @quick-link="switchToQuickLink"
+        @dirty="(isDirty) => { formDirty = isDirty }"
       />
     </template>
   </UModal>

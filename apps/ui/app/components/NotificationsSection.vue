@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import type { FormError } from '@nuxt/ui'
+import type { Form, FormError, FormSchema } from '@nuxt/ui'
 import type { NotificationsConfig, NotificationWebhook, SecretRef } from '~/types/management'
 
 const { request, extractError } = useManagement()
+const form = useTemplateRef<Form<FormSchema>>('form')
+const { onError, showFixHint } = useFormErrorFocus(form)
 
 const { data: notifications, pending, error: loadError, refresh } = useLazyAsyncData(
   'notifications-config',
@@ -16,6 +18,24 @@ const typeItems = [
   { label: 'ntfy topic', value: 'ntfy' },
   { label: 'JSON (e.g. Home Assistant)', value: 'json' },
 ]
+
+// Field label, the prompt in the empty field, and an example URL per type.
+const WEBHOOK_FIELD: Record<NotificationWebhook['type'], { label: string, prompt: string, example: string }> = {
+  discord: { label: 'Webhook URL', prompt: 'Paste the webhook URL', example: 'https://discord.com/api/webhooks/1234/abcd' },
+  ntfy: { label: 'Topic URL', prompt: 'Paste the topic URL', example: 'https://ntfy.sh/your-topic' },
+  json: { label: 'Webhook URL', prompt: 'Paste the webhook URL', example: 'http://homeassistant.local:8123/api/webhook/jack' },
+}
+
+const WEBHOOK_ERROR = /^webhooks\./
+
+function isHttpUrl(value: string) {
+  try {
+    return ['http:', 'https:'].includes(new URL(value).protocol)
+  }
+  catch {
+    return false
+  }
+}
 
 interface WebhookState {
   type: NotificationWebhook['type']
@@ -37,8 +57,11 @@ type State = ReturnType<typeof blankState>
 
 const state = reactive(blankState())
 const baseline = ref(JSON.stringify(blankState()))
-// Bumped on every seed so the SecretInputs (which copy their value once) remount.
-const seedVersion = ref(0)
+// One key per webhook row, outside `state` so it doesn't count as an edit.
+// SecretInput copies its value once, so rows keyed by index would show a removed
+// row's URL in the row that moved up. New keys on every seed remount them all.
+let nextRowKey = 0
+const rowKeys = ref<number[]>([])
 
 function seed(config: NotificationsConfig | null | undefined) {
   Object.assign(state, blankState())
@@ -51,12 +74,31 @@ function seed(config: NotificationsConfig | null | undefined) {
     state.dailySummaryAt = config.dailySummaryAt ?? ''
   }
   baseline.value = JSON.stringify(state)
-  seedVersion.value++
+  rowKeys.value = state.webhooks.map(() => nextRowKey++)
 }
 
 watch(() => notifications.value, seed, { immediate: true })
 
+function addWebhook() {
+  state.webhooks.push({ type: 'discord', url: null })
+  rowKeys.value.push(nextRowKey++)
+}
+
+function removeWebhook(index: number) {
+  state.webhooks.splice(index, 1)
+  rowKeys.value.splice(index, 1)
+  // Errors are keyed by row index, which just shifted.
+  if (form.value?.getErrors(WEBHOOK_ERROR).length)
+    form.value.setErrors(validate(state).filter(e => e.name && WEBHOOK_ERROR.test(e.name)), WEBHOOK_ERROR)
+}
+
+const hasWebhooks = computed(() => state.webhooks.length > 0)
+
+// The number input stores `v ?? null`: an empty input reports undefined when it
+// loses focus, which JSON leaves out, so the form would look edited.
 const dirty = computed(() => JSON.stringify(state) !== baseline.value)
+useUnsavedGuard().track('Notifications', dirty)
+
 const saving = ref(false)
 const saveError = ref<string | null>(null)
 const saved = ref(false)
@@ -68,8 +110,12 @@ watch(dirty, (isDirty) => {
 function validate(s: State): FormError[] {
   const errors: FormError[] = []
   s.webhooks.forEach((w, i) => {
+    const { prompt, example } = WEBHOOK_FIELD[w.type]
     if (w.url == null || w.url === '')
-      errors.push({ name: `webhooks.${i}`, message: `Webhook ${i + 1}: enter its URL.` })
+      errors.push({ name: `webhooks.${i}`, message: `${prompt}, for example ${example}.` })
+    // jack resolves a container variable or file itself, so only a typed URL is checked.
+    else if (typeof w.url === 'string' && !isHttpUrl(w.url))
+      errors.push({ name: `webhooks.${i}`, message: `Start the URL with http:// or https://, for example ${example}.` })
   })
   if (s.dailySummaryAt && !TIME.test(s.dailySummaryAt))
     errors.push({ name: 'dailySummaryAt', message: 'Enter the summary time as HH:MM.' })
@@ -106,6 +152,7 @@ async function save() {
 
 function revert() {
   seed(notifications.value ?? null)
+  form.value?.clear()
   saveError.value = null
   saved.value = false
 }
@@ -141,7 +188,7 @@ async function sendTest() {
       Loading…
     </p>
 
-    <UForm v-else :state="state" :validate="validate" class="space-y-3" @submit="save">
+    <UForm v-else ref="form" :state="state" :validate="validate" class="space-y-3" @submit="save" @error="onError">
       <UCard variant="subtle" :ui="{ body: 'space-y-3' }">
         <div class="flex items-start justify-between gap-3">
           <div>
@@ -149,47 +196,56 @@ async function sendTest() {
               Webhooks
             </p>
             <p class="text-xs text-muted">
-              Every notification goes to each of these. A webhook URL usually contains a secret; store it as an env var if you prefer.
+              Every notification goes to each of these. A webhook URL works like a password, so you can keep it in a container variable instead.
             </p>
           </div>
-          <UButton label="Add webhook" icon="i-ph-plus" size="sm" variant="soft" :disabled="saving" @click="() => { state.webhooks.push({ type: 'discord', url: null }) }" />
+          <UButton label="Add webhook" icon="i-ph-plus" size="sm" variant="soft" :disabled="saving" @click="addWebhook" />
         </div>
 
-        <p v-if="state.webhooks.length === 0" class="py-2 text-center text-xs text-muted">
+        <p v-if="!hasWebhooks" class="py-2 text-center text-xs text-muted">
           No webhooks, so nothing is sent.
         </p>
 
-        <div v-for="(webhook, i) in state.webhooks" :key="`${seedVersion}-${i}`" class="space-y-2 rounded-md border border-default p-3">
+        <div v-for="(webhook, i) in state.webhooks" :key="rowKeys[i]" class="space-y-2 rounded-md border border-default p-3">
           <div class="flex items-center justify-between gap-2">
-            <USelect v-model="webhook.type" :items="typeItems" :disabled="saving" class="w-60" />
-            <UButton icon="i-ph-trash" size="xs" color="error" variant="ghost" :disabled="saving" aria-label="Remove webhook" @click="() => { state.webhooks.splice(i, 1) }" />
+            <USelect v-model="webhook.type" :items="typeItems" :disabled="saving" aria-label="Webhook type" class="w-60" />
+            <UButton icon="i-ph-trash" size="xs" color="error" variant="ghost" :disabled="saving" aria-label="Remove webhook" @click="removeWebhook(i)" />
           </div>
-          <SecretInput v-model="webhook.url" :editing="true" />
+          <UFormField :name="`webhooks.${i}`" :label="WEBHOOK_FIELD[webhook.type].label">
+            <SecretInput v-model="webhook.url" :placeholder="WEBHOOK_FIELD[webhook.type].prompt" />
+          </UFormField>
         </div>
       </UCard>
 
       <UCard variant="subtle" :ui="{ body: 'space-y-4' }">
-        <UFormField name="downloadFailed" label="Failed downloads" description="A download that still fails after its retries and retry window.">
-          <USwitch v-model="state.downloadFailed" :disabled="saving" />
-        </UFormField>
-        <UFormField name="peerOffline" label="Friends going offline" description="A friend unreachable for the time below, and again when they are back.">
-          <USwitch v-model="state.peerOffline" :disabled="saving" />
-        </UFormField>
-        <UFormField v-if="state.peerOffline" name="peerOfflineMinutes" label="Offline for at least" hint="minutes" :ui="{ hint: 'font-mono text-xs text-dimmed' }">
-          <UInputNumber v-model="state.peerOfflineMinutes" :disabled="saving" :min="5" :increment="false" :decrement="false" placeholder="60" class="w-28" />
-        </UFormField>
-        <UFormField name="ipBanned" label="Banned addresses">
-          <template #description>
-            An address banned for repeated failed authentication.
-            <ULink :to="settingsLink('security')" class="underline">
-              Ban settings
-            </ULink>
-          </template>
-          <USwitch v-model="state.ipBanned" :disabled="saving" />
-        </UFormField>
-        <UFormField name="dailySummaryAt" label="Daily summary" description="Traffic per friend and how downloads went, once a day at this time (server time). Empty means none.">
-          <UInput v-model="state.dailySummaryAt" type="time" :disabled="saving" class="w-32" />
-        </UFormField>
+        <p v-if="!hasWebhooks" class="flex items-center gap-1.5 text-xs text-muted">
+          <UIcon name="i-ph-info" class="size-4 shrink-0" />
+          Add a webhook above to receive these.
+        </p>
+        <!-- Still editable without a webhook, so the choices are ready when one is added. -->
+        <div class="space-y-4" :class="{ 'opacity-60': !hasWebhooks }">
+          <UFormField name="downloadFailed" label="Failed downloads" description="A download that still fails after its retries and retry window.">
+            <USwitch v-model="state.downloadFailed" :disabled="saving" />
+          </UFormField>
+          <UFormField name="peerOffline" label="Friends going offline" description="A friend unreachable for the time below, and again when they are back.">
+            <USwitch v-model="state.peerOffline" :disabled="saving" />
+          </UFormField>
+          <UFormField v-if="state.peerOffline" name="peerOfflineMinutes" label="Offline for at least" hint="minutes" :ui="{ hint: 'font-mono text-xs text-dimmed' }">
+            <UInputNumber :model-value="state.peerOfflineMinutes" :disabled="saving" :min="5" :increment="false" :decrement="false" placeholder="60" class="w-28" @update:model-value="v => (state.peerOfflineMinutes = v ?? null)" />
+          </UFormField>
+          <UFormField name="ipBanned" label="Banned addresses">
+            <template #description>
+              An address banned for repeated failed authentication.
+              <ULink :to="settingsLink('security')" class="underline">
+                Ban settings
+              </ULink>
+            </template>
+            <USwitch v-model="state.ipBanned" :disabled="saving" />
+          </UFormField>
+          <UFormField name="dailySummaryAt" label="Daily summary" description="Traffic per friend and how downloads went, once a day at this time in jack's time zone. Empty means none.">
+            <UInput v-model="state.dailySummaryAt" type="time" :disabled="saving" class="w-32" />
+          </UFormField>
+        </div>
       </UCard>
 
       <UAlert v-if="saveError" color="error" variant="soft" icon="i-ph-warning" :title="saveError" />
@@ -197,7 +253,10 @@ async function sendTest() {
       <UAlert v-if="testResult" color="neutral" variant="soft" icon="i-ph-paper-plane-tilt" :title="testResult" />
 
       <div class="flex flex-wrap items-center justify-end gap-2 pt-1">
-        <UButton class="mr-auto" label="Send test" icon="i-ph-paper-plane-tilt" color="neutral" variant="soft" :loading="testing" :disabled="dirty || saving || state.webhooks.length === 0" @click="sendTest" />
+        <UButton class="mr-auto" label="Send test" icon="i-ph-paper-plane-tilt" color="neutral" variant="soft" :loading="testing" :disabled="dirty || saving || !hasWebhooks" @click="sendTest" />
+        <p v-if="showFixHint" class="text-xs text-error">
+          Fix the highlighted fields to save.
+        </p>
         <UButton v-if="dirty" label="Revert" color="neutral" variant="ghost" :disabled="saving" @click="revert" />
         <UButton type="submit" :disabled="!dirty" :loading="saving" :label="saving ? 'Saving…' : 'Save changes'" />
       </div>

@@ -9,6 +9,7 @@ import {
   latencyClass,
   latencyFill,
   levelStyle,
+  logHelp,
   methodClass,
   rawJson,
   statusClass,
@@ -45,6 +46,9 @@ const latStats = computed(() => {
 })
 
 const fields = computed(() => extraFields(props.row))
+// A known problem's fix: a marker on the row, the link in the detail panel (the
+// row itself is a button, so it can't hold a link).
+const help = computed(() => logHelp(props.row))
 const showRaw = ref(false)
 function toggleRaw() {
   showRaw.value = !showRaw.value
@@ -101,6 +105,11 @@ async function copyRaw() {
         </span>
       </template>
 
+      <span v-if="help" class="shrink-0" title="Click the row for a help link">
+        <UIcon name="i-ph-lifebuoy" class="mt-px size-3.5 text-info" />
+        <span class="sr-only">Help available</span>
+      </span>
+
       <!-- Repeat counter -->
       <span
         v-if="count > 1"
@@ -116,6 +125,18 @@ async function copyRaw() {
 
     <!-- Detail -->
     <div v-if="expanded" class="border-t border-default/50 bg-default/40 px-4 py-3 text-muted">
+      <UButton
+        v-if="help"
+        :to="help.to"
+        :target="help.external ? '_blank' : undefined"
+        :label="help.label"
+        icon="i-ph-lifebuoy"
+        :trailing-icon="help.external ? 'i-ph-arrow-square-out' : 'i-ph-arrow-right'"
+        variant="link"
+        size="xs"
+        class="mb-2 px-0"
+      />
+
       <div class="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-dimmed">
         <span><span class="font-medium" :class="level.text">{{ level.label }}</span><template v-if="time"> · {{ time }}</template></span>
         <span v-if="count > 1">{{ count }} occurrences</span>
