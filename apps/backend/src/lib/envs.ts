@@ -16,6 +16,10 @@ export const Envs = z.preprocess(preferPrefixedManagementKey, z.object({
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
   ENVIRONMENT: z.enum(['development', 'production']).default('development'),
   APP_CONFIG_PATH: z.string().default('/config/config.jsonc'),
+  // Seeds jack.internalUrl when jack writes a new config file; ignored afterwards.
+  // A plain string here: config.ts normalises it and falls back to the default
+  // when it isn't a URL, so a typo can't stop jack from starting.
+  JACK_INTERNAL_URL: z.string().optional(),
   // Default timeout (ms) for every outgoing HTTP request to a connector (*arr or
   // peer). Bounds a hung host so it can't stall a search indefinitely.
   HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),

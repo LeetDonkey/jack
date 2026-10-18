@@ -3,7 +3,24 @@ import type { ArrServerConnector } from '../../lib/servers/arr/base'
 import type { ServerConnector } from '../../lib/servers/base'
 import type { PeerConnector } from '../../lib/servers/peer'
 import type { DownloadRecord, DownloadsRepository } from '../downloads/downloads.repository'
+import type { RegistrationStatus } from '../registration/registration.service'
+import type { RestartReason } from './restart-pending'
 import { DOWNLOAD_STATUSES } from '../../database/schema'
+import { serverRegistrationFields } from '../registration/registration.service'
+
+/** The running jack: when it started, and what it needs a restart for. */
+export interface SystemStatus {
+  bootedAt: string
+  restartPending: RestartReason[]
+}
+
+export interface StatusExtras {
+  /** Per-server registration results and last contact. */
+  registrations?: RegistrationStatus
+  system?: () => SystemStatus
+  /** More change feeds the overview stream follows (e.g. config saves, for restartPending). */
+  subscriptions?: Array<(subscriber: () => void) => () => void>
+}
 
 // The management surface can expose richer detail than the public API: every
 // connector here carries its URL-derived `id` (the management UI keys edit/delete
@@ -13,6 +30,9 @@ import { DOWNLOAD_STATUSES } from '../../database/schema'
 // Cap the detail lists the dashboard's "needs attention" panel renders. The true
 // totals still come through `byStatus`; these arrays only feed the first few rows.
 const ATTENTION_LIMIT = 25
+
+// Fallback when no system provider is wired (tests, read-only deployments).
+const BOOTED_AT = new Date().toISOString()
 
 function baseConnector(c: ServerConnector) {
   return {
@@ -38,12 +58,15 @@ export class StatusController {
   constructor(
     private readonly connectors: { servers: ArrServerConnector[], peers: PeerConnector[], subscribe?: (subscriber: () => void) => () => void },
     private readonly downloads?: DownloadsRepository,
+    private readonly extras: StatusExtras = {},
   ) {}
 
   subscribeOverview(subscriber: () => void): () => void {
     const unsubscribers = [
       this.connectors.subscribe?.(subscriber),
       this.downloads?.subscribe(subscriber),
+      this.extras.registrations?.subscribe(subscriber),
+      ...(this.extras.subscriptions ?? []).map(subscribe => subscribe(subscriber)),
     ].filter((unsubscribe): unsubscribe is () => void => Boolean(unsubscribe))
     return () => {
       for (const unsubscribe of unsubscribers)
@@ -90,8 +113,14 @@ export class StatusController {
         initialized: servers.filter(s => s.isInitialized).length,
         sources: servers.filter(s => s.canSource).length,
         destinations: servers.filter(s => s.canDestination).length,
-        items: servers.map(s => ({ ...baseConnector(s), source: s.canSource, destination: s.canDestination })),
+        items: servers.map(s => ({
+          ...baseConnector(s),
+          source: s.canSource,
+          destination: s.canDestination,
+          ...serverRegistrationFields(s, this.extras.registrations),
+        })),
       },
+      system: this.extras.system?.() ?? { bootedAt: BOOTED_AT, restartPending: [] },
       downloads: {
         total: records.length,
         byStatus,

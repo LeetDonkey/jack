@@ -71,6 +71,11 @@ Radarr/Sonarr side**: on a shared Docker network use the container name
 (`http://jack:5225`); otherwise the host IP/domain. Peers never use this URL.
 They use whatever you hand them (see [API keys & peering](/guide/peering)).
 
+A new config file gets `http://jack:5225`, or the value of
+[`JACK_INTERNAL_URL`](/reference/environment-variables#jack-internal-url).
+Changing it in the management UI applies without a restart: jack updates its
+indexer and download client in every auto-register server.
+
 ### `jack.tmdbApiKey`
 
 **Type:** [`ConfigSecret`](#configsecret)
@@ -128,23 +133,35 @@ at most 100 headers.
 
 ## `downloads`
 
-Needed to **consume** (download) from peers, since jack only registers itself as
-a qBittorrent download client when this block is present. Everything except
-`completedPath` is an optional tuning knob with a sensible default.
+Needed to **consume** (download) from peers. Without this block jack registers
+nothing in your *arr apps, neither the download client nor the indexer: an
+indexer without jack's client would let *arr hand jack's releases to another
+torrent client. A Jack indexer an earlier jack added without a download client
+is turned off.
+
+Everything except `completedPath` is an optional tuning knob with a sensible
+default.
+
+A new config file gets `"downloads": { "completedPath": "/data/jack" }` when
+`/data/jack` exists and jack can write to it. The Unraid template mounts the
+downloads folder there.
 
 Every key here is also editable from the management UI
 (***Settings -> Downloads***).
 Clearing a field there removes the key from the file, so the default below
-applies again. Only `unlinkImportedFiles` takes effect immediately; the rest are
-read at startup, so restart jack after changing them.
+applies again. `unlinkImportedFiles` and `maxConcurrentDownloads` take effect
+immediately; the rest are read at startup, so restart jack after changing them.
+Adding the block in the management UI registers jack in your *arr apps right
+away, but grabs only work after the restart.
 
 ### `downloads.completedPath`
 
 **Type:** `string` · **Required**\
 **Format:** non-empty filesystem path (inside jack's container)
 
-Where jack writes finished downloads. The path is inside jack's container; jack
-creates it if missing. It must also be mounted into your **Radarr and Sonarr**
+Where jack writes finished downloads. The path is inside jack's container. The
+management UI only saves a folder that exists and that jack can write to. It
+must also be mounted into your **Radarr and Sonarr**
 containers at the **same path**, because *arr resolves it in its own filesystem
 to import finished files (see the callout in
 [Getting started](/guide/getting-started)).
@@ -272,7 +289,7 @@ still references is left alone. If the unlink fails, the download stays
 `imported` and the failure is logged.
 
 Editable from the management UI (***Settings -> Downloads***) and applies
-immediately. Unlike the other keys in this block, it does not need a restart.
+immediately. Like `maxConcurrentDownloads`, it does not need a restart.
 
 ## `bandwidth`
 
@@ -463,7 +480,17 @@ into it.
 **Content:** `enable`: `boolean`, default `true` · `priority`: `integer` 1-50, default `1`
 
 Controls the indexer/download-client registration jack performs in destination
-servers on startup, and again when the server is saved in the management UI.
+servers. jack registers itself:
+
+- on startup, in every server it can reach;
+- in a server that was down at startup, once it is reachable;
+- in a server saved in the management UI;
+- in every server, after a new `jack.internalUrl` or a new `downloads` block is
+  saved in the management UI.
+
+After each registration jack asks the *arr to test its download client and
+indexer, the same check as their ***Test*** buttons, and reports the result as
+`registration` on each server in the management API.
 
 - **`enable`**: set `false` to register jack in that *arr yourself.
 - **`priority`**: indexer priority in *arr, from 1 (preferred) to 50. *arr uses

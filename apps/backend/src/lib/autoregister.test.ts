@@ -21,7 +21,7 @@ describe('registerManagedForDestination', () => {
     service = new ManagedApiKeys(repo)
   })
 
-  function stubDest(over: Partial<{ registerIndexer: () => Promise<void>, registerDownloadClient: () => Promise<number> }> = {}): ArrServerConnector {
+  function stubDest(over: Partial<{ registerIndexer: () => Promise<void>, registerDownloadClient: () => Promise<number>, disableUnboundIndexer: (name: string, baseUrl: string) => Promise<boolean> }> = {}): ArrServerConnector {
     return {
       id: 'srv-a',
       name: 'Radarr',
@@ -29,6 +29,7 @@ describe('registerManagedForDestination', () => {
       autoRegister: { enable: true, priority: 1 },
       registerDownloadClient: over.registerDownloadClient ?? (async () => 1),
       registerIndexer: over.registerIndexer ?? (async () => {}),
+      disableUnboundIndexer: over.disableUnboundIndexer ?? (async () => false),
     } as unknown as ArrServerConnector
   }
 
@@ -62,15 +63,23 @@ describe('registerManagedForDestination', () => {
     expect(ids).toHaveLength(2)
   })
 
-  test('partial failure (download client fails) keeps both old and new keys', async () => {
+  test('a failed download client leaves the indexer alone and discards the new key', async () => {
     const old = service.provision('srv-a')
-    await registerManagedForDestination(
-      stubDest({ registerDownloadClient: async () => { throw new Error('dc') } }),
+    const calls: string[] = []
+    const outcome = await registerManagedForDestination(
+      stubDest({
+        registerDownloadClient: async () => { throw new Error('dc') },
+        registerIndexer: async () => { calls.push('indexer') },
+      }),
       deps(),
     )
-    const ids = repo.findByServerId('srv-a').map(r => r.id)
-    expect(ids).toContain(old.id)
-    expect(ids).toHaveLength(2)
+    // Registering the indexer without a client id would reset its binding to "Any".
+    expect(calls).toEqual([])
+    expect(outcome).toEqual({
+      downloadClient: { status: 'failed', error: 'dc' },
+      indexer: { status: 'skipped', reason: 'client-failed' },
+    })
+    expect(repo.findByServerId('srv-a').map(r => r.id)).toEqual([old.id])
   })
 
   test('total failure discards the new key (only the old remains)', async () => {
@@ -85,12 +94,61 @@ describe('registerManagedForDestination', () => {
     expect(repo.findByServerId('srv-a').map(r => r.id)).toEqual([old.id])
   })
 
-  test('downloads disabled + indexer failure discards the new key', async () => {
+  test('full success reports both steps ok', async () => {
+    const outcome = await registerManagedForDestination(stubDest(), deps())
+    expect(outcome).toEqual({ indexer: { status: 'ok' }, downloadClient: { status: 'ok' } })
+  })
+
+  test('a failed step reports what *arr said', async () => {
+    const outcome = await registerManagedForDestination(
+      stubDest({ registerIndexer: async () => { throw new Error('boom') } }),
+      deps(),
+    )
+    expect(outcome).toEqual({ indexer: { status: 'failed', error: 'boom' }, downloadClient: { status: 'ok' } })
+  })
+
+  test('downloads off registers nothing, not even an unbound indexer, and keeps the old key', async () => {
     const old = service.provision('srv-a')
-    await registerManagedForDestination(
-      stubDest({ registerIndexer: async () => { throw new Error('ix') } }),
+    const calls: string[] = []
+    const outcome = await registerManagedForDestination(
+      stubDest({
+        registerIndexer: async () => { calls.push('indexer') },
+        registerDownloadClient: async () => {
+          calls.push('client')
+          return 1
+        },
+      }),
       { ...deps(), downloads: false },
     )
+    expect(calls).toEqual([])
+    expect(outcome).toEqual({
+      indexer: { status: 'skipped', reason: 'downloads-off' },
+      downloadClient: { status: 'skipped', reason: 'downloads-off' },
+      reason: 'downloads-off',
+    })
     expect(repo.findByServerId('srv-a').map(r => r.id)).toEqual([old.id])
+  })
+
+  test('downloads off turns off an unbound Jack indexer an earlier jack left behind', async () => {
+    const checked: string[] = []
+    const outcome = await registerManagedForDestination(
+      stubDest({
+        disableUnboundIndexer: async (name, baseUrl) => {
+          checked.push(`${name} ${baseUrl}`)
+          return true
+        },
+      }),
+      { ...deps(), downloads: false },
+    )
+    expect(checked).toEqual(['Jack http://jack:5225/torznab'])
+    expect(outcome.indexer).toEqual({ status: 'skipped', reason: 'downloads-off', disabledUnbound: true })
+  })
+
+  test('downloads off still reports a plain skip when the *arr can\'t be checked', async () => {
+    const outcome = await registerManagedForDestination(
+      stubDest({ disableUnboundIndexer: async () => { throw new Error('ECONNREFUSED') } }),
+      { ...deps(), downloads: false },
+    )
+    expect(outcome.indexer).toEqual({ status: 'skipped', reason: 'downloads-off' })
   })
 })

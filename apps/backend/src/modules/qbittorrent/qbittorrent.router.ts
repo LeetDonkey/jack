@@ -41,7 +41,7 @@ export function getQbittorrentRouter(controller: QbittorrentController) {
 
   // ---- SID guard: qB returns 403 (not 401) when unauthenticated ----
   const requireSession = createMiddleware<{ Variables: { qbSession: QbSession } }>(async (c, next) => {
-    const session = controller.sessions.get(getCookie(c, SID_COOKIE))
+    const session = controller.session(getCookie(c, SID_COOKIE))
     if (!session)
       return c.text('Forbidden', 403)
     c.set('qbSession', session)

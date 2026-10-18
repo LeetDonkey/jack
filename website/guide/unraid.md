@@ -79,6 +79,9 @@ Container -> Template*** (in the ***User templates*** group).
   *Container Path*. If your Radarr maps `/mnt/user/downloads` to `/data`, keep
   the *Container Path* `/data/jack` and set the *Host Path* to
   `/mnt/user/downloads/jack`.
+- **Internal URL**: `http://<your-server-ip>:5225`, the address your
+  Radarr/Sonarr use to reach jack. jack reads it when it creates its config on
+  first start; after that you change it in jack-ui.
 - **Management key**: a long random secret. Generate one in the terminal:
 
   ```bash
@@ -113,23 +116,27 @@ management key in each new browser session.
 
 ## 5. Connect Radarr and Sonarr
 
-In jack-ui, open ***Settings***. Set up jack itself and its downloads first:
-both are read when jack starts, and saving a server registers jack's download
-client in your *arr only once downloads are set up.
+In jack-ui, open ***Settings***.
 
-1. **Internal URL.** Under ***Jack***, set ***Internal URL*** to
-   `http://<your-server-ip>:5225` and save. This is the address jack registers
-   in your Radarr/Sonarr; the default `http://jack:5225` only works if they run
-   on the jack network too.
-2. **Downloads.** Under ***Downloads***, click ***Set up downloads***, set
-   ***Completed folder*** to the *Container Path* of your downloads mount
-   (`/data/jack`), turn on ***Unlink imported files***, and click ***Save
+1. **Internal URL.** Under ***Jack***, check that ***Internal URL*** is
+   `http://<your-server-ip>:5225`. If it shows the default `http://jack:5225`,
+   change it and save; the default only works if your Radarr/Sonarr run on the
+   jack network too. A new address applies right away: jack updates its indexer
+   and download client in every *arr it is registered in.
+2. **Downloads.** On first start jack turns on downloads with ***Completed
+   folder*** `/data/jack`, the *Container Path* of your downloads mount. Under
+   ***Downloads***, turn on ***Unlink imported files*** and click ***Save
    changes***. With unlink on, jack removes its own copy once Radarr/Sonarr
    confirm the import: if they copied the file (the usual case when downloads
    and library are separate mounts in their container) that saves the space of
    a second copy; if they hardlinked it, only jack's extra link goes away.
-3. **Restart** the jack container (Docker tab -> jack -> ***Restart***).
-4. **Servers.** Under ***Servers***, click ***Add server*** for each *arr:
+
+   If the section offers ***Set up downloads*** instead (the config is from an
+   older jack, or jack couldn't write to `/data/jack` on first start), click it,
+   set ***Completed folder*** to `/data/jack`, save, and restart the jack
+   container (Docker tab -> jack -> ***Restart***). Grabs only reach jack after
+   that restart.
+3. **Servers.** Under ***Servers***, click ***Add server*** for each *arr:
    - ***Name***: e.g. `Radarr` or `Sonarr`.
    - ***URL***: e.g. `http://<your-server-ip>:7878` for Radarr, `:8989` for
      Sonarr.
@@ -250,9 +257,9 @@ links: see ***Settings -> Friends of friends***.
 - **Radarr says it can't reach jack, or grabs never start**: the ***Internal
   URL*** is wrong. It must be an address your Radarr container can reach,
   usually `http://<your-server-ip>:5225` (see the tip in step 5 for `br0`).
-- **No Jack download client in Radarr/Sonarr**: downloads weren't set up when
-  jack started. Set up ***Downloads*** and restart jack; it registers the
-  download client on startup.
+- **No Jack indexer or download client in Radarr/Sonarr**: downloads are off.
+  Set up ***Downloads***; saving registers both in your *arr. Then restart
+  jack: its download client only accepts grabs after a restart.
 - **Downloads finish but Radarr doesn't import them**: the downloads folder
   doesn't match. jack's ***Completed folder***, its downloads *Container Path*
   and the path your Radarr sees must all be the same.

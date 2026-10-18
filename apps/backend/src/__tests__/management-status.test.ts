@@ -1,12 +1,23 @@
+import type { ArrServerConnector } from '../lib/servers/arr/base'
 import { Database } from 'bun:sqlite'
 import { afterEach, describe, expect, test } from 'bun:test'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { drizzle } from 'drizzle-orm/bun-sqlite'
+import { jsonc } from 'jsonc'
 import { runMigrations } from '../database/connection'
 import * as schema from '../database/schema'
+import { ServerConfig } from '../lib/config'
 import { ConnectorManager } from '../lib/servers'
 import { PeerConnector } from '../lib/servers/peer'
 import { getManagementApp } from '../management-app'
+import { ConfigService } from '../modules/config/config.service'
 import { DownloadsRepository } from '../modules/downloads/downloads.repository'
+import { ManagedKeysRepository } from '../modules/managed-keys/managed-keys.repository'
+import { ManagedApiKeys } from '../modules/managed-keys/managed-keys.service'
+import { RegistrationService } from '../modules/registration/registration.service'
+import { pendingRestart } from '../modules/status/restart-pending'
 
 const KEY = { 'X-Management-Key': 'mgmt-secret' } as const
 
@@ -239,6 +250,113 @@ describe('Management status endpoints', () => {
     }
     finally {
       await reader.cancel().catch(() => {})
+      ac.abort()
+    }
+  })
+
+  test('GET /overview reports registration and last contact per server, and the system state', async () => {
+    const manager = new ConnectorManager([ServerConfig.parse({ name: 'Radarr', url: 'http://radarr.test:7878', apiKey: 'a'.repeat(32), type: 'radarr' })], [])
+    const radarr = manager.servers[0]!
+    const db = drizzle({ client: new Database(':memory:'), schema })
+    runMigrations(db)
+    const registrations = new RegistrationService({
+      managedKeys: new ManagedApiKeys(new ManagedKeysRepository(db)),
+      destinations: () => [],
+      internalUrl: () => 'http://jack:5225',
+      downloads: () => true,
+      downloadsActive: () => true,
+      now: () => Date.parse('2026-10-18T10:00:00Z'),
+    })
+    registrations.recordContact(radarr.id)
+    const app = getManagementApp({
+      environment: 'test',
+      managementKey: 'mgmt-secret',
+      connectors: manager,
+      registrations,
+      system: () => ({ bootedAt: '2026-10-18T09:00:00.000Z', restartPending: ['downloads'] }),
+    })
+
+    const body = await (await app.request('/overview', { headers: KEY })).json() as any
+    expect(body.servers.items[0]).toMatchObject({ id: radarr.id, registration: null, lastContactAt: '2026-10-18T10:00:00.000Z' })
+    expect(body.system).toEqual({ bootedAt: '2026-10-18T09:00:00.000Z', restartPending: ['downloads'] })
+  })
+
+  test('GET /overview/stream pushes a new snapshot when a save makes a restart pending', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'jack-status-'))
+    const path = join(dir, 'config.jsonc')
+    await Bun.write(path, jsonc.stringify({ version: 2, jack: { internalUrl: 'http://jack:5225' }, servers: [], peers: [] }))
+    const manager = new ConnectorManager([], [])
+    const configService = await ConfigService.fromFile({ path, connectorManager: manager })
+    const bootRaw = configService.getRaw()
+    const app = getManagementApp({
+      environment: 'test',
+      managementKey: 'mgmt-secret',
+      connectors: manager,
+      configService,
+      system: () => ({ bootedAt: '2026-10-18T09:00:00.000Z', restartPending: pendingRestart(bootRaw, configService.getRaw()) }),
+    })
+    const ac = new AbortController()
+    const res = await app.request('/overview/stream', { headers: KEY, signal: ac.signal })
+    const reader = res.body!.getReader() as unknown as ReadableStreamDefaultReader<Uint8Array>
+
+    try {
+      expect(await readUntil(reader, '"restartPending":[]')).toContain('"restartPending":[]')
+      await configService.updateDownloads({ completedPath: dir })
+      expect(await readUntil(reader, '"restartPending":["downloads"]')).toContain('"restartPending":["downloads"]')
+    }
+    finally {
+      await reader.cancel().catch(() => {})
+      ac.abort()
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('GET /overview/stream and /config/stream push a snapshot when a registration lands', async () => {
+    const manager = new ConnectorManager([ServerConfig.parse({ name: 'Radarr', url: 'http://radarr.test:7878', apiKey: 'a'.repeat(32), type: 'radarr' })], [])
+    const radarr = manager.servers[0]!
+    const db = drizzle({ client: new Database(':memory:'), schema })
+    runMigrations(db)
+    const passed = { status: 'ok', warnings: [] }
+    // Stands in for the live connector: registration and both tests succeed.
+    const dest = {
+      id: radarr.id,
+      name: 'Radarr',
+      categories: [2000],
+      enabled: true,
+      canDestination: true,
+      isInitialized: true,
+      autoRegister: { enable: true, priority: 1 },
+      registerDownloadClient: async () => 1,
+      registerIndexer: async () => {},
+      testDownloadClient: async () => passed,
+      testIndexer: async () => passed,
+    } as unknown as ArrServerConnector
+    const registrations = new RegistrationService({
+      managedKeys: new ManagedApiKeys(new ManagedKeysRepository(db)),
+      destinations: () => [dest],
+      internalUrl: () => 'http://jack:5225',
+      downloads: () => true,
+      downloadsActive: () => true,
+      now: () => Date.parse('2026-10-18T10:00:00Z'),
+    })
+    const app = getManagementApp({ environment: 'test', managementKey: 'mgmt-secret', connectors: manager, registrations })
+    const ac = new AbortController()
+    const readers = await Promise.all(['/overview/stream', '/config/stream'].map(async (path) => {
+      const res = await app.request(path, { headers: KEY, signal: ac.signal })
+      return res.body!.getReader() as unknown as ReadableStreamDefaultReader<Uint8Array>
+    }))
+
+    try {
+      for (const reader of readers)
+        expect(await readUntil(reader, '"registration":null')).toContain('"registration":null')
+      await registrations.register(dest)
+      const landed = '"registration":{"at":"2026-10-18T10:00:00.000Z","indexer":{"status":"ok"}'
+      for (const reader of readers)
+        expect(await readUntil(reader, landed)).toContain(landed)
+    }
+    finally {
+      for (const reader of readers)
+        await reader.cancel().catch(() => {})
       ac.abort()
     }
   })

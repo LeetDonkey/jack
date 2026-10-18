@@ -1,6 +1,6 @@
 import type { Envs } from '../lib/envs'
 import { Buffer } from 'node:buffer'
-import { rm } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Database } from 'bun:sqlite'
@@ -20,6 +20,8 @@ import { PROTOCOL_VERSION } from '../lib/version'
 import { getManagementApp } from '../management-app'
 import { ConfigService } from '../modules/config/config.service'
 import { DownloadsRepository } from '../modules/downloads/downloads.repository'
+import { ManagedApiKeys } from '../modules/managed-keys/managed-keys.service'
+import { RegistrationService } from '../modules/registration/registration.service'
 import { makeAuthRepos } from './helpers/auth-repos'
 
 const config = AppConfig.parse({
@@ -120,6 +122,7 @@ afterAll(() => mswServer.close())
 const tempFiles: string[] = []
 const dbsToClose: Database[] = []
 afterEach(async () => {
+  mswServer.resetHandlers()
   for (const f of tempFiles.splice(0))
     await rm(f, { force: true })
   for (const db of dbsToClose.splice(0))
@@ -129,7 +132,7 @@ afterEach(async () => {
 // `app` is the MANAGEMENT app (where /config lives); `mainApp` is the public peer
 // app (where /torznab etc. live). Both share the same in-process connectorManager +
 // configService, so a mutation on `app` is visible to `mainApp` (see Phase 7).
-async function makeMutableApp(managementKey = 'mgmt-secret') {
+async function makeMutableApp(managementKey = 'mgmt-secret', { withRegistrations = false, registrationWaitMs }: { withRegistrations?: boolean, registrationWaitMs?: number } = {}) {
   const path = join(tmpdir(), `jack-config-${Math.random().toString(36).slice(2)}.jsonc`)
   tempFiles.push(path)
   await Bun.write(path, jsonc.stringify({ version: 1, peers: [], servers: [] }, { space: 2 }))
@@ -142,9 +145,65 @@ async function makeMutableApp(managementKey = 'mgmt-secret') {
   const authRepos = makeAuthRepos(db)
   const downloadsRepository = new DownloadsRepository(db)
   const configService = await ConfigService.fromFile({ path, connectorManager, downloadsRepository })
-  const app = getManagementApp({ environment: 'test', managementKey, connectors: connectorManager, configService, apiKeysRepository: authRepos.apiKeysRepository })
+  // Wired like index.ts: registration follows config saves.
+  const registrations = withRegistrations
+    ? new RegistrationService({
+        managedKeys: new ManagedApiKeys(authRepos.managedKeysRepository),
+        destinations: () => connectorManager.destinations,
+        internalUrl: () => configService.getInternalUrl() ?? 'http://jack:5225',
+        downloads: () => true,
+        downloadsActive: () => true,
+      })
+    : undefined
+  if (registrations)
+    registrations.followConfig(configService)
+  const app = getManagementApp({ environment: 'test', managementKey, connectors: connectorManager, configService, apiKeysRepository: authRepos.apiKeysRepository, registrations, registrationWaitMs })
   const mainApp = getApp(makeEnvs(managementKey), config, connectorManager, { downloadsRepository, ...authRepos })
-  return { app, mainApp, path, connectorManager, downloadsRepository, database, configService, apiKeysRepository: authRepos.apiKeysRepository }
+  return { app, mainApp, path, connectorManager, downloadsRepository, database, configService, apiKeysRepository: authRepos.apiKeysRepository, registrations }
+}
+
+// A Radarr that keeps the download clients and indexers jack registers, and
+// answers their tests like a real one: the client passes, the indexer finds no
+// releases yet.
+// `indexerTestGate` holds the indexer test until it resolves, like a slow feed.
+function fakeArr(baseUrl: string, { indexerTestGate }: { indexerTestGate?: Promise<void> } = {}) {
+  const state = { clients: [] as any[], indexers: [] as any[], tests: [] as string[], nextId: 1 }
+  const crud = (kind: 'clients' | 'indexers', path: string) => [
+    http.get(`${baseUrl}${path}`, () => HttpResponse.json(state[kind])),
+    http.post(`${baseUrl}${path}`, async ({ request }) => {
+      const created = { ...(await request.json() as object), id: state.nextId++ }
+      state[kind].push(created)
+      return HttpResponse.json(created)
+    }),
+    http.put(`${baseUrl}${path}/:id`, async ({ request, params }) => {
+      const updated = await request.json() as { id: number }
+      state[kind] = state[kind].map(item => (String(item.id) === String(params.id) ? updated : item))
+      return HttpResponse.json(updated)
+    }),
+  ]
+  mswServer.use(
+    ...crud('clients', '/api/v3/downloadclient'),
+    ...crud('indexers', '/api/v3/indexer'),
+    http.post(`${baseUrl}/api/v3/downloadclient/test`, () => {
+      state.tests.push('client')
+      return HttpResponse.json('{}')
+    }),
+    http.post(`${baseUrl}/api/v3/indexer/test`, async () => {
+      await indexerTestGate
+      state.tests.push('indexer')
+      return HttpResponse.json([{ propertyName: '', errorMessage: 'Query successful, but no results in the configured categories were returned from your indexer.', severity: 'error' }], { status: 400 })
+    }),
+  )
+  return state
+}
+
+async function waitFor(check: () => boolean, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs
+  while (!check()) {
+    if (Date.now() > deadline)
+      throw new Error('Timed out waiting for the condition')
+    await Bun.sleep(5)
+  }
 }
 
 const KEY = { 'X-Management-Key': 'mgmt-secret' } as const
@@ -385,7 +444,9 @@ describe('Management API servers', () => {
   test('announces each saved server so jack can re-register in it, but not a rolled-back one', async () => {
     const { app, configService } = await makeMutableApp()
     const saved: string[] = []
-    configService.onServerSaved(id => saved.push(id))
+    configService.onServerSaved((id) => {
+      saved.push(id)
+    })
 
     await app.request('/config/servers', { method: 'POST', headers: { ...KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(SERVER) })
     await app.request(`/config/servers/${serverId}`, {
@@ -667,6 +728,40 @@ describe('Management API jack config', () => {
     expect(body.apiKey).toBeUndefined()
   })
 
+  test('PATCH merges: an absent key keeps its value, null removes it, external stays', async () => {
+    process.env.TMDB_X = 'tmdb-secret'
+    const { app, path } = await makeMutableApp()
+    const patch = (body: unknown) => app.request('/config/jack', { method: 'PATCH', headers: { ...KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+
+    expect((await patch({ internalUrl: 'http://jack.test:5225', apiKey: 'main', tmdbApiKey: { env: 'TMDB_X' }, external: { url: 'https://jack.example.com' } })).status).toBe(200)
+    expect((await patch({ internalUrl: 'http://192.168.1.10:5225' })).status).toBe(200)
+    const onDisk = () => Bun.file(path).text().then(text => (jsonc.parse(text) as { jack: Record<string, unknown> }).jack)
+    expect(await onDisk()).toEqual({ internalUrl: 'http://192.168.1.10:5225', apiKey: 'main', tmdbApiKey: { env: 'TMDB_X' }, external: { url: 'https://jack.example.com' } })
+
+    expect((await patch({ apiKey: null })).status).toBe(200)
+    expect(await onDisk()).toEqual({ internalUrl: 'http://192.168.1.10:5225', tmdbApiKey: { env: 'TMDB_X' }, external: { url: 'https://jack.example.com' } })
+
+    // internalUrl can't be removed.
+    expect((await patch({ internalUrl: null })).status).toBe(400)
+  })
+
+  test('a first PATCH must set internalUrl', async () => {
+    const { app } = await makeMutableApp()
+    const res = await app.request('/config/jack', { method: 'PATCH', headers: { ...KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ apiKey: 'main' }) })
+    expect(res.status).toBe(400)
+  })
+
+  test('announces each saved jack block with the one it replaced', async () => {
+    const { app, configService } = await makeMutableApp()
+    const saved: Array<[unknown, unknown]> = []
+    configService.onJackSaved((previous, next) => {
+      saved.push([previous?.internalUrl ?? null, next.internalUrl])
+    })
+    for (const internalUrl of ['http://jack:5225', 'http://192.168.1.10:5225'])
+      await app.request('/config/jack', { method: 'PATCH', headers: { ...KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ internalUrl }) })
+    expect(saved).toEqual([[null, 'http://jack:5225'], ['http://jack:5225', 'http://192.168.1.10:5225']])
+  })
+
   test('PATCH with an invalid internalUrl returns 400', async () => {
     const { app } = await makeMutableApp()
     const res = await app.request('/config/jack', {
@@ -868,13 +963,22 @@ describe('Management API quick links', () => {
 })
 
 describe('Management API downloads config', () => {
+  // A real folder: saving completedPath checks that jack can write to it.
+  let completedDir = ''
+  beforeAll(async () => {
+    completedDir = await mkdtemp(join(tmpdir(), 'jack-completed-'))
+  })
+  afterAll(async () => {
+    await rm(completedDir, { recursive: true, force: true })
+  })
+
   // Seed a config file that already carries a downloads block, so the partial-patch
   // behaviour (merge onto what's stored) has something to merge onto.
   async function withDownloadsBlock(app: ReturnType<typeof mgmtApp>, path: string) {
     const res = await app.request('/config/downloads', {
       method: 'PATCH',
       headers: { ...KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ completedPath: '/downloads', maxConcurrentDownloads: 5 }),
+      body: JSON.stringify({ completedPath: completedDir, maxConcurrentDownloads: 5 }),
     })
     expect(res.status).toBe(200)
     return path
@@ -901,7 +1005,7 @@ describe('Management API downloads config', () => {
     // The unrelated knobs survive, and only what was set is written — defaults are
     // never baked into the file.
     const onDisk = jsonc.parse(await Bun.file(path).text()) as { downloads: Record<string, unknown> }
-    expect(onDisk.downloads).toEqual({ completedPath: '/downloads', maxConcurrentDownloads: 5, unlinkImportedFiles: true })
+    expect(onDisk.downloads).toEqual({ completedPath: completedDir, maxConcurrentDownloads: 5, unlinkImportedFiles: true })
 
     const get = await app.request('/config/downloads', { headers: KEY })
     expect(await get.json()).toMatchObject({ unlinkImportedFiles: true, maxConcurrentDownloads: 5 })
@@ -919,7 +1023,7 @@ describe('Management API downloads config', () => {
     expect(res.status).toBe(200)
 
     const onDisk = jsonc.parse(await Bun.file(path).text()) as { downloads: Record<string, unknown> }
-    expect(onDisk.downloads).toEqual({ completedPath: '/downloads' })
+    expect(onDisk.downloads).toEqual({ completedPath: completedDir })
     expect('maxConcurrentDownloads' in onDisk.downloads).toBe(false)
   })
 
@@ -935,7 +1039,7 @@ describe('Management API downloads config', () => {
     expect(res.status).toBe(400)
 
     const onDisk = jsonc.parse(await Bun.file(path).text()) as { downloads: Record<string, unknown> }
-    expect(onDisk.downloads.completedPath).toBe('/downloads')
+    expect(onDisk.downloads.completedPath).toBe(completedDir)
   })
 
   test('PATCH rejects a first patch that leaves the merged block without completedPath', async () => {
@@ -958,6 +1062,31 @@ describe('Management API downloads config', () => {
       body: JSON.stringify({ unlinkImportedFiles: 'yes' }),
     })
     expect(res.status).toBe(400)
+  })
+
+  test('PATCH refuses a completed folder jack can\'t write to', async () => {
+    const { app, path } = await makeMutableApp()
+    const missing = join(completedDir, 'not-mounted')
+    const res = await app.request('/config/downloads', {
+      method: 'PATCH',
+      headers: { ...KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ completedPath: missing }),
+    })
+    expect(res.status).toBe(400)
+    const body = await res.json() as { error: { message: string } }
+    expect(body.error.message).toBe(`jack can't write to ${missing}. Check the Downloads path in the jack template.`)
+    expect((jsonc.parse(await Bun.file(path).text()) as { downloads?: unknown }).downloads).toBeUndefined()
+  })
+
+  test('announces each save, with null as the previous block when downloads were just turned on', async () => {
+    const { app, path, configService } = await makeMutableApp()
+    const saved: Array<[unknown, unknown]> = []
+    configService.onDownloadsSaved((previous, next) => {
+      saved.push([previous?.maxConcurrentDownloads ?? previous, next.maxConcurrentDownloads])
+    })
+    await withDownloadsBlock(app, path)
+    await app.request('/config/downloads', { method: 'PATCH', headers: { ...KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ maxConcurrentDownloads: 2 }) })
+    expect(saved).toEqual([[null, 5], [5, 2]])
   })
 
   test('PATCH /config/downloads is unregistered (404) without a ConfigService', async () => {
@@ -1001,5 +1130,122 @@ describe('Management API bandwidth config', () => {
     const { app } = await makeMutableApp()
     const res = await patch(app, { schedule: [{ days: ['someday'], start: '7', end: '23:00' }] })
     expect(res.status).toBe(400)
+  })
+})
+
+describe('Management API registration', () => {
+  const SERVER = {
+    name: 'Radarr',
+    url: 'http://radarr-new.test:7878',
+    apiKey: 'a'.repeat(32),
+    type: 'radarr',
+  }
+  const serverId = generateId(SERVER.url)
+  const json = { ...KEY, 'Content-Type': 'application/json' }
+
+  test('POST /config/servers answers once jack is registered and Radarr tested it', async () => {
+    const radarr = fakeArr(SERVER.url)
+    const { app } = await makeMutableApp('mgmt-secret', { withRegistrations: true })
+
+    const res = await app.request('/config/servers', { method: 'POST', headers: json, body: JSON.stringify(SERVER) })
+    expect(res.status).toBe(201)
+    const body = await res.json() as { ok: boolean, registration: Record<string, unknown> }
+    expect(body).toMatchObject({
+      ok: true,
+      registration: {
+        indexer: { status: 'ok' },
+        downloadClient: { status: 'ok' },
+        clientTest: 'ok',
+        // No friend has releases yet: "no results" still proves Radarr reached jack.
+        indexerTest: 'ok',
+        message: null,
+      },
+    })
+    expect(radarr.clients.map(c => c.name)).toEqual(['Jack'])
+    expect(radarr.indexers[0]?.downloadClientId).toBe(radarr.clients[0]?.id)
+    expect(radarr.tests.sort()).toEqual(['client', 'indexer'])
+
+    const list = await (await app.request('/config/servers', { headers: KEY })).json() as { servers: Array<{ registration: unknown, lastContactAt: unknown }> }
+    expect(list.servers[0]?.registration).toEqual(body.registration)
+    expect(list.servers[0]?.lastContactAt).toBeNull()
+  })
+
+  test('PATCH /config/servers/:id answers with the new registration', async () => {
+    const radarr = fakeArr(SERVER.url)
+    const { app } = await makeMutableApp('mgmt-secret', { withRegistrations: true })
+    await app.request('/config/servers', { method: 'POST', headers: json, body: JSON.stringify(SERVER) })
+
+    const res = await app.request(`/config/servers/${serverId}`, { method: 'PATCH', headers: json, body: JSON.stringify({ ...SERVER, autoregister: { enable: true, priority: 25 } }) })
+    expect(res.status).toBe(200)
+    expect((await res.json() as { registration: { indexer: unknown } }).registration.indexer).toEqual({ status: 'ok' })
+    expect(radarr.indexers).toHaveLength(1)
+    expect(radarr.indexers[0]?.priority).toBe(25)
+  })
+
+  test('a server jack doesn\'t register in answers with a null registration', async () => {
+    const { app } = await makeMutableApp('mgmt-secret', { withRegistrations: true })
+    const res = await app.request('/config/servers', { method: 'POST', headers: json, body: JSON.stringify({ ...SERVER, destination: false }) })
+    expect(res.status).toBe(201)
+    expect(await res.json()).toEqual({ ok: true, registration: null, registrationPending: false })
+
+    const again = await app.request(`/config/servers/${serverId}/register`, { method: 'POST', headers: KEY })
+    expect(again.status).toBe(400)
+  })
+
+  test('POST /config/servers/:id/register registers again with a new key', async () => {
+    const radarr = fakeArr(SERVER.url)
+    const { app } = await makeMutableApp('mgmt-secret', { withRegistrations: true })
+    await app.request('/config/servers', { method: 'POST', headers: json, body: JSON.stringify(SERVER) })
+    const firstKey = radarr.indexers[0]?.fields.find((f: { name: string }) => f.name === 'apiKey')?.value
+
+    const res = await app.request(`/config/servers/${serverId}/register`, { method: 'POST', headers: KEY })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ ok: true, registration: { clientTest: 'ok', indexerTest: 'ok' }, registrationPending: false })
+    expect(radarr.indexers[0]?.fields.find((f: { name: string }) => f.name === 'apiKey')?.value).not.toBe(firstKey)
+
+    expect((await app.request('/config/servers/unknown/register', { method: 'POST', headers: KEY })).status).toBe(404)
+  })
+
+  test('a slow registration answers with registrationPending, and the result lands on the server list later', async () => {
+    let release!: () => void
+    const indexerTestGate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    fakeArr(SERVER.url, { indexerTestGate })
+    const { app, registrations } = await makeMutableApp('mgmt-secret', { withRegistrations: true, registrationWaitMs: 20 })
+
+    try {
+      const res = await app.request('/config/servers', { method: 'POST', headers: json, body: JSON.stringify(SERVER) })
+      expect(res.status).toBe(201)
+      expect(await res.json()).toEqual({ ok: true, registration: null, registrationPending: true })
+
+      const again = await app.request(`/config/servers/${serverId}/register`, { method: 'POST', headers: KEY })
+      expect(again.status).toBe(200)
+      expect(await again.json()).toEqual({ ok: true, registration: null, registrationPending: true })
+    }
+    finally {
+      release()
+    }
+    await waitFor(() => registrations!.registration(serverId)?.indexerTest === 'ok')
+    const list = await (await app.request('/config/servers', { headers: KEY })).json() as { servers: Array<{ registration: { indexerTest: string } | null }> }
+    expect(list.servers[0]?.registration?.indexerTest).toBe('ok')
+  })
+
+  test('the register route is absent without a registration service', async () => {
+    const { app } = await makeMutableApp()
+    expect((await app.request(`/config/servers/${serverId}/register`, { method: 'POST', headers: KEY })).status).toBe(404)
+  })
+
+  test('a new internal URL moves jack\'s indexer and client in Radarr without a restart', async () => {
+    const radarr = fakeArr(SERVER.url)
+    const { app } = await makeMutableApp('mgmt-secret', { withRegistrations: true })
+    await app.request('/config/jack', { method: 'PATCH', headers: json, body: JSON.stringify({ internalUrl: 'http://jack:5225' }) })
+    await app.request('/config/servers', { method: 'POST', headers: json, body: JSON.stringify(SERVER) })
+
+    await app.request('/config/jack', { method: 'PATCH', headers: json, body: JSON.stringify({ internalUrl: 'http://192.168.1.10:5225' }) })
+    const baseUrl = () => radarr.indexers[0]?.fields.find((f: { name: string }) => f.name === 'baseUrl')?.value
+    await waitFor(() => baseUrl() === 'http://192.168.1.10:5225/torznab')
+    expect(radarr.indexers).toHaveLength(1)
+    expect(radarr.clients[0]?.fields).toContainEqual({ name: 'host', value: '192.168.1.10' })
   })
 })

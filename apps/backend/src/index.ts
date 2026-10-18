@@ -1,12 +1,9 @@
-import type { ArrServerConnector } from './lib/servers/arr/base'
 import process from 'node:process'
 import { getApp } from './app'
 import { openDatabase } from './database/connection'
 import { shutdownTelemetry } from './instrumentation'
-import { registerManagedForDestination } from './lib/autoregister'
 import { DownloadsConfig, getAppConfig, SecurityConfig, TorznabConfig } from './lib/config'
 import { getAppEnvs } from './lib/envs'
-import { FetchError } from './lib/errors/FetchError'
 import { startPublicServer } from './lib/public-server'
 import { ConnectorManager } from './lib/servers'
 import { PROTOCOL_VERSION } from './lib/version'
@@ -26,25 +23,21 @@ import { ManagedApiKeys } from './modules/managed-keys/managed-keys.service'
 import { buildDailySummary } from './modules/notifications/daily-summary'
 import { NotificationsService } from './modules/notifications/notifications.service'
 import { PieceHasher } from './modules/peer/piece-hasher'
-import { qbCategoryForServer } from './modules/qbittorrent/qbittorrent.mapper'
+import { RegistrationService } from './modules/registration/registration.service'
 import { BanList } from './modules/security/ban-list'
+import { pendingRestart } from './modules/status/restart-pending'
 import { localDay, TrafficLedger } from './modules/transfers/traffic-ledger'
 import { TransfersService } from './modules/transfers/transfers.service'
-
-function logRegistrationFailure(what: string, destName: string | undefined, err: unknown) {
-  if (err instanceof FetchError) {
-    logger.error({ destination: destName, status: err.extras.status, body: err.extras.body }, `Failed to register ${what}`)
-    return
-  }
-  const message = err instanceof Error ? err.message : String(err)
-  logger.error({ destination: destName, error: message }, `Failed to register ${what}`)
-}
 
 logger.debug('Loading environment variables')
 const envs = getAppEnvs()
 
 logger.debug('Loading app config')
 const { appConfig: config, raw: rawConfig } = await getAppConfig(envs)
+// What this process runs with, refs unresolved: settings saved later are compared
+// against it to tell the user which ones wait for a restart.
+const bootRaw = structuredClone(rawConfig)
+const bootedAt = new Date().toISOString()
 
 const connectorManager = new ConnectorManager(config.servers, config.peers)
 await connectorManager.initAll()
@@ -67,6 +60,27 @@ function currentMaxConcurrentDownloads(): number | null {
   const parsed = raw ? DownloadsConfig.safeParse(raw) : undefined
   return parsed?.success ? parsed.data.maxConcurrentDownloads : config.downloads?.maxConcurrentDownloads ?? null
 }
+
+function currentInternalUrl(): string {
+  return configService?.getInternalUrl() ?? config.jack.internalUrl
+}
+
+// Registers jack in every auto-register Radarr/Sonarr and asks them to test it.
+// Built before the public app, which reports each *arr's contact to it.
+const managedApiKeys = new ManagedApiKeys(managedKeysRepository)
+const registrations = new RegistrationService({
+  managedKeys: managedApiKeys,
+  destinations: () => connectorManager.destinations,
+  internalUrl: currentInternalUrl,
+  downloads: () => Boolean(configService ? configService.getRawDownloads() : config.downloads),
+  // /api/v2 and the download queue exist only if downloads were set at boot.
+  downloadsActive: () => Boolean(config.downloads),
+})
+// Re-register after a saved server (a changed priority or a newly added *arr),
+// a new internal URL, or downloads turned on, so none of them needs a restart.
+// Wired before the management API starts, so no save goes unregistered.
+if (configService)
+  registrations.followConfig(configService)
 
 // Shared rate limits + live transfer registry.
 const transfersService = new TransfersService(
@@ -120,7 +134,20 @@ const introductions = configService
     })
   : undefined
 introductions?.start()
-const app = getApp(envs, config, connectorManager, { downloadsRepository, downloadsService, apiKeysRepository, managedKeysRepository, transfersService, torznabConfig, pieceHasher, introductions, bans, trustedProxies: () => securityConfig().trustedProxies })
+const app = getApp(envs, config, connectorManager, {
+  downloadsRepository,
+  downloadsService,
+  apiKeysRepository,
+  managedKeysRepository,
+  transfersService,
+  torznabConfig,
+  pieceHasher,
+  introductions,
+  bans,
+  trustedProxies: () => securityConfig().trustedProxies,
+  internalUrl: currentInternalUrl,
+  onArrContact: id => registrations.recordContact(id),
+})
 // Public server on node:http (see startPublicServer for why).
 const server = startPublicServer(app.fetch, envs.PORT)
 
@@ -201,6 +228,11 @@ function startManagementServer() {
     notifications,
     introductions,
     bans,
+    registrations,
+    system: () => ({
+      bootedAt,
+      restartPending: configService ? pendingRestart(bootRaw, configService.getRaw()) : [],
+    }),
   })
   const instance = Bun.serve({ port: envs.MANAGEMENT_PORT, fetch: managementApp.fetch, idleTimeout: 60 })
   logger.info({ port: instance.port }, 'Management API listening')
@@ -214,52 +246,22 @@ const managementServer = startManagementServer()
 // destination that opts in via its `autoregister` config. We register even when
 // there are no peers / an empty catalog (forceSave on the *arr side), so the
 // Jack indexer and client are always present and bound — they start returning
-// results as soon as peers come online.
-const managedApiKeys = new ManagedApiKeys(managedKeysRepository)
-const jackConfig = config.jack
-const downloads = config.downloads
+// results as soon as peers come online. Without downloads nothing is registered
+// (see registerManagedForDestination).
+if (!config.downloads)
+  logger.warn('Downloads are off, so jack did not add its indexer or download client to Radarr/Sonarr. Turn on Downloads in Settings, then restart the jack container.')
 
-if (!downloads) {
-  logger.warn('No "downloads" config set; skipping download client auto-registration. Grabs will fail until a qBittorrent client is configured.')
-}
+// Keep managed keys only for destinations jack may register in, reachable or
+// not, so a stale key of any other server can't authenticate.
+managedApiKeys.prune(connectorManager.destinations.filter(d => registrations.isRegistrable(d)).map(d => d.id))
 
-// Registrations run one at a time: each provisions a key and commits it by
-// dropping the destination's other keys, so two overlapping runs would revoke
-// each other's key.
-let registrationQueue: Promise<void> = Promise.resolve()
+// Not awaited: each registration also waits for the *arr to test jack, which can
+// take its full timeout when the *arr can't reach jack. Results show on the
+// overview as they come in.
+void registrations.registerAll()
 
-function registerDestination(dest: ArrServerConnector): Promise<void> {
-  const run = registrationQueue.then(() => registerManagedForDestination(dest, {
-    managedKeys: managedApiKeys,
-    internalUrl: jackConfig.internalUrl,
-    downloads: Boolean(downloads),
-    category: qbCategoryForServer(dest.id),
-    onSuccess: (kind, name, meta) => {
-      if (kind === 'download client') {
-        logger.info({ destination: name, downloadClientId: meta.downloadClientId }, 'Registered Jack as qBittorrent download client')
-        return
-      }
-      logger.info({ destination: name, categories: meta.categories, downloadClientId: meta.downloadClientId }, 'Registered Jack as Torznab indexer')
-    },
-    onFailure: logRegistrationFailure,
-  }))
-  registrationQueue = run.catch(() => {})
-  return run
-}
-
-const registrable = connectorManager.destinations.filter(d => d.isInitialized && d.autoRegister.enable)
-for (const dest of registrable)
-  await registerDestination(dest)
-// Drop managed keys for destinations no longer registrable so stale keys can't authenticate.
-managedApiKeys.prune(registrable.map(d => d.id))
-
-// Re-register after a server is saved in the management UI, so a changed
-// priority (or a newly added *arr) applies without a restart.
-configService?.onServerSaved((id) => {
-  const dest = connectorManager.destinations.find(d => d.id === id)
-  if (dest?.isInitialized && dest.autoRegister.enable)
-    void registerDestination(dest)
-})
+// Destinations that were down at boot: retry them, and register once they're up.
+registrations.start(subscriber => connectorManager.subscribe(subscriber))
 
 importWatcher?.start()
 
@@ -281,6 +283,7 @@ else {
 process.on('SIGINT', async () => {
   logger.info('SIGINT received, exiting')
   importWatcher?.stop()
+  registrations.stop()
   peerHealth.stop()
   notifications.stop()
   introductions?.stop()
@@ -296,6 +299,7 @@ process.on('SIGINT', async () => {
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM received, exiting')
   importWatcher?.stop()
+  registrations.stop()
   peerHealth.stop()
   notifications.stop()
   introductions?.stop()
