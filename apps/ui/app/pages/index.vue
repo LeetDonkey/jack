@@ -1,6 +1,10 @@
 <script setup lang="ts">
+import type { ActivityDownload, ActivityOverview, ActivityTransfer, ActivityTransfersSnapshot, OverviewPeer } from '~/types/activity'
+
 // The shared overview: the layout keeps its stream open on every page.
-const { overview, error, refresh, connected, hasConnectedOnce, whenLoaded } = useOverview()
+const { overview: sharedOverview, error, refresh, connected, hasConnectedOnce, whenLoaded } = useOverview()
+// With the fields the management API added for this page (types/activity.ts).
+const overview = computed(() => sharedOverview.value as ActivityOverview | undefined)
 
 // Setup checklist state. Awaited together with the overview so the first render
 // already knows whether setup is open: no card popping in, no green flash.
@@ -30,14 +34,119 @@ watch(() => Boolean(overview.value) && setup.settled, (shown) => {
 const { settings } = useSettings()
 const peerTextClass = (id: string) => settings.value?.peerColors.get(id)?.text ?? peerColorTextClass(id)
 
-// "last reached jack 3 min ago" has to move on while Radarr/Sonarr stay quiet, so
-// it reads a clock that ticks instead of the time of the last snapshot.
+// "seen 2 min ago" has to move on while nothing else changes, so it reads a clock
+// that ticks instead of the time of the last snapshot.
 const now = ref(Date.now())
 let clock: ReturnType<typeof setInterval> | undefined
 onMounted(() => {
   clock = setInterval(() => now.value = Date.now(), 30_000)
 })
 onBeforeUnmount(() => clearInterval(clock))
+
+// ── Right now ───────────────────────────────────────────────────────────────
+
+// Speeds come from Live traffic's stream. It sends a snapshot when it opens, then
+// one a second while anything moves.
+const transfers = ref<ActivityTransfersSnapshot | null>(null)
+useManagementStream<ActivityTransfersSnapshot>('transfers/stream', (snapshot) => {
+  transfers.value = snapshot
+})
+
+const counts = computed(() => overview.value ? dashboardDownloadCounts(overview.value.downloads) : null)
+
+// Friends with at least one upload from you running now.
+const uploadFriends = computed(() =>
+  new Set((transfers.value?.transfers ?? []).filter(t => t.direction === 'upload').map(t => t.peer)).size)
+
+const downLine = computed(() => {
+  const t = transfers.value
+  const downloading = t?.download.active ?? counts.value?.downloading ?? 0
+  return t ? `${formatRate(t.download.bytesPerSecond)} · ${downloading} downloading` : `${downloading} downloading`
+})
+const upLine = computed(() => {
+  const t = transfers.value
+  if (!t)
+    return null
+  const who = uploadFriends.value === 0
+    ? 'nobody downloading from you'
+    : `${uploadFriends.value} ${uploadFriends.value === 1 ? 'friend' : 'friends'} downloading from you`
+  return `${formatRate(t.upload.bytesPerSecond)} · ${who}`
+})
+const pausedNote = computed(() => {
+  const paused = transfers.value?.paused
+  if (paused?.downloads.paused && paused.uploads.paused)
+    return 'Downloads and sharing are paused.'
+  if (paused?.downloads.paused)
+    return 'Downloads are paused.'
+  if (paused?.uploads.paused)
+    return 'Sharing is paused.'
+  return null
+})
+
+const transferByDownload = computed(() => {
+  const map = new Map<number, ActivityTransfer>()
+  for (const transfer of transfers.value?.transfers ?? []) {
+    if (transfer.direction === 'download' && transfer.downloadId != null)
+      map.set(transfer.downloadId, transfer)
+  }
+  return map
+})
+
+// The running downloads, moving ones first. A long queue is cut short here; the
+// Downloads page has all of them.
+const RUNNING_PREVIEW = 5
+const running = computed(() => sortRunningDownloads(overview.value?.downloads.active ?? []))
+const runningShown = computed(() => running.value.slice(0, RUNNING_PREVIEW))
+
+function rowDetail(download: ActivityDownload): { text: string, tone: 'muted' | 'warning' } {
+  const transfer = transferByDownload.value.get(download.id)
+  if (transfer) {
+    const rate = formatRate(transfer.bytesPerSecond)
+    return { text: transfer.etaSeconds == null ? rate : `${rate} · ${formatEta(transfer.etaSeconds)} left`, tone: 'muted' }
+  }
+  const state = downloadState(download, { downloadsPaused: transfers.value?.paused?.downloads.paused ?? false })
+  if (state.label !== 'Downloading')
+    return { text: state.label, tone: state.color === 'warning' ? 'warning' : 'muted' }
+  return { text: `${formatBytes(download.downloadedBytes)} / ${formatBytes(download.totalBytes)}`, tone: 'muted' }
+}
+
+// ── Friends ─────────────────────────────────────────────────────────────────
+
+function friendRow(peer: OverviewPeer) {
+  // A jack without health checks (older backend) falls back to the connector state.
+  const health = peer.health ?? { online: peer.initialized ? true : (peer.initializationError ? false : null), offlineSince: null, lastSeenAt: null, lastError: peer.initializationError, lastErrorCode: null, checkedAt: null }
+  const status = friendStatusWords(health, now.value)
+  const seen = health.online === true && health.lastSeenAt ? `seen ${formatTimeAgo(health.lastSeenAt, now.value)}` : null
+  return { status, seen, online: health.online, error: health.online === false ? (health.lastError ?? status.label) : null }
+}
+
+const STATUS_CLASS = {
+  success: 'text-muted',
+  neutral: 'text-muted',
+  warning: 'text-warning',
+  error: 'text-error',
+} as const
+
+// ── Lifetime ────────────────────────────────────────────────────────────────
+
+// Hidden until something moved. The traffic counts start on the day `since` names;
+// a jack that sends no lifetime block falls back to the download rows' bytes.
+const lifetime = computed(() => {
+  const o = overview.value
+  if (!o)
+    return null
+  const downloaded = o.lifetime?.since ? o.lifetime.downloadedBytes : o.downloads.bytesMoved
+  const uploaded = o.lifetime?.uploadedBytes ?? 0
+  if (downloaded === 0 && uploaded === 0 && o.downloads.total === 0)
+    return null
+  return {
+    downloaded,
+    uploaded,
+    since: formatCalendarDay(o.lifetime?.since),
+    imported: o.downloads.byStatus.imported ?? 0,
+    started: o.downloads.total,
+  }
+})
 </script>
 
 <template>
@@ -55,7 +164,7 @@ onBeforeUnmount(() => clearInterval(clock))
 
       <!-- Held back while the setup data is still on its way, so the dashboard never
            renders first without the setup card. -->
-      <div v-else-if="overview && (setup.settled || shownOnce)" class="space-y-8">
+      <div v-else-if="overview && counts && (setup.settled || shownOnce)" class="space-y-8">
         <!-- What needs doing, first: setup, then problems. -->
         <div class="space-y-4">
           <SetupChecklist :status="setup" />
@@ -69,94 +178,139 @@ onBeforeUnmount(() => clearInterval(clock))
           />
         </div>
 
-        <!-- Lifetime totals — the satisfying numbers. -->
+        <!-- What is moving now, both ways. -->
         <section>
-          <h2 class="mb-3 text-xs font-semibold uppercase tracking-wider text-muted">
-            Lifetime
-          </h2>
-          <div class="grid grid-cols-2 gap-4 lg:grid-cols-3">
-            <StatCard label="Imported" :value="overview.downloads.byStatus.imported ?? 0" hint="media files" icon="i-ph-tray-arrow-down" />
-            <StatCard label="Downloaded from friends" :value="formatBytes(overview.downloads.bytesMoved)" icon="i-ph-swap" />
-            <StatCard label="Downloads started" :value="overview.downloads.total" icon="i-ph-download-simple" class="col-span-2 lg:col-span-1" />
-          </div>
-        </section>
-
-        <!-- Live download activity. -->
-        <section>
-          <div class="mb-3 flex items-center justify-between">
+          <div class="mb-3 flex items-center justify-between gap-2">
             <h2 class="text-xs font-semibold uppercase tracking-wider text-muted">
-              Downloads
+              Right now
             </h2>
-            <UButton to="/downloads" label="View all downloads" trailing-icon="i-ph-arrow-right" variant="link" size="sm" class="px-0" />
+            <UButton to="/downloads" label="All downloads" trailing-icon="i-ph-arrow-right" variant="link" size="sm" class="px-0" />
           </div>
 
           <UCard variant="subtle" :ui="{ body: '!p-0' }">
-            <div class="flex flex-wrap items-baseline gap-x-6 gap-y-2 border-b border-default px-5 py-4">
-              <span class="flex items-baseline gap-2">
-                <span class="text-xl font-semibold tabular-nums text-primary">{{ overview.downloads.byStatus.downloading ?? 0 }}</span>
+            <!-- Speeds both ways, to Live traffic. -->
+            <NuxtLink
+              to="/transfers"
+              class="flex flex-wrap items-center gap-x-6 gap-y-1.5 border-b border-default px-5 py-3.5 text-sm transition-colors hover:bg-elevated/50"
+            >
+              <span class="flex items-center gap-1.5 tabular-nums text-default">
+                <UIcon name="i-ph-arrow-down" class="size-4 shrink-0 text-primary" />
+                <span class="sr-only">Downloading:</span>
+                {{ downLine }}
+              </span>
+              <span v-if="upLine" class="flex items-center gap-1.5 tabular-nums text-default">
+                <UIcon name="i-ph-arrow-up" class="size-4 shrink-0 text-success" />
+                <span class="sr-only">Uploading:</span>
+                {{ upLine }}
+              </span>
+              <span v-if="pausedNote" class="flex items-center gap-1.5 text-warning">
+                <UIcon name="i-ph-pause-circle" class="size-4 shrink-0" />
+                {{ pausedNote }}
+              </span>
+              <UIcon name="i-ph-caret-right" class="ml-auto hidden size-4 shrink-0 text-dimmed sm:block" />
+            </NuxtLink>
+
+            <!-- Counts, each to its filter on Downloads. -->
+            <div class="flex flex-wrap items-baseline gap-x-6 gap-y-2 border-b border-default px-5 py-3.5">
+              <NuxtLink to="/downloads?status=downloading" class="flex items-baseline gap-2 hover:underline">
+                <span class="text-xl font-semibold tabular-nums text-primary">{{ counts.downloading }}</span>
                 <span class="text-sm text-muted">Downloading</span>
-              </span>
-              <span class="flex items-baseline gap-2">
-                <span class="text-xl font-semibold tabular-nums text-warning">{{ overview.downloads.byStatus.import_queued ?? 0 }}</span>
-                <span class="text-sm text-muted">Queued for import</span>
-              </span>
-              <span class="flex items-baseline gap-2">
-                <span class="text-xl font-semibold tabular-nums text-error">{{ overview.downloads.byStatus.failed ?? 0 }}</span>
+              </NuxtLink>
+              <NuxtLink to="/downloads?status=downloading" class="flex items-baseline gap-2 hover:underline">
+                <span class="text-xl font-semibold tabular-nums text-toned">{{ counts.waiting }}</span>
+                <span class="text-sm text-muted">Waiting</span>
+              </NuxtLink>
+              <NuxtLink v-if="counts.importQueued" to="/downloads?status=import_queued" class="flex items-baseline gap-2 hover:underline">
+                <span class="text-xl font-semibold tabular-nums text-warning">{{ counts.importQueued }}</span>
+                <span class="text-sm text-muted">Import queued</span>
+              </NuxtLink>
+              <NuxtLink to="/downloads?status=failed" class="flex items-baseline gap-2 hover:underline">
+                <span class="text-xl font-semibold tabular-nums" :class="counts.failed ? 'text-error' : 'text-toned'">{{ counts.failed }}</span>
                 <span class="text-sm text-muted">Failed</span>
-              </span>
+              </NuxtLink>
             </div>
 
-            <p v-if="overview.downloads.active.length === 0" class="px-5 py-6 text-sm text-muted">
+            <p v-if="running.length === 0" class="px-5 py-5 text-sm text-muted">
               Nothing downloading right now.
             </p>
             <div v-else class="divide-y divide-default">
-              <div v-for="d in overview.downloads.active" :key="d.id" class="px-5 py-4">
-                <div class="flex items-center justify-between gap-4">
-                  <p class="truncate text-sm font-medium text-default" :title="d.filename">
+              <div v-for="d in runningShown" :key="d.id" class="px-5 py-3.5">
+                <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5">
+                  <p class="min-w-0 flex-1 truncate text-sm font-medium text-default" :title="d.filename">
                     {{ d.filename }}
                   </p>
                   <p class="shrink-0 text-xs text-muted">
                     from <span class="text-toned">{{ d.peerName }}</span>
                   </p>
                 </div>
-                <div class="mt-2.5 flex items-center gap-3">
-                  <ProgressBar :value="d.progress" />
-                  <span class="w-28 shrink-0 text-right text-xs tabular-nums text-muted">
-                    {{ formatBytes(d.downloadedBytes) }} / {{ formatBytes(d.totalBytes) }}
+                <div class="mt-2 flex items-center gap-3">
+                  <div class="min-w-0 flex-1">
+                    <ProgressBar :value="d.progress" />
+                  </div>
+                  <span
+                    class="max-w-[45%] shrink-0 truncate text-right text-xs tabular-nums"
+                    :class="rowDetail(d).tone === 'warning' ? 'text-warning' : 'text-muted'"
+                  >
+                    {{ rowDetail(d).text }}
                   </span>
                 </div>
               </div>
+              <NuxtLink
+                v-if="running.length > RUNNING_PREVIEW"
+                to="/downloads?status=downloading"
+                class="block px-5 py-3 text-xs text-muted hover:text-default"
+              >
+                and {{ running.length - RUNNING_PREVIEW }} more
+              </NuxtLink>
             </div>
           </UCard>
         </section>
 
-        <!-- Standing inventory: what this node is connected to. -->
+        <!-- Standing inventory: who and what this jack works with. -->
         <section>
           <h2 class="mb-3 text-xs font-semibold uppercase tracking-wider text-muted">
-            Connections
+            Friends & Radarr/Sonarr
           </h2>
           <div class="grid gap-4 md:grid-cols-2">
             <!-- Friends -->
             <UCard variant="subtle" :ui="{ body: '!p-0' }">
               <div class="flex items-center justify-between border-b border-default px-4 py-3">
-                <span class="text-xs font-semibold uppercase tracking-wide text-muted">Friends online</span>
+                <NuxtLink to="/friends" class="text-xs font-semibold uppercase tracking-wide text-muted hover:text-default">
+                  Friends online
+                </NuxtLink>
                 <span class="text-xs tabular-nums text-dimmed">
-                  {{ overview.peers.initialized }} of {{ overview.peers.total }}
+                  {{ overview.peers.online ?? overview.peers.initialized }} of {{ overview.peers.total }}
                 </span>
               </div>
               <div v-if="overview.peers.total === 0" class="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
                 <p class="text-sm text-muted">
                   No friends yet.
                 </p>
-                <UButton :to="settingsLink('peers')" label="Add a friend" icon="i-ph-plus" size="sm" variant="soft" />
+                <UButton to="/friends?action=add" label="Add a friend" icon="i-ph-plus" size="sm" variant="soft" />
               </div>
               <div v-else class="divide-y divide-default">
                 <div v-for="peer in overview.peers.items" :key="peer.id" class="flex items-center gap-3 px-4 py-2.5">
-                  <ConnDot :initialized="peer.initialized" :error="peer.initializationError" :accent-class="peerTextClass(peer.id)" />
+                  <ConnDot
+                    :initialized="friendRow(peer).online === true"
+                    :error="friendRow(peer).error"
+                    :accent-class="peerTextClass(peer.id)"
+                  />
                   <span class="min-w-0 flex-1 truncate text-sm text-default" :title="peer.name">{{ peer.name }}</span>
-                  <span v-if="peer.initialized" class="text-xs tabular-nums text-muted">{{ peer.version ?? '—' }}</span>
-                  <span v-else-if="peer.initializationError" class="text-xs text-error">unreachable</span>
-                  <span v-else class="text-xs text-muted">connecting…</span>
+                  <span
+                    v-if="friendRow(peer).seen"
+                    class="shrink-0 text-xs text-muted"
+                    :title="formatDate(peer.health?.lastSeenAt)"
+                  >
+                    <span class="sr-only">Online, </span>{{ friendRow(peer).seen }}
+                  </span>
+                  <span
+                    v-else
+                    class="shrink-0 text-right text-xs"
+                    :class="STATUS_CLASS[friendRow(peer).status.tone]"
+                    :title="peer.health?.lastError ?? undefined"
+                  >
+                    {{ friendRow(peer).status.label }}
+                  </span>
                 </div>
               </div>
             </UCard>
@@ -194,6 +348,31 @@ onBeforeUnmount(() => clearInterval(clock))
               </div>
             </UCard>
           </div>
+        </section>
+
+        <!-- Lifetime totals, once anything moved. -->
+        <section v-if="lifetime">
+          <h2 class="mb-3 text-xs font-semibold uppercase tracking-wider text-muted">
+            Lifetime<span v-if="lifetime.since" class="font-normal normal-case tracking-normal"> · since {{ lifetime.since }}</span>
+          </h2>
+          <UCard variant="subtle" :ui="{ body: 'flex flex-wrap gap-x-8 gap-y-3 !py-4' }">
+            <p class="flex items-baseline gap-2">
+              <span class="text-lg font-semibold tabular-nums text-highlighted">{{ formatBytes(lifetime.downloaded) }}</span>
+              <span class="text-sm text-muted">Downloaded from friends</span>
+            </p>
+            <p class="flex items-baseline gap-2">
+              <span class="text-lg font-semibold tabular-nums text-highlighted">{{ formatBytes(lifetime.uploaded) }}</span>
+              <span class="text-sm text-muted">Shared with friends</span>
+            </p>
+            <p class="flex items-baseline gap-2">
+              <span class="text-lg font-semibold tabular-nums text-highlighted">{{ lifetime.imported }}</span>
+              <span class="text-sm text-muted">Imported</span>
+            </p>
+            <p class="flex items-baseline gap-2">
+              <span class="text-lg font-semibold tabular-nums text-highlighted">{{ lifetime.started }}</span>
+              <span class="text-sm text-muted">Downloads started</span>
+            </p>
+          </UCard>
         </section>
       </div>
 

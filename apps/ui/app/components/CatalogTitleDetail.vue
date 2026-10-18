@@ -1,7 +1,14 @@
 <script setup lang="ts">
 import type { CatalogTitle, CatalogTitlePeer } from '~/types/management'
+import type { RequestGate } from '~/utils/catalog'
 
-const props = defineProps<{ title: CatalogTitle }>()
+const props = withDefaults(defineProps<{
+  title: CatalogTitle
+  // Why Download can't send this title anywhere right now; null when it can.
+  gate?: RequestGate | null
+  // A warning per friend id whose library here may be out of date (offline, or not refreshed).
+  peerWarnings?: Record<string, string>
+}>(), { gate: null, peerWarnings: () => ({}) })
 const emit = defineEmits<{ download: [peerId: string] }>()
 
 const { load, entryFor } = useCatalogMetadata()
@@ -49,14 +56,49 @@ function peerResolutions(peer: CatalogTitlePeer): string[] {
   const labels = [...new Set(nums)].sort((a, b) => b - a).map(formatResolution)
   return [...new Set(labels.filter((l): l is string => l != null))]
 }
-const canRequest = computed(() => props.title.mediaType === 'tv'
+const hasId = computed(() => props.title.mediaType === 'tv'
   ? props.title.tvdbId != null
   : props.title.tmdbId != null)
+
+// Why Download can't work right now, said before the click, with the way to fix it.
+const gateCopy = computed<{ title: string, description?: string, action?: { label: string, to: string } } | null>(() => {
+  const gate = props.gate
+  if (!gate)
+    return null
+  switch (gate.kind) {
+    case 'off':
+      return {
+        title: 'Downloads are off, so jack can\'t download this.',
+        action: { label: 'Turn on downloads', to: settingsLink('downloads') },
+      }
+    case 'restart':
+      return {
+        title: 'Restart the jack container first.',
+        description: `Downloads were turned on after jack started. Unraid: ${RESTART_STEPS}.`,
+      }
+    case 'no-destination':
+      return {
+        title: `To download ${props.title.mediaType === 'tv' ? 'TV shows' : 'movies'}, turn on Download from friends for a ${gate.arr}.`,
+        action: { label: 'Open Radarr & Sonarr', to: settingsLink('servers') },
+      }
+    case 'unreachable':
+      return {
+        title: `jack can't reach ${new Intl.ListFormat('en', { type: 'disjunction' }).format(gate.names)} right now, so there's nowhere to send this.`,
+        action: { label: 'Open Radarr & Sonarr', to: settingsLink('servers') },
+      }
+    default:
+      return null
+  }
+})
+
+const canRequest = computed(() => hasId.value && !props.gate)
 // Hover hint on the Download button: explain the disabled state, or for requestable
 // TV titles clarify that the whole series is grabbed.
 const downloadHint = computed(() => {
-  if (!canRequest.value)
+  if (!hasId.value)
     return 'This title has no matching id to request'
+  if (gateCopy.value)
+    return gateCopy.value.title
   if (props.title.mediaType === 'tv')
     return 'Downloads every available episode of this series.'
   return null
@@ -119,10 +161,25 @@ const logflixUrl = computed(() => props.title.tmdbId == null || meta.value == nu
 
     <USeparator />
 
+    <!-- Download can't work right now: why, and where to fix it. -->
+    <UAlert
+      v-if="gateCopy"
+      color="warning"
+      variant="subtle"
+      icon="i-ph-warning"
+      :title="gateCopy.title"
+      :description="gateCopy.description"
+      :actions="gateCopy.action ? [{ label: gateCopy.action.label, to: gateCopy.action.to, color: 'warning', variant: 'outline', size: 'sm' }] : undefined"
+    />
+
     <!-- Single peer: friendly summary line + one Download button. -->
     <template v-if="singlePeer">
       <p class="text-xs text-muted">
         {{ pluralReleases(title.releaseCount) }} available from {{ singlePeer.name }}'s library · {{ formatBytes(title.totalSize) }}
+      </p>
+      <p v-if="peerWarnings[singlePeer.id]" class="flex items-start gap-1.5 text-xs text-warning">
+        <UIcon name="i-ph-warning" class="mt-px size-3.5 shrink-0" />
+        {{ peerWarnings[singlePeer.id] }}
       </p>
       <UTooltip :disabled="!downloadHint" :text="downloadHint ?? ''" :delay-duration="0">
         <!-- Wrap in a span so the tooltip still fires while the button is disabled (see
@@ -164,6 +221,10 @@ const logflixUrl = computed(() => props.title.tmdbId == null || meta.value == nu
             <div v-if="peerResolutions(peer).length" class="flex flex-wrap gap-1">
               <UBadge v-for="r in peerResolutions(peer)" :key="r" :label="r" size="sm" color="neutral" variant="soft" />
             </div>
+            <p v-if="peerWarnings[peer.id]" class="flex items-start gap-1.5 text-xs text-warning">
+              <UIcon name="i-ph-warning" class="mt-px size-3.5 shrink-0" />
+              {{ peerWarnings[peer.id] }}
+            </p>
           </div>
           <UTooltip :disabled="!downloadHint" :text="downloadHint ?? ''" :delay-duration="0">
             <span class="block shrink-0">

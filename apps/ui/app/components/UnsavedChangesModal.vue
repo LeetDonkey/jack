@@ -15,7 +15,7 @@ const title = computed(() => `Leave without saving ${list.format(props.labels)}?
   <UModal :title="title" :ui="{ footer: 'justify-end' }">
     <template #body>
       <p class="text-sm text-default">
-        Changes you haven't saved are lost when you leave Settings.
+        Changes you haven't saved are lost when you leave this page.
       </p>
     </template>
     <template #footer>

@@ -190,7 +190,7 @@ const ExternalJackUrl = z.url().refine((value) => {
   return (url.protocol === 'http:' || url.protocol === 'https:')
     && !url.username
     && !url.password
-}, 'External URL must use HTTP or HTTPS and cannot contain userinfo credentials')
+}, 'Use an http:// or https:// address without a username or password in it.')
 
 // Inspect raw keys before z.record builds its output object. In particular,
 // assigning `__proto__` onto a normal object can otherwise mutate its prototype

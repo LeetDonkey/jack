@@ -39,14 +39,22 @@ What it adds on top of upstream:
 - **Kinder to friends' servers**: the RSS feed lists only recently added
   releases, an upgrade policy per Radarr/Sonarr, cached catalogs, upload limits
   per friend, and bandwidth schedules.
-- **Friends page and notifications**: who is online, their version and traffic
-  per friend; Discord, ntfy or webhook notifications for failures, offline
+- **Guided setup**: a setup checklist on the Dashboard, a bar naming settings
+  that wait for a restart, Radarr/Sonarr's own test of jack on each server's
+  card, and a folder check for paths Radarr/Sonarr see differently.
+- **One card per friend**: invite links, both directions on one card with a
+  status that says what is wrong, and a Remove friend that also revokes their
+  access.
+- **Notifications**: Discord, ntfy or webhook messages for failures, offline
   friends and a daily summary.
 - **Friends of friends**: find people your friends know and connect through
   them, end-to-end encrypted, without either side's address being shared
   before both accept.
-- **A nicer peer catalog**: titles, posters and quality from your friends'
-  Radarr/Sonarr, no TMDB key needed.
+- **Friends' library**: titles, posters and quality from your friends'
+  Radarr/Sonarr, no TMDB key needed, with search, sort and a filter per friend.
+- **Day-to-day controls**: pause sharing or downloads, download statuses with
+  speed and retry times, a check of the address friends use, which build jack
+  and jack-ui run, and Copy support info for asking for help.
 - **fail2ban for the public port**: temporary bans for addresses that keep
   failing authentication.
 

@@ -21,7 +21,7 @@ it alone.)
 | --- | --- |
 | [`jack.internalUrl`](#jack-internalurl) | URL your *arr apps use to reach jack |
 | [`jack.tmdbApiKey`](#jack-tmdbapikey) | TMDB metadata for the catalog |
-| [`jack.external.instanceName`](#jack-external-instancename) | Peer name suggested in your quick links |
+| [`jack.external.instanceName`](#jack-external-instancename) | Peer name suggested in your invite links |
 | [`jack.external.url`](#jack-external-url) | URL peers use to reach you |
 | [`jack.external.headers`](#jack-external-headers) | Headers peers must send to reach you |
 | [`downloads.completedPath`](#downloads-completedpath) | Where finished downloads go |
@@ -91,21 +91,22 @@ file; the management UI doesn't edit it. Applies after a restart.
 **Type:** `object`
 
 How *another* jack reaches this instance, and the profile jack encodes into the
-[quick links](/guide/quick-links) you generate. Optional: without it, peering
+[invite links](/guide/quick-links) you create. Optional: without it, peering
 still works, you just hand out the URL and key by hand.
 
-Edit it from the management UI (***Settings -> Quick linking***), which writes
-this block through its own endpoints so the rest of `jack` is left untouched.
+Edit it from the management UI (***Settings -> Sharing -> Your public
+address***), which writes this block through its own endpoints so the rest of
+`jack` is left untouched.
 
 ### `jack.external.instanceName`
 
 **Type:** `string`\
 **Format:** 1–100 characters
 
-The peer name suggested to whoever imports one of your quick links. They can
-change it before saving the peer. The management UI won't generate a link until
-this is set; calling the API directly, the suggested name comes from the request
-body instead.
+The peer name suggested to whoever imports one of your invite links. They can
+change it before saving the peer. ***Invite a friend*** in the management UI
+asks for it first when it's missing; calling the API directly, the suggested
+name comes from the request body instead.
 
 ### `jack.external.url`
 
@@ -113,7 +114,7 @@ body instead.
 **Format:** `http`/`https` URL, no embedded `user:password@` credentials
 
 The URL a peer should use to reach this instance, and what ends up in the `url`
-field of every quick link you generate. Distinct from
+field of every invite link you create. Distinct from
 [`jack.internalUrl`](#jack-internalurl), which is for your own *arr apps. Use
 `https://`: the peer's API key travels in a request header.
 
@@ -124,7 +125,7 @@ field of every quick link you generate. Distinct from
 **Default:** `{}`
 
 Extra headers a peer must send to get through whatever sits in front of you,
-such as Cloudflare Access service tokens. They're copied into the quick link so
+such as Cloudflare Access service tokens. They're copied into the invite link so
 your friend doesn't have to configure them by hand, landing in their config as
 [`peers[].headers`](#peers-headers).
 
@@ -149,14 +150,14 @@ A new config file gets `"downloads": { "completedPath": "/data/jack" }` when
 `/data/jack` exists and jack can write to it. The Unraid template mounts the
 downloads folder there.
 
-Every key here is also editable from the management UI
-(***Settings -> Downloads***), which takes the `...Ms` durations in seconds,
-minutes or hours. Clearing a field there removes the key from the file, so the
-default below applies again. `unlinkImportedFiles`, `maxConcurrentDownloads`
-and `pausedUntil` take effect immediately; the rest are read at startup, so
-restart jack after changing them. Until then, the management UI names them in a
-bar at the top of every page. Adding the block in the management UI registers
-jack in your *arr apps right away, but grabs only work after the restart.
+Every key here is also editable from the management UI (***Settings -> Radarr &
+Sonarr -> Downloads***), which takes the `...Ms` durations in seconds, minutes
+or hours. Clearing a field there removes the key from the file, so the default
+below applies again. `unlinkImportedFiles`, `maxConcurrentDownloads` and
+`pausedUntil` take effect immediately; the rest are read at startup, so restart
+jack after changing them. Until then, the management UI names them in a bar at
+the top of every page. Adding the block in the management UI registers jack in
+your *arr apps right away, but grabs only work after the restart.
 
 ### `downloads.completedPath`
 
@@ -292,8 +293,9 @@ still importing, or failed keep their file, and a file that another download row
 still references is left alone. If the unlink fails, the download stays
 `imported` and the failure is logged.
 
-Editable from the management UI (***Settings -> Downloads***) and applies
-immediately. Like `maxConcurrentDownloads`, it does not need a restart.
+Editable from the management UI (***Settings -> Radarr & Sonarr ->
+Downloads***) and applies immediately. Like `maxConcurrentDownloads`, it does
+not need a restart.
 
 ### `downloads.pausedUntil`
 
@@ -371,8 +373,8 @@ a message to every webhook.
 ## `discovery`
 
 Lets two jacks that share a friend find each other and connect. Optional;
-edited in ***Settings -> Friends of friends*** and applies right away. People
-to meet and requests are on the ***Friends*** page.
+edited in ***Settings -> Sharing -> Friends of friends*** and applies right
+away. People to meet and requests are on the ***Friends*** page.
 
 - **`publicName`**: the name friends of friends see. Defaults to
   [`jack.external.instanceName`](#jack-external-instancename).
@@ -394,7 +396,8 @@ Nothing that locates either side is sent until both have said yes: asking is
 the requester's yes, accepting is the other side's. Then each issues an API key
 for the other and sends it with its [`jack.external`](#jack-external) URL and
 headers, encrypted for the other side alone, and both add each other as a
-peer. Both sides therefore need a public name and quick linking set up.
+peer. Both sides therefore need a public name and a public address
+(***Settings -> Sharing -> Your public address***).
 
 The friend in between carries the public keys, so it could in principle swap
 them. Both sides see the same safety code for a request; comparing it outside
@@ -403,8 +406,8 @@ jack rules that out.
 ## `security`
 
 How the public port protects itself. Every protection is on by default.
-Optional; edited in ***Settings -> Security***, where the banned addresses are
-listed with a button to lift each ban. Applies right away.
+Optional; edited in ***Settings -> Sharing -> Security***, where the banned
+addresses are listed with a button to lift each ban. Applies right away.
 
 - **`banEnabled`** (default `true`): temporary bans for addresses that keep
   failing authentication, like fail2ban.
@@ -449,8 +452,8 @@ notification when an address is banned.
 ## `torznab`
 
 What the Torznab RSS feed offers your Radarr/Sonarr. Optional; the defaults
-apply when the block is absent. Editable in ***Settings -> RSS feed*** and
-applies to the next RSS sync.
+apply when the block is absent. Editable in ***Settings -> Advanced -> RSS
+feed*** and applies to the next RSS sync.
 
 Searches by id (a newly added movie, a request, a manual search) are not
 affected: they always look through every peer's whole library.

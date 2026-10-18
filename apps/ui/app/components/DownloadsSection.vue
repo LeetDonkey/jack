@@ -13,6 +13,9 @@ const { data: downloads, pending, error: loadError } = useDownloadsConfig()
 // jack's own record of what still waits for a restart (overview.system.restartPending).
 const { overview, refresh: refreshOverview } = useOverview()
 
+// Run once after a save that sets a new completed folder; never on page load.
+const { run: runFolderCheck } = useFolderCheck()
+
 // The Container Path the Unraid template maps jack's Downloads folder to.
 const TEMPLATE_DOWNLOADS_PATH = '/data/jack'
 
@@ -139,6 +142,8 @@ async function save() {
   saveError.value = null
   completedPathError.value = null
   saved.value = false
+  // A new block or a new folder gets the folder check once it's saved.
+  const folderChanged = !downloads.value || downloads.value.completedPath !== state.completedPath.trim()
   const patch: DownloadsConfigPatch = {
     completedPath: state.completedPath.trim(),
     maxConcurrentDownloads: state.maxConcurrentDownloads,
@@ -167,6 +172,8 @@ async function save() {
     await refreshOverview()
     adding.value = false
     saved.value = true
+    if (folderChanged)
+      void runFolderCheck()
   }
   catch (err) {
     const message = extractError(err, 'Could not save the downloads settings.')
@@ -257,211 +264,216 @@ const guideUrl = docsUrl('unraid', '5-connect-radarr-and-sonarr')
       </div>
     </UCard>
 
-    <UForm v-else ref="form" :state="state" :validate="validate" class="space-y-3" @submit="save" @error="onError">
-      <p class="flex items-start gap-1.5 text-xs text-muted">
-        <UIcon name="i-ph-info" class="mt-px size-3.5 shrink-0" />
-        <span>
-          Completed folder, Download retries and Handing files to Radarr/Sonarr apply after you
-          restart the jack container. Downloads at once and Remove jack's copy apply right away.
-        </span>
-      </p>
+    <div v-else class="space-y-3">
+      <UForm ref="form" :state="state" :validate="validate" class="space-y-3" @submit="save" @error="onError">
+        <p class="flex items-start gap-1.5 text-xs text-muted">
+          <UIcon name="i-ph-info" class="mt-px size-3.5 shrink-0" />
+          <span>
+            Completed folder, Download retries and Handing files to Radarr/Sonarr apply after you
+            restart the jack container. Downloads at once and Remove jack's copy apply right away.
+          </span>
+        </p>
 
-      <!-- The two settings you actually choose, kept above the fold. -->
-      <UCard variant="subtle" :ui="{ body: 'space-y-4' }">
-        <UFormField
-          name="completedPath"
-          label="Completed folder"
-          description="The Container Path of jack's Downloads folder in the Unraid template. Radarr/Sonarr must see this folder at the same path."
-          :error="completedPathError ?? undefined"
-          required
-        >
-          <template #hint>
-            <UButton :to="guideUrl" target="_blank" label="Help" icon="i-ph-question" color="neutral" variant="link" size="xs" class="p-0" />
-          </template>
-          <UInput
-            ref="completedPathInput"
-            v-model="state.completedPath"
+        <!-- The two settings you actually choose, kept above the fold. -->
+        <UCard variant="subtle" :ui="{ body: 'space-y-4' }">
+          <UFormField
+            name="completedPath"
+            label="Completed folder"
+            description="The Container Path of jack's Downloads folder in the Unraid template. Radarr/Sonarr must see this folder at the same path."
+            :error="completedPathError ?? undefined"
+            required
+          >
+            <template #hint>
+              <UButton :to="guideUrl" target="_blank" label="Help" icon="i-ph-question" color="neutral" variant="link" size="xs" class="p-0" />
+            </template>
+            <UInput
+              ref="completedPathInput"
+              v-model="state.completedPath"
+              :disabled="saving"
+              :placeholder="TEMPLATE_DOWNLOADS_PATH"
+              class="w-full font-mono"
+            />
+          </UFormField>
+
+          <ConfigNumberField
+            v-model="state.maxConcurrentDownloads"
             :disabled="saving"
-            :placeholder="TEMPLATE_DOWNLOADS_PATH"
-            class="w-full font-mono"
+            name="maxConcurrentDownloads"
+            label="Downloads at once"
+            description="How many downloads from friends run at the same time. Lowering it doesn't stop running downloads."
+            :default-value="DEFAULTS.maxConcurrentDownloads!"
+            :min="1"
           />
-        </UFormField>
 
-        <ConfigNumberField
-          v-model="state.maxConcurrentDownloads"
-          :disabled="saving"
-          name="maxConcurrentDownloads"
-          label="Downloads at once"
-          description="How many downloads from friends run at the same time. Lowering it doesn't stop running downloads."
-          :default-value="DEFAULTS.maxConcurrentDownloads!"
-          :min="1"
+          <USeparator />
+
+          <UFormField
+            name="unlinkImportedFiles"
+            label="Remove jack's copy after Radarr/Sonarr import it"
+            description="Saves disk space. Runs only after a confirmed import; the file in your library stays."
+          >
+            <USwitch v-model="state.unlinkImportedFiles" :disabled="saving" />
+          </UFormField>
+        </UCard>
+
+        <!-- Everything below is retry/backoff tuning: collapsed, because the defaults
+             are right until something in your setup proves otherwise. -->
+        <UCollapsible v-model:open="transferOpen">
+          <UButton
+            color="neutral"
+            variant="subtle"
+            block
+            :ui="{ label: 'flex-1 text-left' }"
+            label="Download retries"
+            :icon="transferOpen ? 'i-ph-caret-down' : 'i-ph-caret-right'"
+          >
+            <template #trailing>
+              <span v-if="customCount(transferKeys)" class="text-xs text-muted">{{ customCount(transferKeys) }} custom</span>
+            </template>
+          </UButton>
+
+          <template #content>
+            <UCard variant="subtle" class="mt-2" :ui="{ body: 'space-y-4' }">
+              <p class="text-xs text-muted">
+                How a stalled or failing download from a friend is retried.
+              </p>
+              <ConfigNumberField
+                v-model="state.maxDownloadAttempts"
+                :disabled="saving"
+                name="maxDownloadAttempts"
+                label="Attempts before giving up"
+                description="How many times a failing download is retried before it's marked failed, unless the retry window below is still open."
+                :default-value="DEFAULTS.maxDownloadAttempts!"
+                :min="1"
+              />
+              <ConfigNumberField
+                v-model="state.retryWindowMs"
+                :disabled="saving"
+                name="retryWindowMs"
+                label="Retry window"
+                description="After a network error or an error from the friend's jack, keep retrying until this long has passed since the download last received data, even when the attempts above are used up. Waiting downloads don't take a download slot. 0 turns it off."
+                :default-value="DEFAULTS.retryWindowMs!"
+                display-unit="h"
+                zero-label="Off"
+              />
+              <ConfigNumberField
+                v-model="state.idleTimeoutMs"
+                :disabled="saving"
+                name="idleTimeoutMs"
+                label="Stall timeout"
+                description="How long a download may receive no data before jack treats it as stalled and retries."
+                :default-value="DEFAULTS.idleTimeoutMs!"
+                display-unit="s"
+                :min="1000"
+              />
+              <ConfigNumberField
+                v-model="state.retryBaseDelayMs"
+                :disabled="saving"
+                name="retryBaseDelayMs"
+                label="First retry delay"
+                description="Starting point for the backoff between retries. Each further attempt waits longer."
+                :default-value="DEFAULTS.retryBaseDelayMs!"
+                display-unit="s"
+              />
+              <ConfigNumberField
+                v-model="state.retryMaxDelayMs"
+                :disabled="saving"
+                name="retryMaxDelayMs"
+                label="Longest retry delay"
+                description="Ceiling for that backoff."
+                :default-value="DEFAULTS.retryMaxDelayMs!"
+                display-unit="min"
+              />
+            </UCard>
+          </template>
+        </UCollapsible>
+
+        <UCollapsible v-model:open="importOpen">
+          <UButton
+            color="neutral"
+            variant="subtle"
+            block
+            :ui="{ label: 'flex-1 text-left' }"
+            label="Handing files to Radarr/Sonarr"
+            :icon="importOpen ? 'i-ph-caret-down' : 'i-ph-caret-right'"
+          >
+            <template #trailing>
+              <span v-if="customCount(importKeys)" class="text-xs text-muted">{{ customCount(importKeys) }} custom</span>
+            </template>
+          </UButton>
+
+          <template #content>
+            <UCard variant="subtle" class="mt-2" :ui="{ body: 'space-y-4' }">
+              <p class="text-xs text-muted">
+                jack checks each Radarr/Sonarr that receives downloads to see when a finished download
+                was imported, and starts the import itself when Radarr/Sonarr won't pick it up on its own.
+              </p>
+              <ConfigNumberField
+                v-model="state.importPollIntervalMs"
+                :disabled="saving"
+                name="importPollIntervalMs"
+                label="Import check interval"
+                description="How often jack reads the import history of each Radarr/Sonarr."
+                :default-value="DEFAULTS.importPollIntervalMs!"
+                display-unit="s"
+                :min="1000"
+              />
+              <ConfigNumberField
+                v-model="state.maxManualImportAttempts"
+                :disabled="saving"
+                name="maxManualImportAttempts"
+                label="Import attempts before giving up"
+                description="How many times jack starts an import that Radarr/Sonarr keeps rejecting before it marks the download failed."
+                :default-value="DEFAULTS.maxManualImportAttempts!"
+                :min="1"
+              />
+              <ConfigNumberField
+                v-model="state.manualImportBackoffBaseMs"
+                :disabled="saving"
+                name="manualImportBackoffBaseMs"
+                label="First import retry delay"
+                description="Starting point for the backoff between those attempts."
+                :default-value="DEFAULTS.manualImportBackoffBaseMs!"
+                display-unit="min"
+              />
+              <ConfigNumberField
+                v-model="state.manualImportBackoffMaxMs"
+                :disabled="saving"
+                name="manualImportBackoffMaxMs"
+                label="Longest import retry delay"
+                description="Ceiling for that backoff."
+                :default-value="DEFAULTS.manualImportBackoffMaxMs!"
+                display-unit="min"
+              />
+            </UCard>
+          </template>
+        </UCollapsible>
+
+        <UAlert v-if="saveError" color="error" variant="soft" icon="i-ph-warning" :title="saveError" />
+
+        <UAlert
+          v-else-if="saved"
+          color="success"
+          variant="soft"
+          icon="i-ph-check-circle"
+          :title="savedAlert.title"
+          :description="savedAlert.description"
         />
 
-        <USeparator />
+        <div class="flex flex-wrap items-center justify-end gap-2 pt-1">
+          <p v-if="showFixHint" class="mr-auto text-xs text-error">
+            Fix the highlighted fields to save.
+          </p>
+          <p v-else class="mr-auto text-xs text-muted">
+            Clear a field to use jack's default.
+          </p>
+          <UButton v-if="dirty" label="Revert" color="neutral" variant="ghost" :disabled="saving" @click="revert" />
+          <UButton type="submit" :disabled="!dirty" :loading="saving" :label="saving ? 'Saving…' : 'Save changes'" />
+        </div>
+      </UForm>
 
-        <UFormField
-          name="unlinkImportedFiles"
-          label="Remove jack's copy after Radarr/Sonarr import it"
-          description="Saves disk space. Runs only after a confirmed import; the file in your library stays."
-        >
-          <USwitch v-model="state.unlinkImportedFiles" :disabled="saving" />
-        </UFormField>
-      </UCard>
-
-      <!-- Everything below is retry/backoff tuning: collapsed, because the defaults
-           are right until something in your setup proves otherwise. -->
-      <UCollapsible v-model:open="transferOpen">
-        <UButton
-          color="neutral"
-          variant="subtle"
-          block
-          :ui="{ label: 'flex-1 text-left' }"
-          label="Download retries"
-          :icon="transferOpen ? 'i-ph-caret-down' : 'i-ph-caret-right'"
-        >
-          <template #trailing>
-            <span v-if="customCount(transferKeys)" class="text-xs text-muted">{{ customCount(transferKeys) }} custom</span>
-          </template>
-        </UButton>
-
-        <template #content>
-          <UCard variant="subtle" class="mt-2" :ui="{ body: 'space-y-4' }">
-            <p class="text-xs text-muted">
-              How a stalled or failing download from a friend is retried.
-            </p>
-            <ConfigNumberField
-              v-model="state.maxDownloadAttempts"
-              :disabled="saving"
-              name="maxDownloadAttempts"
-              label="Attempts before giving up"
-              description="How many times a failing download is retried before it's marked failed, unless the retry window below is still open."
-              :default-value="DEFAULTS.maxDownloadAttempts!"
-              :min="1"
-            />
-            <ConfigNumberField
-              v-model="state.retryWindowMs"
-              :disabled="saving"
-              name="retryWindowMs"
-              label="Retry window"
-              description="After a network error or an error from the friend's jack, keep retrying until this long has passed since the download last received data, even when the attempts above are used up. Waiting downloads don't take a download slot. 0 turns it off."
-              :default-value="DEFAULTS.retryWindowMs!"
-              display-unit="h"
-              zero-label="Off"
-            />
-            <ConfigNumberField
-              v-model="state.idleTimeoutMs"
-              :disabled="saving"
-              name="idleTimeoutMs"
-              label="Stall timeout"
-              description="How long a download may receive no data before jack treats it as stalled and retries."
-              :default-value="DEFAULTS.idleTimeoutMs!"
-              display-unit="s"
-              :min="1000"
-            />
-            <ConfigNumberField
-              v-model="state.retryBaseDelayMs"
-              :disabled="saving"
-              name="retryBaseDelayMs"
-              label="First retry delay"
-              description="Starting point for the backoff between retries. Each further attempt waits longer."
-              :default-value="DEFAULTS.retryBaseDelayMs!"
-              display-unit="s"
-            />
-            <ConfigNumberField
-              v-model="state.retryMaxDelayMs"
-              :disabled="saving"
-              name="retryMaxDelayMs"
-              label="Longest retry delay"
-              description="Ceiling for that backoff."
-              :default-value="DEFAULTS.retryMaxDelayMs!"
-              display-unit="min"
-            />
-          </UCard>
-        </template>
-      </UCollapsible>
-
-      <UCollapsible v-model:open="importOpen">
-        <UButton
-          color="neutral"
-          variant="subtle"
-          block
-          :ui="{ label: 'flex-1 text-left' }"
-          label="Handing files to Radarr/Sonarr"
-          :icon="importOpen ? 'i-ph-caret-down' : 'i-ph-caret-right'"
-        >
-          <template #trailing>
-            <span v-if="customCount(importKeys)" class="text-xs text-muted">{{ customCount(importKeys) }} custom</span>
-          </template>
-        </UButton>
-
-        <template #content>
-          <UCard variant="subtle" class="mt-2" :ui="{ body: 'space-y-4' }">
-            <p class="text-xs text-muted">
-              jack checks each Radarr/Sonarr that receives downloads to see when a finished download
-              was imported, and starts the import itself when Radarr/Sonarr won't pick it up on its own.
-            </p>
-            <ConfigNumberField
-              v-model="state.importPollIntervalMs"
-              :disabled="saving"
-              name="importPollIntervalMs"
-              label="Import check interval"
-              description="How often jack reads the import history of each Radarr/Sonarr."
-              :default-value="DEFAULTS.importPollIntervalMs!"
-              display-unit="s"
-              :min="1000"
-            />
-            <ConfigNumberField
-              v-model="state.maxManualImportAttempts"
-              :disabled="saving"
-              name="maxManualImportAttempts"
-              label="Import attempts before giving up"
-              description="How many times jack starts an import that Radarr/Sonarr keeps rejecting before it marks the download failed."
-              :default-value="DEFAULTS.maxManualImportAttempts!"
-              :min="1"
-            />
-            <ConfigNumberField
-              v-model="state.manualImportBackoffBaseMs"
-              :disabled="saving"
-              name="manualImportBackoffBaseMs"
-              label="First import retry delay"
-              description="Starting point for the backoff between those attempts."
-              :default-value="DEFAULTS.manualImportBackoffBaseMs!"
-              display-unit="min"
-            />
-            <ConfigNumberField
-              v-model="state.manualImportBackoffMaxMs"
-              :disabled="saving"
-              name="manualImportBackoffMaxMs"
-              label="Longest import retry delay"
-              description="Ceiling for that backoff."
-              :default-value="DEFAULTS.manualImportBackoffMaxMs!"
-              display-unit="min"
-            />
-          </UCard>
-        </template>
-      </UCollapsible>
-
-      <UAlert v-if="saveError" color="error" variant="soft" icon="i-ph-warning" :title="saveError" />
-
-      <UAlert
-        v-else-if="saved"
-        color="success"
-        variant="soft"
-        icon="i-ph-check-circle"
-        :title="savedAlert.title"
-        :description="savedAlert.description"
-      />
-
-      <div class="flex flex-wrap items-center justify-end gap-2 pt-1">
-        <p v-if="showFixHint" class="mr-auto text-xs text-error">
-          Fix the highlighted fields to save.
-        </p>
-        <p v-else class="mr-auto text-xs text-muted">
-          Clear a field to use jack's default.
-        </p>
-        <UButton v-if="dirty" label="Revert" color="neutral" variant="ghost" :disabled="saving" @click="revert" />
-        <UButton type="submit" :disabled="!dirty" :loading="saving" :label="saving ? 'Saving…' : 'Save changes'" />
-      </div>
-    </UForm>
+      <!-- Outside the form: it checks what is saved. Saving a new completed folder runs it. -->
+      <FolderCheck v-if="downloads" />
+    </div>
   </SettingsSection>
 </template>

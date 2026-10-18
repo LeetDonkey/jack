@@ -80,28 +80,39 @@ const stateBadge: Record<IntroThread['state'], { color: 'neutral' | 'warning' | 
 function threadBadge(thread: IntroThread) {
   if (thread.direction === 'incoming' && thread.state === 'pending')
     return { color: 'primary' as const, label: 'Wants to connect' }
+  // Connected once, but no longer one of your friends (you removed them).
+  if (thread.ended)
+    return { color: 'neutral' as const, label: 'Ended' }
   return stateBadge[thread.state]
 }
 
 const threads = computed(() => [...(data.value?.threads ?? [])].sort((a, b) => {
-  const rank = (t: IntroThread) => (t.direction === 'incoming' && t.state === 'pending' ? 0 : t.state === 'connected' || t.state === 'declined' ? 2 : 1)
+  const rank = (t: IntroThread) => (t.direction === 'incoming' && t.state === 'pending' ? 0 : t.ended ? 3 : t.state === 'connected' || t.state === 'declined' ? 2 : 1)
   return rank(a) - rank(b) || b.updatedAt.localeCompare(a.updatedAt)
 }))
 
-// One button per missing piece, to the setting that fixes it. The public name
-// falls back to the quick-linking instance name, so `me.name` is null exactly
-// when the name is missing; any other entry is the external URL.
-const setupActions = computed<ButtonProps[]>(() => {
+// What is missing before you can ask or accept. The name friends of friends see
+// falls back to the name friends see, so `me.name` is null exactly when both are
+// empty; any other entry is the address friends use. Both are set under Your
+// public address.
+const setup = computed(() => {
   const me = data.value?.me
-  if (!me)
-    return []
+  if (!me || me.ready)
+    return null
   const needsName = !me.name
   const needsAddress = me.missing.length > (needsName ? 1 : 0)
-  const action = { color: 'warning', variant: 'outline' } as const
-  return [
-    ...(needsName ? [{ ...action, label: 'Set a public name', to: settingsLink('friends-of-friends') }] : []),
-    ...(needsAddress ? [{ ...action, label: 'Set your external URL', to: settingsLink('public-address') }] : []),
-  ]
+  let title = 'To ask or accept, set the address friends use.'
+  if (needsName && needsAddress)
+    title = 'To ask or accept, set the name friends see and the address friends use.'
+  else if (needsName)
+    title = 'To ask or accept, set the name friends see.'
+  let label = 'Set up your public address'
+  if (!needsAddress)
+    label = 'Set the name friends see'
+  else if (!needsName)
+    label = 'Set the address friends use'
+  const actions: ButtonProps[] = [{ color: 'warning', variant: 'outline', label, to: settingsLink('public-address') }]
+  return { title, actions }
 })
 </script>
 
@@ -111,19 +122,19 @@ const setupActions = computed<ButtonProps[]>(() => {
       <h2 class="text-sm font-medium text-highlighted">
         Friends of friends
       </h2>
-      <UButton label="Check now" icon="i-ph-arrows-clockwise" size="xs" color="neutral" variant="ghost" :loading="busy === 'sync'" @click="act('sync', 'introductions/sync')" />
+      <UButton label="Refresh" icon="i-ph-arrows-clockwise" size="xs" color="neutral" variant="ghost" :loading="busy === 'sync'" @click="act('sync', 'introductions/sync')" />
     </div>
 
     <UAlert v-if="error && !data" color="error" variant="soft" icon="i-ph-warning" title="Failed to load friends of friends." />
 
     <template v-else-if="data">
       <UAlert
-        v-if="!data.me.ready"
+        v-if="setup"
         color="warning"
         variant="soft"
         icon="i-ph-info"
-        :title="`To ask or accept, set up ${data.me.missing.join(' and ')}.`"
-        :actions="setupActions"
+        :title="setup.title"
+        :actions="setup.actions"
       />
       <p class="text-xs text-muted">
         <template v-if="data.me.discoverable && data.me.name">
@@ -170,7 +181,10 @@ const setupActions = computed<ButtonProps[]>(() => {
 
         <p class="text-[11px] text-dimmed">
           Safety code {{ thread.safetyCode }}. The same code at {{ thread.peerName }} proves nobody in between swapped your keys.
-          <template v-if="thread.state === 'connected'">
+          <template v-if="thread.ended">
+            {{ thread.peerName }} is no longer one of your friends. You can ask to connect again.
+          </template>
+          <template v-else-if="thread.state === 'connected'">
             {{ thread.peerName }} is now one of your friends.
           </template>
         </p>
@@ -200,7 +214,7 @@ const setupActions = computed<ButtonProps[]>(() => {
       <template #body>
         <div v-if="asking" class="space-y-3">
           <p class="text-sm text-muted">
-            {{ asking.name }} sees your public name and your message. Your address is only sent if they accept.
+            {{ asking.name }} sees your name and your message. Your address is only sent if they accept.
           </p>
           <UFormField v-if="asking.via.length > 1" label="Through">
             <USelect v-model="askVia" :items="asking.via.map(v => ({ label: v.name, value: v.peerId }))" class="w-full" />

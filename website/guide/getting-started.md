@@ -283,13 +283,20 @@ the common failures.
 jack is useful once you're peered with someone who also runs jack (send them
 this page). Peering is symmetric and takes one exchange in each direction:
 
-1. In the management UI, go to ***Settings -> Friend access keys***, click
-   ***Create key*** and name it after your friend. Send them that key plus the
-   URL where your peer API is reachable from the internet: a reverse-proxied
-   `https://` address, not `jack.internalUrl`.
-2. They do the same for you, and you click ***Add a friend*** under
-   ***Settings -> Friends you download from*** in your UI and enter the
-   ***Address*** and ***Access key*** they sent.
+1. In the management UI, click ***Friends -> Invite a friend***. The first
+   time, it asks for ***Name friends see*** and ***Address friends use***: the
+   URL where your peer API is reachable from the internet, a reverse-proxied
+   `https://` address, not `jack.internalUrl`. Fill in ***Who is this link
+   for?*** with your friend's name, click ***Create invite link***, then
+   ***Copy link***, and send them the link.
+2. They do the same for you. Your friend now has a card on ***Friends***:
+   click ***Paste Alice's link*** there (Alice being the name you gave the
+   link), paste their link, click ***Continue***, then ***Add friend***.
+
+The card reads ***Connected both ways*** once you download from them and their
+jack has used your key. Your public address stays editable under ***Settings
+-> Sharing -> Your public address***, where ***Check*** tests it from your
+server.
 
 See [API keys & peering](/guide/peering) for how the keys are scoped and why
 each peer gets their own.

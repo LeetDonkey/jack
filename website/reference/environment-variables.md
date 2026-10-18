@@ -65,8 +65,8 @@ default config on first boot if it doesn't exist.
 The [`jack.internalUrl`](/reference/configuration#jack-internalurl) written
 into the default config file, for example `http://192.168.1.10:5225`. jack
 reads it only when it creates that file. To change the address later, use
-***Settings*** in the management UI. A value that isn't an http(s) URL is
-logged and ignored.
+***Settings -> Radarr & Sonarr*** in the management UI. A value that isn't an
+http(s) URL is logged and ignored.
 
 ### `HTTP_TIMEOUT_MS`
 

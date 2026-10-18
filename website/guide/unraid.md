@@ -134,24 +134,24 @@ apply: Downloads***, and the setup card adds the step ***Restart the jack
 container***. Once jack is back, jack-ui shows ***jack restarted. New settings
 are active.*** jack-ui itself never needs a restart.
 
-1. **jack's address.** Under ***Settings -> jack***, check that ***Address
-   Radarr/Sonarr use to reach jack*** is `http://<your-server-ip>:5225` (the
-   ***Internal URL*** you set in the template). If it shows the default
-   `http://jack:5225`, change it and click ***Save changes***. If you opened
-   jack-ui by IP address, the button ***Use http://...:5225 (if you kept port
-   5225)*** under the field fills in that address. The default only works if
-   Radarr and Sonarr run on the jack network too; in that case keep it and click
-   ***Yes, on the jack network*** on the setup card. A new address applies right
-   away: jack updates its indexer and download client in every Radarr/Sonarr it
-   is registered in.
+1. **jack's address.** At the top of ***Settings -> Radarr & Sonarr***, check
+   that ***Address Radarr/Sonarr use to reach jack*** is
+   `http://<your-server-ip>:5225` (the ***Internal URL*** you set in the
+   template). If it shows the default `http://jack:5225`, change it and click
+   ***Save changes***. If you opened jack-ui by IP address, a button under the
+   field fills in that address, for example ***Use http://192.168.1.10:5225
+   (if you kept port 5225)***. The default only works if Radarr and Sonarr run on the jack network
+   too; in that case keep it and click ***Yes, on the jack network*** on the
+   setup card. A new address applies right away: jack updates its indexer and
+   download client in every Radarr/Sonarr it is registered in.
 2. **Downloads.** On first start jack turns on downloads with ***Completed
    folder*** `/data/jack`, the *Container Path* of your downloads mount. Under
-   ***Settings -> Downloads***, turn on ***Remove jack's copy after
-   Radarr/Sonarr import it*** and click ***Save changes***. With it on, jack
-   removes its own copy once Radarr/Sonarr confirm the import: if they copied
-   the file (the usual case when downloads and library are separate mounts in
-   their container) that saves the space of a second copy; if they hardlinked
-   it, only jack's extra link goes away.
+   ***Settings -> Radarr & Sonarr -> Downloads***, turn on ***Remove jack's
+   copy after Radarr/Sonarr import it*** and click ***Save changes***. With it
+   on, jack removes its own copy once Radarr/Sonarr confirm the import: if they
+   copied the file (the usual case when downloads and library are separate
+   mounts in their container) that saves the space of a second copy; if they
+   hardlinked it, only jack's extra link goes away.
 
    If the section offers ***Turn on downloads*** instead (the config is from an
    older jack, or jack couldn't write to `/data/jack` on first start), click
@@ -210,6 +210,14 @@ are active.*** jack-ui itself never needs a restart.
    the card adds jack and runs the tests again, for example after you changed
    the address.
 
+   Each time you connect a Radarr or Sonarr, jack-ui also checks the folders:
+   that jack sees each library at the path Radarr and Sonarr use, and that
+   they see the ***Completed folder*** at the same path as jack. The setup card
+   and each card under ***Radarr & Sonarr*** show the result: ***All folders
+   line up.***, or the first problem with the path and the template to change.
+   After changing a template, click ***Check folders*** on the setup card, or
+   under ***Settings -> Radarr & Sonarr -> Downloads***, to check again.
+
 ::: tip Radarr, Sonarr or a proxy with their own IP
 If a container runs on `br0` (or another custom network) with its own IP, use
 that IP instead of `<your-server-ip>`, and turn on ***Host access to custom
@@ -246,61 +254,85 @@ In Nginx Proxy Manager, add a ***Proxy Host***:
 Your friends only need `/ping`, `/handshake` and `/peer/`. The Torznab
 (`/torznab`) and qBittorrent (`/api/v2`) paths are for your own Radarr/Sonarr on
 the LAN, and jack refuses them to every other address, also through the proxy
-(***Settings -> Security -> Radarr/Sonarr APIs only on your LAN***).
+(***Settings -> Sharing -> Security -> Radarr/Sonarr APIs only on your LAN***).
 
-Then, in jack-ui, ***Settings -> Quick linking***: set ***Instance name*** (the
-name friends see for you) and ***External URL*** (`https://jack.example.com`),
-and click ***Save changes***.
+Then, in jack-ui, open ***Settings -> Sharing -> Your public address***: set
+***Name friends see*** and ***Address friends use***
+(`https://jack.example.com`), and click ***Save changes***.
+
+***Check*** under the address has jack fetch `/ping` there, the way a friend's
+jack would, and shows ***Answers from this server.*** or what went wrong, with
+a ***Help*** link to this step. The request starts on your server, so it
+can't show whether friends outside your network get through. If your router
+doesn't route your own domain back to your server (NAT loopback), the check
+fails even though friends can reach you.
 
 ## 7. Connect to a friend
 
-A quick link carries everything a friend's jack needs to reach yours: your
-external URL and an access key made for them.
+An invite link carries everything a friend's jack needs to reach yours: your
+public address and an access key made for them. You each send the other a
+link, so you can download from each other.
 
-1. ***Settings -> Quick linking -> Generate quick link***. Fill in ***Who is
-   this link for?*** with your friend's name (so you can limit or revoke their
-   access later), click ***Generate link***, then ***Copy quick link*** and
-   send them the `jack-link:` text. The link is shown only once, so send it
-   before closing the dialog.
-2. They do the same and send you theirs. Click ***Settings -> Quick linking ->
-   Add via quick link***, paste it, click ***Continue***, check the name and
+1. ***Friends -> Invite a friend***. Fill in ***Who is this link for?*** with
+   your friend's name (so you can limit or revoke their access later), click
+   ***Create invite link***, then ***Copy link***, and send them the
+   `jack-link:` text in a private message. The link is shown only once, so
+   send it before closing the dialog. If you skipped step 6, the dialog asks
+   for ***Name friends see*** and ***Address friends use*** first.
+2. Your friend now has a card on ***Friends*** that reads ***You don't
+   download from Alice yet.*** When their link arrives, click ***Paste Alice's
+   link*** on that card, paste it, click ***Continue***, check the name and
    click ***Add friend***. Saving connects to their jack, so their reverse
    proxy must already work. If their jack can't be reached yet, click ***Add
    anyway, keep trying*** and jack keeps retrying.
-3. ***Settings -> Friends you download from*** shows them as connected right
-   away. The ***Friends*** page shows them as online after its next check,
-   within five minutes. Their library appears under ***Friends' library***
-   (the first load can take a minute while their Radarr/Sonarr list
-   everything).
+
+   If their link comes before you sent yours, click ***Add a friend*** at the
+   top of ***Friends*** instead. Once it's saved, the dialog offers ***Invite
+   Alice*** for your side.
+3. The card reads ***Connected both ways*** once you download from them and
+   their jack has used your key. Until then it reads ***Waiting for Alice***
+   or ***Only one way***, with a button for the side that's missing. Their
+   library appears under ***Friends' library*** (the first load can take a
+   minute while their Radarr/Sonarr list everything).
 
 From then on, your Radarr/Sonarr find your friends' releases through the Jack
 indexer, and grabs download through jack.
 
 If you and another jack user share a friend, you don't even need to exchange
-links: see ***Settings -> Friends of friends***. It is off until you turn it
-on: you choose ***Let friends of friends find me***, and the friend you have in
-common turns on ***Introduce my friends to each other***.
+links: see ***Settings -> Sharing -> Friends of friends***. It is off until you
+turn it on: you choose ***Let friends of friends find me***, and the friend you
+have in common turns on ***Introduce my friends to each other***.
 
 ## 8. Worth a look
 
 - ***Settings -> Bandwidth***: upload and download limits, a weekly schedule
   (e.g. less upload in the evening), and limits per friend.
-- ***Settings -> Notifications***: Discord, ntfy or a Home Assistant webhook
-  when a download fails, a friend goes offline, and a daily summary.
-- ***Settings -> Security***: on by default. Addresses that keep sending wrong
-  keys are banned for an hour, the Radarr/Sonarr APIs only answer your LAN, and
-  the public port doesn't publish its API description. Banned addresses are
-  listed there, with a button to lift each ban.
-- ***Settings -> RSS feed***: how far back friends' new releases show up in
-  your *arr's RSS sync.
-- ***Live traffic*** shows what's moving right now; ***Downloads*** shows
-  history and lets you retry or cancel.
+- ***Pause sharing*** and ***Pause downloads***, on ***Live traffic*** and
+  under ***Settings -> Bandwidth***: for 1 or 4 hours, until 08:00, or until
+  you resume. Transfers already running finish. While sharing is paused,
+  friends' jacks wait and try again later.
+- ***Settings -> Notifications***: Discord, ntfy or a JSON webhook (e.g. Home
+  Assistant) when a download fails for good, a friend goes offline, and a
+  daily summary.
+- ***Settings -> Sharing -> Security***: on by default. Addresses that keep
+  sending wrong keys are banned for an hour, the Radarr/Sonarr APIs only answer
+  your LAN, and the public port doesn't publish its API description. Banned
+  addresses are listed there, each with ***Lift ban***.
+- ***Settings -> Advanced -> RSS feed***: how far back friends' new releases
+  show up in your *arr's RSS sync.
+- ***Downloads*** opens on ***Active***: what is running, waiting for import or
+  failed, with speed and time left. ***Retry all failed*** retries every failed
+  one.
+- ***Friends' library*** has a search field, a sort that starts with
+  ***Recently added***, and, with two or more friends, a filter per friend.
 
 ## Updating and backups
 
 - Update from the Docker tab: ***Check for Updates***, then ***Update*** on
   jack and jack-ui. Downloads in progress pause during the restart and resume
   from where they were.
+- ***Settings -> Advanced -> About*** shows which build jack and jack-ui run,
+  and warns when they differ. Update both containers then.
 - To get a newer template (new settings), run the two `wget` lines from step 2
   again. Your container's values stay as they are.
 - Back up `/mnt/user/appdata/jack`. It holds your config, your friends' keys
@@ -330,8 +362,8 @@ common turns on ***Introduce my friends to each other***.
   jack-ui template and click ***Apply***. If jack-ui asks for the key instead
   (its ***Management key*** is empty), paste the value from the jack template.
 - **Radarr says it can't reach jack, or grabs never start**: ***Address
-  Radarr/Sonarr use to reach jack*** (***Settings -> jack***) is wrong. It must
-  be an address your Radarr container can reach, usually
+  Radarr/Sonarr use to reach jack*** (***Settings -> Radarr & Sonarr***) is
+  wrong. It must be an address your Radarr container can reach, usually
   `http://<your-server-ip>:5225` (see the tip in step 5 for `br0`). Radarr's
   card under ***Settings -> Radarr & Sonarr*** shows Radarr's own test of jack
   in plain words, for example ***Radarr can't resolve jack. Use your server's
@@ -340,10 +372,10 @@ common turns on ***Introduce my friends to each other***.
   same without a change.
 - **No Jack indexer or download client in Radarr/Sonarr**: Radarr's card reads
   `jack in Radarr: skipped (downloads off)`. Click ***Turn on downloads***
-  under ***Settings -> Downloads*** and save; saving adds both to every
-  Radarr/Sonarr right away. Then restart the jack container: until then the
-  card reads `download client waits for a restart`, and Radarr can't use the
-  download client.
+  under ***Settings -> Radarr & Sonarr -> Downloads*** and save; saving adds
+  both to every Radarr/Sonarr right away. Then restart the jack container:
+  until then the card reads `download client waits for a restart`, and Radarr
+  can't use the download client.
 - **Saving Downloads fails with "jack can't write to /data/jack"**: that folder
   doesn't exist in the jack container, or jack can't write to it. Check that
   the ***Downloads*** path in the jack template has the *Container Path*
@@ -351,13 +383,39 @@ common turns on ***Introduce my friends to each other***.
   `chown -R nobody:users` on that folder.
 - **Downloads finish but Radarr doesn't import them**: the downloads folder
   doesn't match. jack's ***Completed folder***, its downloads *Container Path*
-  and the path your Radarr sees must all be the same.
+  and the path your Radarr sees must all be the same. ***Check folders*** under
+  ***Settings -> Radarr & Sonarr -> Downloads*** names the path that differs.
 - **Friends get "can't find this file on disk"**: your Movies/TV *Container
-  Paths* differ from the ones in your Radarr/Sonarr.
-- **A friend shows as offline**: check that `https://jack.example.com/ping`
-  answers `{"status":"OK"}` from outside your network, and that the quick link
-  they imported is current.
+  Paths* differ from the ones in your Radarr/Sonarr. ***Check folders*** finds
+  this too.
+- **A friend's card shows a problem**: the badge on ***Friends*** has the
+  result of the last check of their jack, and a line on the card says what to
+  do. ***Check now*** at the top of the page checks again right away.
+  - ***Offline since 14:02***: their jack or their proxy didn't answer, and
+    the card says why, for example that the address doesn't resolve. Ask them
+    to check that their address's `/ping` answers `{"status":"OK"}` from
+    outside their network. Downloads from them wait and retry.
+  - ***Rejected your key***: they revoked your key or sent you a new link.
+    Click ***Paste new link*** and paste the link they send.
+  - ***Is blocking you***: their jack banned your address after failed
+    attempts. They can lift the ban under ***Settings -> Sharing ->
+    Security***.
+  - ***Needs a newer jack***: they need to update jack.
+- **A card stays on "Waiting for Alice"**: their jack hasn't used the key you
+  sent in the last 24 hours. If they never pasted your link, click ***Send a
+  new link*** on the card and send them that one.
+- **The address check fails**: ***Check*** under ***Address friends use***
+  says what went wrong, such as a certificate or proxy error. If friends can
+  reach you anyway, your router probably doesn't route your own domain back to
+  your server (see step 6).
+- **About warns that jack and jack-ui run different builds**: update both
+  containers (Docker tab -> ***Check for Updates***).
 - **Everything else**: ***Logs*** in jack-ui shows what jack is doing, and the
   jack container's log (Docker tab -> jack -> ***Logs***) shows the same. A
   line in ***Logs*** with a known fix has a help icon; click the line for a
   link to the fix.
+- **Asking for help**: ***Copy support info***, in the ***Logs*** header or
+  under ***Settings -> Advanced -> About***, copies jack's build, the state of
+  your Radarr/Sonarr and friends, and the last warnings and errors from the
+  log, without keys, header values or webhook URLs. Error messages in it can
+  contain the addresses of your Radarr, Sonarr and friends.

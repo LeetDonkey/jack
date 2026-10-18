@@ -444,7 +444,7 @@ export class ConfigService {
     return this.enqueue(async () => {
       const current = this.raw.jack
       if (!current)
-        throw new BadRequestError('Configure Jack before setting up quick linking')
+        throw new BadRequestError('Save the address Radarr/Sonarr use to reach jack first')
 
       const { external: _external, ...jackWithoutExternal } = current
       const merged = rawExternal ? { ...jackWithoutExternal, external: rawExternal } : jackWithoutExternal

@@ -88,7 +88,7 @@ const names = (servers: Array<{ name: string }>) => servers.map(s => s.name)
 const reachedJack = (r: DestinationRegistration) => r.clientTest === 'ok' || r.indexerTest === 'ok'
 const testFailed = (r: DestinationRegistration) => r.clientTest === 'failed' || r.indexerTest === 'failed'
 
-export function useSetupStatus(overview: Ref<Overview | undefined>) {
+export function useSetupStatus(overview: Readonly<Ref<Overview | undefined>>) {
   const { request } = useManagement()
 
   // Own keys, so the dashboard never shares a cache entry with the Settings forms.

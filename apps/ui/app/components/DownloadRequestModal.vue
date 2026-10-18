@@ -1,19 +1,31 @@
 <script setup lang="ts">
-import type { CatalogRequestPayload, CatalogTitle, RequestServerOption } from '~/types/management'
+import type { CatalogRequestOptions } from '~/types/activity'
+import type { CatalogRequestPayload, CatalogTitle } from '~/types/management'
 
-const props = defineProps<{ open: boolean, title: CatalogTitle | null, submitting?: boolean, error?: string | null, lockedPeerId?: string }>()
-const emit = defineEmits<{ 'update:open': [boolean], 'confirm': [CatalogRequestPayload] }>()
+const props = withDefaults(defineProps<{
+  open: boolean
+  title: CatalogTitle | null
+  submitting?: boolean
+  error?: string | null
+  lockedPeerId?: string
+  // GET catalog/request-options, loaded by the catalog page (null until it answers).
+  options: CatalogRequestOptions | null
+  optionsStatus?: 'idle' | 'loading' | 'error'
+  // A warning per friend id whose library may be out of date (offline, or not refreshed).
+  peerWarnings?: Record<string, string>
+}>(), { submitting: false, error: null, lockedPeerId: undefined, optionsStatus: 'idle', peerWarnings: () => ({}) })
+const emit = defineEmits<{ 'update:open': [boolean], 'confirm': [CatalogRequestPayload], 'reloadOptions': [] }>()
 
 // Codebase convention (see settings.vue) is a computed get/set bridge for v-model,
 // not defineModel (which this app does not use).
 const open = computed({ get: () => props.open, set: v => emit('update:open', v) })
 
-const { request } = useManagement()
-const { data, pending } = await useAsyncData('request-options', () =>
-  request<{ servers: RequestServerOption[] }>('catalog/request-options'))
-
 const candidates = computed(() =>
-  (data.value?.servers ?? []).filter(s => props.title && s.mediaType === props.title.mediaType))
+  (props.options?.servers ?? []).filter(s => props.title && s.mediaType === props.title.mediaType))
+const arr = computed(() => props.title?.mediaType === 'tv' ? 'Sonarr' : 'Radarr')
+// The catalog disables Download for these; the dialog says it again in case they
+// changed while it was open.
+const inactiveReason = computed(() => props.options?.downloadsInactiveReason ?? null)
 
 // USelect's v-model does not accept null; undefined behaves identically under the
 // `!= null` / `== null` loose checks below, so we use undefined for "unset".
@@ -23,6 +35,7 @@ const serverId = ref<string | undefined>(undefined)
 const rootFolderPath = ref<string | undefined>(undefined)
 
 const server = computed(() => candidates.value.find(s => s.id === serverId.value) ?? null)
+const peerWarning = computed(() => peerId.value ? props.peerWarnings[peerId.value] ?? null : null)
 
 // Honor a peer picked from the detail view's per-peer cards (lockedPeerId); otherwise
 // reset to the first peer whenever the title changes, so a multi-peer title always
@@ -40,7 +53,7 @@ watch(server, (s) => {
   rootFolderPath.value = s?.rootFolders[0]?.path ?? undefined
 }, { immediate: true })
 
-const canSubmit = computed(() => Boolean(peerId.value && serverId.value && rootFolderPath.value))
+const canSubmit = computed(() => Boolean(!inactiveReason.value && peerId.value && serverId.value && rootFolderPath.value))
 
 function onConfirm() {
   if (!canSubmit.value || !peerId.value || !serverId.value || !rootFolderPath.value)
@@ -52,17 +65,40 @@ function onConfirm() {
 <template>
   <UModal v-model:open="open" title="Add to your library" :ui="{ footer: 'justify-end' }">
     <template #body>
-      <p v-if="pending" class="flex items-center gap-2 text-sm text-muted">
+      <p v-if="!options && optionsStatus !== 'error'" class="flex items-center gap-2 text-sm text-muted">
         <UIcon name="i-ph-circle-notch" class="size-4 animate-spin" />
         Loading options…
       </p>
 
+      <div v-else-if="!options" class="space-y-3">
+        <p class="text-sm text-muted">
+          jack couldn't list where to send this. It may be restarting.
+        </p>
+        <UButton label="Try again" size="sm" color="neutral" variant="outline" @click="emit('reloadOptions')" />
+      </div>
+
+      <div v-else-if="inactiveReason === 'off'" class="space-y-3">
+        <p class="text-sm text-muted">
+          Downloads are off, so jack can't download this.
+        </p>
+        <UButton label="Turn on downloads" :to="settingsLink('downloads')" size="sm" color="neutral" variant="outline" @click="open = false" />
+      </div>
+
+      <div v-else-if="inactiveReason === 'restartPending'" class="space-y-1">
+        <p class="text-sm text-default">
+          Restart the jack container first.
+        </p>
+        <p class="text-sm text-muted">
+          Downloads were turned on after jack started. Unraid: <span class="whitespace-nowrap">{{ RESTART_STEPS }}</span>.
+        </p>
+      </div>
+
       <div v-else-if="candidates.length === 0" class="space-y-3">
         <p class="text-sm text-muted">
-          No {{ title?.mediaType === 'tv' ? 'Sonarr' : 'Radarr' }} has Download from friends turned on.
+          No {{ arr }} that jack can reach has Download from friends turned on.
         </p>
         <UButton
-          label="Edit Radarr & Sonarr"
+          label="Open Radarr & Sonarr"
           :to="settingsLink('servers')"
           size="sm"
           color="neutral"
@@ -95,6 +131,9 @@ function onConfirm() {
             class="w-full"
           />
         </UFormField>
+
+        <!-- Not a block: the health check can be up to 5 minutes old. -->
+        <UAlert v-if="peerWarning" color="warning" variant="subtle" icon="i-ph-warning" :title="peerWarning" />
 
         <UAlert v-if="error" color="error" variant="soft" icon="i-ph-warning" :title="error" />
       </div>

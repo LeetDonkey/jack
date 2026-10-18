@@ -5,15 +5,23 @@ import type { PeerInput, PeerItem, SecretRef } from '~/types/management'
 const props = defineProps<{
   initial?: PeerItem | PeerInput | null
   submitting?: boolean
+  // Why the last save failed (title), and the technical reason under it.
   error?: string | null
+  errorDetail?: string | null
   // Set by the parent when the last save failed in a way saving with
   // `?force=true` can get past (the friend's jack didn't answer, not a bad field).
   offerForce?: boolean
+  // A validation failure jack reported for one field; shown on that field.
+  fieldError?: { name: string, message: string } | null
+  // The primary button, when "Add friend" / "Save changes" doesn't fit.
+  submitLabel?: string
+  // The save updates an existing friend although `initial` is a pasted link (no id).
+  updating?: boolean
 }>()
 // `dirty` lets the dialog refuse an outside click or Escape once something was edited.
-const emit = defineEmits<{ submit: [PeerInput, boolean], cancel: [], dismissError: [], quickLink: [], dirty: [boolean] }>()
+const emit = defineEmits<{ submit: [PeerInput, boolean], cancel: [], dismissError: [], dirty: [boolean] }>()
 
-const editing = computed(() => Boolean(props.initial && 'id' in props.initial))
+const editing = computed(() => props.updating || Boolean(props.initial && 'id' in props.initial))
 
 const form = useTemplateRef<Form<FormSchema>>('form')
 const { onError, showFixHint } = useFormErrorFocus(form)
@@ -32,7 +40,7 @@ const dirty = computed(() => JSON.stringify(state) !== baseline)
 watch(dirty, isDirty => emit('dirty', isDirty), { immediate: true })
 
 // Headers are rare, so they stay folded away unless this friend already has some
-// (an edit, or a quick link that carried them).
+// (an edit, or a link that carried them).
 const advancedOpen = ref(Object.keys(state.headers).length > 0)
 const displayName = computed(() => state.name.trim() || 'your friend')
 
@@ -42,6 +50,18 @@ watch(state, () => {
   if (props.error && props.offerForce)
     emit('dismissError')
 }, { deep: true })
+
+// jack's own verdict on a field goes onto that field, like a check of our own.
+// The field's next edit validates it again, which clears it.
+watch(() => props.fieldError, async (fieldError) => {
+  if (!fieldError)
+    return
+  if (fieldError.name === 'headers')
+    advancedOpen.value = true
+  await nextTick()
+  form.value?.setErrors([fieldError], fieldError.name)
+  void onError()
+}, { immediate: true })
 
 function isHttpUrl(value: string): boolean {
   try {
@@ -87,16 +107,13 @@ function saveAnyway() {
 
 <template>
   <UForm ref="form" :state="state" :validate="validate" class="space-y-4" @submit="onSubmit" @error="onError">
-    <p v-if="!initial" class="text-sm text-muted">
-      Easiest: ask your friend for a quick link and use
-      <UButton variant="link" size="sm" label="Add via quick link" class="p-0 align-baseline" @click="emit('quickLink')" />.
-    </p>
+    <slot name="lead" />
 
     <UFormField name="name" label="Name" description="How they show up in your lists." required>
-      <UInput v-model="state.name" placeholder="e.g. Alice" class="w-full" />
+      <UInput v-model="state.name" :maxlength="100" placeholder="e.g. Alice" class="w-full" />
     </UFormField>
     <UFormField name="url" label="Address" description="Their public jack address, for example https://jack.example.com." required>
-      <UInput v-model="state.url" placeholder="https://jack.example.com" class="w-full" />
+      <UInput v-model="state.url" placeholder="https://jack.example.com" autocomplete="off" class="w-full" />
     </UFormField>
     <UFormField name="apiKey" label="Access key" description="The key your friend created for you in their jack." required>
       <SecretInput v-model="state.apiKey" placeholder="Paste the access key" />
@@ -113,6 +130,7 @@ function saveAnyway() {
       />
       <template #content>
         <UFormField
+          name="headers"
           label="Headers"
           hint="Optional"
           description="Only if their reverse proxy needs extra headers (e.g. Cloudflare Access)."
@@ -125,9 +143,12 @@ function saveAnyway() {
 
     <div v-if="error" class="space-y-1.5">
       <UAlert color="error" variant="soft" icon="i-ph-warning" :title="error">
-        <template v-if="offerForce" #description>
-          If {{ displayName }}'s jack isn't reachable yet, {{ editing ? 'save' : 'add' }} anyway: jack keeps trying
-          to connect in the background. Otherwise go back and check the address and key.
+        <template v-if="errorDetail || offerForce" #description>
+          <span v-if="errorDetail" class="block font-mono text-xs break-words">{{ errorDetail }}</span>
+          <span v-if="offerForce" class="mt-1 block">
+            If {{ displayName }}'s jack isn't set up yet, {{ editing ? 'save' : 'add' }} anyway: jack keeps trying
+            to connect in the background. Otherwise go back and check the address and key.
+          </span>
         </template>
       </UAlert>
       <ULink :to="guideUrl" target="_blank" class="inline-flex items-center gap-1 text-xs text-muted underline">
@@ -152,7 +173,7 @@ function saveAnyway() {
       <UButton
         type="submit"
         :loading="submitting"
-        :label="submitting ? 'Saving…' : editing ? 'Save changes' : 'Add friend'"
+        :label="submitting ? 'Saving…' : submitLabel ?? (editing ? 'Save changes' : 'Add friend')"
       />
     </div>
   </UForm>

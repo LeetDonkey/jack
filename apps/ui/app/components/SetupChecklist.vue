@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { SetupStatus, SetupStepState } from '~/composables/useSetupStatus'
+import { folderSummary } from '~/utils/folder-check'
 
 // The dashboard's first-run guide: the required steps in order, then an optional
 // card for sharing with friends. All state comes from useSetupStatus (the page owns
@@ -46,6 +47,22 @@ const sharingSteps = computed(() => [
 ] as const)
 
 const restartLabels = computed(() => restartReasonLabels(props.status.restartReasons).join(', '))
+
+// The folder check, once there are folders to check: a Radarr/Sonarr connected and
+// downloads on (or only sharing). It never runs by itself here; saves in Settings
+// and the Check folders button run it, and every place shows the same report.
+const { report: folderReport, running: folderRunning, error: folderError, run: runFolderCheck } = useFolderCheck()
+const folderCheckReady = computed(() => isDone(props.status.downloadsStep) && props.status.serversStep.state === 'done')
+const folderResult = computed(() => (folderReport.value ? folderSummary(folderReport.value) : null))
+const FOLDER_TONE = {
+  ok: { icon: 'i-ph-check-circle', class: 'text-success' },
+  warning: { icon: 'i-ph-warning-circle', class: 'text-warning' },
+  error: { icon: 'i-ph-x-circle', class: 'text-error' },
+} as const
+// Downloads has the full report; with downloads off, the Radarr/Sonarr cards show it.
+const folderFix = computed(() => props.status.downloadsStep === 'done'
+  ? { to: settingsLink('downloads'), label: 'See the folder check' }
+  : { to: settingsLink('servers'), label: 'Edit Radarr & Sonarr' })
 
 // Server names inside a sentence: "Radarr and Sonarr".
 const nameList = new Intl.ListFormat('en', { style: 'long', type: 'conjunction' })
@@ -225,6 +242,34 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
           </div>
         </li>
       </ol>
+
+      <!-- Folders: the most common Unraid mistake is a path Radarr/Sonarr see differently. -->
+      <div v-if="folderCheckReady" class="space-y-1.5 border-t border-default px-4 py-3.5">
+        <template v-if="folderResult">
+          <p class="flex items-start gap-2 text-sm" :class="FOLDER_TONE[folderResult.tone].class">
+            <UIcon :name="FOLDER_TONE[folderResult.tone].icon" class="mt-0.5 size-4 shrink-0" />
+            <span class="min-w-0 break-words">{{ folderResult.text }}</span>
+          </p>
+          <div v-if="folderResult.tone !== 'ok'" class="flex flex-wrap items-center gap-2 pt-1 pl-6">
+            <UButton :to="folderFix.to" :label="folderFix.label" size="sm" variant="soft" />
+            <UButton label="Check again" size="sm" color="neutral" variant="link" :loading="folderRunning" @click="runFolderCheck" />
+          </div>
+        </template>
+        <template v-else>
+          <p class="text-sm text-muted">
+            Check that jack and Radarr/Sonarr see the same folders at the same paths.
+          </p>
+          <p v-if="folderError" class="text-sm break-words text-error">
+            {{ folderError }}
+          </p>
+          <p v-else-if="folderRunning" class="text-xs text-muted">
+            Checking… this can take up to 30 seconds.
+          </p>
+          <div class="pt-1">
+            <UButton label="Check folders" icon="i-ph-folders" size="sm" color="neutral" variant="outline" :loading="folderRunning" @click="runFolderCheck" />
+          </div>
+        </template>
+      </div>
     </UCard>
 
     <!-- Optional: sharing with friends. Never counts towards the steps above. -->
@@ -253,7 +298,7 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
             <template v-if="!isDone(step.state)">
               <template v-if="step.id === 'address'">
                 <p class="text-sm text-muted">
-                  Fill in Instance name and External URL, so the links you send carry your name and address.
+                  Fill in Name friends see and Address friends use, so the links you send carry your name and address.
                 </p>
                 <div class="pt-1">
                   <UButton :to="settingsLink('public-address')" label="Set the address" size="sm" color="neutral" variant="outline" />
@@ -261,11 +306,11 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
               </template>
               <template v-else>
                 <p class="text-sm text-muted">
-                  Send a friend a link, or paste the link a friend sent you.
+                  Send a friend an invite link, or paste the link a friend sent you.
                 </p>
                 <div class="flex flex-wrap gap-2 pt-1">
-                  <UButton :to="settingsLink('public-address')" label="Generate quick link" icon="i-ph-link" size="sm" color="neutral" variant="outline" />
-                  <UButton :to="settingsLink('peers')" label="Add a friend" icon="i-ph-plus" size="sm" color="neutral" variant="outline" />
+                  <UButton to="/friends?action=invite" label="Invite a friend" icon="i-ph-link" size="sm" color="neutral" variant="outline" />
+                  <UButton to="/friends?action=add" label="Add a friend" icon="i-ph-plus" size="sm" color="neutral" variant="outline" />
                 </div>
               </template>
             </template>

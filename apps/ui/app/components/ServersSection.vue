@@ -1,11 +1,19 @@
 <script setup lang="ts">
 import type { BadgeProps } from '@nuxt/ui'
 import type { DestinationRegistration, ServerInput, ServerItem, ServerSaveResponse } from '~/types/management'
+import type { CheckStatus } from '~/types/tools'
 import type { RegistrationTone } from '~/utils/server-role'
+import { serverFolderResult } from '~/utils/folder-check'
 
 const { request, extractError } = useManagement()
 const { settings, pending, error, reload, applyServerRegistration } = useSettings()
 const toast = useToast()
+
+// The folder check's result shows on each card once it has run this session.
+// Downloads -> Folder check runs it; with downloads off that section can't, so
+// this one offers it for the libraries friends get.
+const { report: folderReport, running: folderRunning, run: runFolderCheck } = useFolderCheck()
+const { data: downloadsConfig } = useDownloadsConfig()
 
 const showForm = ref(false)
 const editTarget = ref<ServerItem | null>(null)
@@ -106,6 +114,12 @@ async function submit(input: ServerInput) {
       if (id)
         markPending(id, previousAt)
     }
+    // A new server, or one whose address or roles changed, gets its folders
+    // checked in the background: the library jack shares, or the completed folder
+    // it receives downloads into.
+    const changed = !target || target.url !== input.url || target.source !== input.source || target.destination !== input.destination
+    if (changed && (input.source || (input.destination && downloadsConfig.value)))
+      void runFolderCheck()
   }
   catch (err) {
     formError.value = extractError(err, `Could not save this ${arr}.`)
@@ -216,9 +230,30 @@ function sortKey(server: ServerItem) {
     return 1
   return 2
 }
+
+const FOLDER_LINE: Record<CheckStatus, { icon: string, class: string }> = {
+  ok: { icon: 'i-ph-check-circle', class: 'text-muted' },
+  error: { icon: 'i-ph-x-circle', class: 'text-error' },
+  unknown: { icon: 'i-ph-warning-circle', class: 'text-warning' },
+}
+
+// One line from the last folder check: its first problem for this server, or that
+// its folders line up. "Couldn't check" adds nothing to a server jack can't reach,
+// whose card already says why.
+function folderLine(server: ServerItem) {
+  const result = folderReport.value ? serverFolderResult(folderReport.value, server.id) : null
+  if (!result || (result.status === 'unknown' && !server.initialized))
+    return null
+  return { ...FOLDER_LINE[result.status], text: result.message }
+}
+
 const servers = computed(() => [...(settings.value?.servers ?? [])].sort((a, b) => sortKey(a) - sortKey(b)))
 // `registration` only for a server jack adds itself to.
-const cards = computed(() => servers.value.map(server => ({ server, registration: registersJack(server) ? registrationView(server) : null })))
+const cards = computed(() => servers.value.map(server => ({
+  server,
+  registration: registersJack(server) ? registrationView(server) : null,
+  folder: folderLine(server),
+})))
 const connected = computed(() => servers.value.filter(s => s.initialized).length)
 const unreachable = computed(() => servers.value.filter(s => !s.initialized && s.initializationError).length)
 const sources = computed(() => servers.value.filter(s => s.source).length)
@@ -254,17 +289,31 @@ const destinations = computed(() => servers.value.filter(s => s.destination).len
     </UCard>
 
     <div v-else-if="settings" class="space-y-3">
-      <p class="text-xs tabular-nums text-muted">
-        {{ connected }} of {{ servers.length }} connected<template v-if="unreachable">
-          · <span class="text-error">{{ unreachable }} unreachable</span>
-        </template>
-        · {{ sources }} {{ sources === 1 ? 'shares' : 'share' }} with friends
-        · {{ destinations }} {{ destinations === 1 ? 'receives' : 'receive' }} downloads
-      </p>
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <p class="text-xs tabular-nums text-muted">
+          {{ connected }} of {{ servers.length }} connected<template v-if="unreachable">
+            · <span class="text-error">{{ unreachable }} unreachable</span>
+          </template>
+          · {{ sources }} {{ sources === 1 ? 'shares' : 'share' }} with friends
+          · {{ destinations }} {{ destinations === 1 ? 'receives' : 'receive' }} downloads
+        </p>
+        <!-- With downloads on, Downloads -> Folder check has this button. -->
+        <UButton
+          v-if="downloadsConfig === null && sources > 0"
+          label="Check folders"
+          icon="i-ph-folders"
+          color="neutral"
+          variant="link"
+          size="xs"
+          class="p-0"
+          :loading="folderRunning"
+          @click="runFolderCheck"
+        />
+      </div>
 
       <div class="space-y-2">
         <ConnectorCard
-          v-for="{ server, registration: view } in cards"
+          v-for="{ server, registration: view, folder } in cards"
           :key="server.id"
           :name="server.name"
           :url="server.url"
@@ -290,9 +339,10 @@ const destinations = computed(() => servers.value.filter(s => s.destination).len
               </template>
             </div>
           </template>
-          <!-- What jack set up in this server and whether the server has used it. -->
-          <template v-if="view" #details>
-            <div class="mt-2 space-y-1 pl-8 text-xs">
+          <!-- What jack set up in this server and whether the server has used it,
+               then the last folder check's line for it. -->
+          <template v-if="view || folder" #details>
+            <div v-if="view" class="mt-2 space-y-1 pl-8 text-xs">
               <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <span class="text-muted">jack in {{ server.name }}:</span>
                 <span v-if="view.testing" class="flex items-center gap-1 text-muted">
@@ -342,6 +392,11 @@ const destinations = computed(() => servers.value.filter(s => s.destination).len
                 {{ view.registerError }}
               </p>
             </div>
+
+            <p v-if="folder" class="flex items-start gap-1.5 pl-8 text-xs" :class="[folder.class, view ? 'mt-1' : 'mt-2']">
+              <UIcon :name="folder.icon" class="mt-px size-3.5 shrink-0" />
+              <span class="min-w-0 break-words">{{ folder.text }}</span>
+            </p>
           </template>
         </ConnectorCard>
       </div>

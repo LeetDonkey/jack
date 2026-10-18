@@ -11,6 +11,12 @@ const { data: bandwidth, pending, error: loadError, refresh } = useLazyAsyncData
   () => request<BandwidthConfig | null>('config/bandwidth'),
 )
 
+// PauseControls loads the pauses under this key; null means this jack can't pause.
+// v-show, not v-if: hiding must not unmount the controls that load it.
+const { data: pauses } = useNuxtData('transfers-pause')
+const pauseSupported = computed(() => pauses.value !== null)
+const { data: downloadsConfig } = useDownloadsConfig()
+
 const WEEKDAYS: { key: Weekday, label: string }[] = [
   { key: 'mon', label: 'Mon' },
   { key: 'tue', label: 'Tue' },
@@ -178,6 +184,38 @@ function revert() {
     title="Bandwidth"
     description="Combined speed limits for everything jack moves to and from friends, and a weekly schedule that overrides them."
   >
+    <!-- Pausing applies right away and isn't part of the form below. -->
+    <UCard v-show="pauseSupported" variant="subtle" class="mb-3" :ui="{ body: 'space-y-3' }">
+      <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <div class="min-w-0 flex-1 basis-56">
+          <p class="text-sm font-medium text-highlighted">
+            Pause sharing
+          </p>
+          <p class="text-xs text-muted">
+            Friends' jacks are told sharing is paused and try again later. Uploads already running finish.
+          </p>
+        </div>
+        <PauseControls what="uploads" />
+      </div>
+      <USeparator />
+      <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <div class="min-w-0 flex-1 basis-56">
+          <p class="text-sm font-medium text-highlighted">
+            Pause downloads
+          </p>
+          <p class="text-xs text-muted">
+            <template v-if="downloadsConfig === null">
+              Downloads are off, so there's nothing to pause.
+            </template>
+            <template v-else>
+              New downloads from friends wait in the queue. Downloads already running finish.
+            </template>
+          </p>
+        </div>
+        <PauseControls what="downloads" />
+      </div>
+    </UCard>
+
     <UAlert v-if="loadError" color="error" variant="soft" icon="i-ph-warning" title="Failed to load the bandwidth settings." />
 
     <p v-else-if="pending && bandwidth === undefined" class="flex items-center gap-2 text-sm text-muted">
@@ -208,7 +246,7 @@ function revert() {
           <UFormField
             name="maxConcurrentUploadsPerPeer"
             label="Uploads at once per friend"
-            description="So one friend can't take every upload slot. Each friend access key counts as one friend."
+            description="So one friend can't take every upload slot. Each key counts as one friend."
           >
             <UInputNumber :model-value="state.maxConcurrentUploadsPerPeer" :disabled="saving" :min="1" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" @update:model-value="v => (state.maxConcurrentUploadsPerPeer = v ?? null)" />
           </UFormField>

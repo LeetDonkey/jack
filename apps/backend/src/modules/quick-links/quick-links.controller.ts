@@ -65,7 +65,7 @@ export class QuickLinksController {
       throw error
     }
     if (!external)
-      throw new BadRequestError('Configure Jack external access before generating a quick link')
+      throw new BadRequestError('Set the address friends use before creating an invite link')
 
     // Validate the link targets up front too (404 / 400), for the same reason.
     if (input.peerId)

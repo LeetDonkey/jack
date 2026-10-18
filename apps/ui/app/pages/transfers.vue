@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import type { TableColumn } from '@nuxt/ui'
-import type { BandwidthConfig, BandwidthPeriod, TransferDirectionSummary, TransferInfo, TransfersSnapshot, Weekday } from '~/types/management'
+import type { BandwidthConfig, BandwidthPeriod, TransferDirectionSummary, TransferInfo, Weekday } from '~/types/management'
+import type { TransfersWithPause } from '~/types/tools'
 
 const { request } = useManagement()
 
 const { data, pending, error, refresh } = await useAsyncData('transfers', () =>
-  request<TransfersSnapshot>('transfers'))
+  request<TransfersWithPause>('transfers'))
 
-const { connected, hasConnectedOnce } = useManagementStream<TransfersSnapshot>('transfers/stream', (snapshot) => {
+const { connected, hasConnectedOnce } = useManagementStream<TransfersWithPause>('transfers/stream', (snapshot) => {
   data.value = snapshot
   error.value = undefined
 })
@@ -100,6 +101,14 @@ const columns: TableColumn<TransferInfo>[] = [
           <LiveBadge :connected="connected" :has-connected-once="hasConnectedOnce" />
         </template>
       </UDashboardNavbar>
+      <!-- Pause sharing and downloads. Wraps on a narrow screen; a jack that
+           doesn't report pauses gets no toolbar. -->
+      <UDashboardToolbar v-if="data?.paused" :ui="{ root: 'flex-wrap overflow-x-visible py-2', left: 'min-w-0 flex-wrap gap-x-6 gap-y-2' }">
+        <template #left>
+          <PauseControls what="uploads" />
+          <PauseControls what="downloads" />
+        </template>
+      </UDashboardToolbar>
     </template>
 
     <template #body>

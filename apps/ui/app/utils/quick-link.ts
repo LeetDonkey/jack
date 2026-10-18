@@ -108,3 +108,25 @@ export function decodeQuickLink(input: string): PeerInput {
     ...(Object.keys(headers).length ? { headers } : {}),
   }
 }
+
+const WEB_ADDRESS = /^https?:\/\//i
+
+/**
+ * Read what someone pasted as a friend's link: the friend to add, or the reason
+ * it can't be used, in words for the paste field.
+ */
+export function readQuickLink(input: string): { peer: PeerInput, error?: undefined } | { peer?: undefined, error: string } {
+  const text = input.trim()
+  if (!text)
+    return { error: 'Paste the link your friend sent.' }
+  if (WEB_ADDRESS.test(text))
+    return { error: 'That is a web address, not an invite link. Ask your friend for the link from Invite a friend on their Friends page.' }
+  if (text.length > MAX_QUICK_LINK_LENGTH)
+    return { error: 'This is too long to be an invite link. Check that you copied only the link.' }
+  try {
+    return { peer: decodeQuickLink(text) }
+  }
+  catch {
+    return { error: text.startsWith(PREFIX) ? 'This invite link is incomplete or damaged. Check that you copied all of it.' : 'This isn\'t an invite link. An invite link starts with jack-link:v1:' }
+  }
+}

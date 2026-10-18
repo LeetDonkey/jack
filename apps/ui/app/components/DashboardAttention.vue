@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import type { SetupRequiredState } from '~/composables/useSetupStatus'
-import type { Overview } from '~/types/management'
+import type { ActivityOverview, OverviewPeer } from '~/types/activity'
 
 const props = withDefaults(defineProps<{
-  overview: Overview
+  overview: ActivityOverview
   // The required setup steps (SetupChecklist). The green all-clear needs `done`:
   // with steps open, "no problems" would mislead even when nothing is failing, and
   // while the answer is unknown or a server is still connecting it would be a guess.
@@ -23,14 +23,48 @@ const props = withDefaults(defineProps<{
 // How many example rows to list before collapsing the rest into "and N more".
 const PREVIEW = 3
 
-// Only connectors that actually failed to initialize are "issues" — ones still
-// handshaking on startup (no error yet) are transient, not something to act on.
-const unreachablePeers = computed(() => props.overview.peers.items.filter(p => !p.initialized && p.initializationError))
+// A friend is a problem when their last health check failed (every 5 minutes), or,
+// before the first check, when jack couldn't connect at startup. One still
+// connecting with no error yet is transient, not something to act on.
+function friendIsDown(peer: OverviewPeer): boolean {
+  const online = peer.health?.online ?? null
+  return online === false || (online === null && !peer.initialized && Boolean(peer.initializationError))
+}
+
+interface FriendProblem {
+  id: string
+  name: string
+  message: string
+  // The error behind it, when the message doesn't already say it.
+  detail: string | null
+  action: string
+  to: string
+}
+
+function friendProblem(peer: OverviewPeer): FriendProblem {
+  const health = peer.health
+  const base = { id: peer.id, name: peer.name, detail: health?.lastError ?? peer.initializationError ?? null, action: 'See friends', to: '/friends' }
+  switch (health?.online === false ? health.lastErrorCode : null) {
+    case 'unauthorized':
+      return { ...base, detail: null, action: 'Paste new link', to: `/friends?action=paste&peer=${encodeURIComponent(peer.id)}`, message: `${peer.name}'s jack rejected your key. They may have revoked it or sent you a new link.` }
+    case 'forbidden':
+      return { ...base, detail: null, message: `${peer.name}'s jack is blocking you, possibly banned after failed attempts.` }
+    case 'incompatible':
+      return { ...base, detail: null, message: `${peer.name} needs a newer jack.` }
+  }
+  const since = formatClockOrDay(health?.offlineSince)
+  return { ...base, message: since ? `${peer.name} has been offline since ${since}.` : `Can't reach ${peer.name}.` }
+}
+
+const downFriends = computed(() => props.overview.peers.items.filter(friendIsDown).map(friendProblem))
 const unreachableServers = computed(() => props.overview.servers.items.filter(s => !s.initialized && s.initializationError))
 const stuckImports = computed(() => props.overview.downloads.importQueued)
 const failed = computed(() => props.overview.downloads.failed)
 const failedCount = computed(() => props.overview.downloads.byStatus.failed ?? 0)
 const queuedCount = computed(() => props.overview.downloads.byStatus.import_queued ?? 0)
+// The usual cause: the *arr sees jack's Completed folder under another path.
+const importHint = computed(() =>
+  `Radarr/Sonarr hasn't imported ${queuedCount.value === 1 ? 'it' : 'these'} yet. Usually it can't see the completed folder at the same path. Check Radarr/Sonarr -> Activity -> Queue.`)
 // Live integrity warnings: only for in-flight/queued transfers — failed rows
 // already carry their own error message below. The headline count uses the true
 // backend total (`mismatched`); the rows are example detail from the capped lists.
@@ -82,7 +116,7 @@ const registrationProblems = computed(() => props.overview.servers.items.flatMap
 // fixable thing; download problems collapse to one line each. The count drives the
 // badge.
 const issueCount = computed(() =>
-  unreachablePeers.value.length
+  downFriends.value.length
   + unreachableServers.value.length
   + registrationProblems.value.length
   + (queuedCount.value ? 1 : 0)
@@ -94,7 +128,7 @@ const hasIssues = computed(() => issueCount.value > 0)
 const nothingConfigured = computed(() => props.overview.peers.total === 0 && props.overview.servers.total === 0)
 
 const allClearTitle = computed(() =>
-  `No problems. ${plural(props.overview.peers.initialized, 'friend')} online, ${props.overview.servers.initialized} Radarr/Sonarr connected.`)
+  `No problems. ${plural(props.overview.peers.online ?? props.overview.peers.initialized, 'friend')} online, ${props.overview.servers.initialized} Radarr/Sonarr connected.`)
 
 // Starts open on every visit, and opens again when a new issue arrives.
 const open = ref(true)
@@ -121,14 +155,18 @@ function plural(n: number, word: string) {
 
         <template #content>
           <div class="divide-y divide-default border-t border-default">
-            <!-- Unreachable friends -->
-            <div v-for="peer in unreachablePeers" :key="`peer-${peer.id}`" class="flex flex-wrap items-start gap-x-3 gap-y-1 px-4 py-3">
+            <!-- Friends whose last health check failed -->
+            <div v-for="friend in downFriends" :key="`peer-${friend.id}`" class="flex flex-wrap items-start gap-x-3 gap-y-1 px-4 py-3">
               <UIcon name="i-ph-warning-circle" class="mt-0.5 size-4 shrink-0 text-error" />
-              <p class="min-w-0 flex-1 basis-[calc(100%-1.75rem)] text-sm text-default sm:basis-0">
-                Can't reach your friend <span class="font-semibold">{{ peer.name }}</span>{{ peer.initializationError ? ':' : '' }}
-                <span v-if="peer.initializationError" class="font-mono text-xs break-words text-error">{{ peer.initializationError }}</span>
-              </p>
-              <UButton :to="settingsLink('peers')" label="Edit" trailing-icon="i-ph-arrow-right" variant="link" size="sm" class="ml-7 shrink-0 px-0 sm:ml-0 sm:px-2.5" />
+              <div class="min-w-0 flex-1 basis-[calc(100%-1.75rem)] sm:basis-0">
+                <p class="text-sm break-words text-default">
+                  {{ friend.message }}
+                </p>
+                <p v-if="friend.detail" class="mt-1 font-mono text-xs break-words text-error">
+                  {{ friend.detail }}
+                </p>
+              </div>
+              <UButton :to="friend.to" :label="friend.action" trailing-icon="i-ph-arrow-right" variant="link" size="sm" class="ml-7 shrink-0 px-0 sm:ml-0 sm:px-2.5" />
             </div>
 
             <!-- Unreachable Radarr/Sonarr -->
@@ -168,11 +206,14 @@ function plural(n: number, word: string) {
             </div>
 
             <!-- Stuck imports -->
-            <div v-if="queuedCount" class="flex gap-3 px-4 py-3">
+            <div v-if="queuedCount" class="flex flex-wrap items-start gap-x-3 gap-y-1 px-4 py-3">
               <UIcon name="i-ph-clock-countdown" class="mt-0.5 size-4 shrink-0 text-warning" />
-              <div class="min-w-0">
+              <div class="min-w-0 flex-1 basis-[calc(100%-1.75rem)] sm:basis-0">
                 <p class="text-sm text-default">
                   {{ plural(queuedCount, 'download') }} waiting for Radarr/Sonarr to import
+                </p>
+                <p class="mt-1 text-xs text-muted">
+                  {{ importHint }}
                 </p>
                 <p
                   v-for="d in stuckImports.slice(0, PREVIEW)"
@@ -188,6 +229,7 @@ function plural(n: number, word: string) {
                   and {{ queuedCount - PREVIEW }} more
                 </p>
               </div>
+              <UButton to="/downloads?status=import_queued" label="View imports" trailing-icon="i-ph-arrow-right" variant="link" size="sm" class="ml-7 shrink-0 px-0 sm:ml-0 sm:px-2.5" />
             </div>
 
             <!-- Failed downloads -->
@@ -210,7 +252,7 @@ function plural(n: number, word: string) {
                   and {{ failedCount - PREVIEW }} more
                 </p>
               </div>
-              <UButton to="/downloads" label="View downloads" trailing-icon="i-ph-arrow-right" variant="link" size="sm" class="ml-7 shrink-0 px-0 sm:ml-0 sm:px-2.5" />
+              <UButton to="/downloads?status=failed" label="View failed downloads" trailing-icon="i-ph-arrow-right" variant="link" size="sm" class="ml-7 shrink-0 px-0 sm:ml-0 sm:px-2.5" />
             </div>
 
             <!-- Size mismatches -->

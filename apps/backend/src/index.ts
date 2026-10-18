@@ -232,7 +232,7 @@ configService?.onPeerSaved((id, previousId) => {
 })
 configService?.onPeerRemoved(id => introductions?.forgetPeer(id))
 bans.onBan((ban) => {
-  void notifications.send({ event: 'ip-banned', title: `Banned ${ban.ip}`, message: `${ban.failures} failed attempts on the public port (last: ${ban.reason}). Banned until ${new Date(ban.bannedUntil).toLocaleString('en-GB')}. Lift it under Settings -> Security.` })
+  void notifications.send({ event: 'ip-banned', title: `Banned ${ban.ip}`, message: `${ban.failures} failed attempts on the public port (last: ${ban.reason}). Banned until ${new Date(ban.bannedUntil).toLocaleString('en-GB')}. Lift it under Settings -> Sharing -> Security.` })
 })
 peerHealth.start()
 

@@ -6,6 +6,8 @@ const props = defineProps<{
   initial?: ApiKey | null
   submitting?: boolean
   error?: string | null
+  // A validation failure jack reported for one field; shown on that field.
+  fieldError?: { name: string, message: string } | null
 }>()
 // `dirty` tells the dialog to stop closing on a click outside once something is typed.
 const emit = defineEmits<{ submit: [ApiKeyInput], cancel: [], dirty: [boolean] }>()
@@ -39,6 +41,17 @@ const state = reactive({
 const openedWith = JSON.stringify(state)
 const dirty = computed(() => JSON.stringify(state) !== openedWith)
 watch(dirty, value => emit('dirty', value), { immediate: true })
+
+// jack's own verdict on a field goes onto that field. Its next edit validates it again.
+watch(() => props.fieldError, async (fieldError) => {
+  if (!fieldError)
+    return
+  // The date has its own field only while "Custom date…" is picked.
+  const name = fieldError.name === 'expiresAt' ? (state.preset === 'custom' ? 'customAt' : 'preset') : fieldError.name
+  await nextTick()
+  form.value?.setErrors([{ name, message: fieldError.message }], name)
+  void onError()
+}, { immediate: true })
 
 // datetime-local wants local wall-clock `YYYY-MM-DDTHH:mm`, not an ISO instant.
 function toDatetimeLocal(iso: string): string {
@@ -85,13 +98,13 @@ function onSubmit() {
       name="name"
       label="Name"
       hint="Optional"
-      description="The friend's name, so you can recognize the key later. The key itself is shown only once."
+      description="Who or what uses this key, so you can recognize it later. The key itself is shown only once."
     >
       <UInput v-model="state.name" :maxlength="100" placeholder="e.g. Alice" class="w-full" />
     </UFormField>
 
     <UFormField name="description" label="Description" hint="Optional">
-      <UTextarea v-model="state.description" :maxlength="500" :rows="2" placeholder="What this key is used for" class="w-full" />
+      <UTextarea v-model="state.description" :maxlength="500" :rows="2" placeholder="A note for yourself" class="w-full" />
     </UFormField>
 
     <UFormField name="preset" label="Expiration">

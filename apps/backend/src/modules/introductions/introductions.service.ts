@@ -427,9 +427,9 @@ export class IntroductionsService {
   private requireReady(): string {
     const name = this.publicName
     if (!name)
-      throw new BadRequestError('Set a public name under Settings -> Friends of friends first')
+      throw new BadRequestError('Set the name friends see under Settings -> Sharing first')
     if (!this.deps.external())
-      throw new BadRequestError('Set up quick linking (your external URL) first: it is what a new friend connects to')
+      throw new BadRequestError('Set the address friends use under Settings -> Sharing first: it is what a new friend connects to')
     return name
   }
 
@@ -447,7 +447,7 @@ export class IntroductionsService {
   private issueCard(thread: IntroThread): number {
     const external = this.deps.external()
     if (!external)
-      throw new BadRequestError('Set up quick linking (your external URL) first')
+      throw new BadRequestError('Set the address friends use under Settings -> Sharing first')
     const key = this.deps.issueKey(`${thread.peerName} (via ${thread.viaName})`, 'Created when you connected through a mutual friend')
     this.send(thread, 'card', { url: external.url, headers: external.headers, apiKey: key.key })
     return key.id
@@ -458,8 +458,8 @@ export class IntroductionsService {
     const discovery = this.deps.discovery()
     const name = this.publicName
     const missing = [
-      ...(name ? [] : ['a public name']),
-      ...(this.deps.external() ? [] : ['quick linking (your external URL)']),
+      ...(name ? [] : ['the name friends see']),
+      ...(this.deps.external() ? [] : ['the address friends use']),
     ]
     const profiles = await this.peerProfiles()
     // People who already are our peers, also while they are down.

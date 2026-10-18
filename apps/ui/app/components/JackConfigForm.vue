@@ -72,9 +72,11 @@ function onSubmit() {
 
 <template>
   <UForm ref="form" :state="state" :validate="validate" class="space-y-4" @submit="onSubmit" @error="onError">
+    <!-- The section around this form carries the full name, "Address Radarr/Sonarr
+         use to reach jack". -->
     <UFormField
       name="internalUrl"
-      label="Address Radarr/Sonarr use to reach jack"
+      label="Address"
       description="Usually http://YOUR-UNRAID-IP:5225. Keep http://jack:5225 only if Radarr and Sonarr are on the jack Docker network."
       required
     >

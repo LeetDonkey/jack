@@ -1,5 +1,5 @@
 ---
-description: Manage Radarr and Sonarr, friends, access keys, downloads, requests from friends' libraries, and logs from jack's self-hosted web console, with live updates over Server-Sent Events.
+description: Manage Radarr and Sonarr, friends, invite links, downloads, requests from friends' libraries, and logs from jack's self-hosted web console, with live updates over Server-Sent Events.
 ---
 
 # Management UI
@@ -10,55 +10,70 @@ instance without hand-editing `config.jsonc`. With the
 `jack-ui` service at **http://localhost:3000**, and it's the easiest way to
 operate jack day to day:
 
-- ***Dashboard***: a setup checklist until jack is ready, then your
-  Radarr/Sonarr and friends and whether each one connected, with download
-  activity updating live. Each Radarr/Sonarr shows when it last reached jack,
-  and ***Needs attention*** lists what is failing, including a Radarr/Sonarr
-  that jack couldn't set itself up in.
-- ***Friends' library***: browse everything your friends share, and request
-  titles into your library.
-- ***Downloads***: inspect, cancel, retry, and delete in-flight or finished
-  grabs, updating live as they progress.
-- ***Live traffic***: what is moving right now, in both directions.
-- ***Friends***: who you download from, who can download from you, their
-  traffic, and friends of friends.
+- ***Dashboard***:
+  - ***Finish setting up jack***: the setup steps left, until jack is ready. An
+    optional ***Share with friends*** card follows.
+  - ***Needs attention***: what is failing, including a Radarr/Sonarr that jack
+    couldn't set itself up in.
+  - ***Right now***: speeds both ways, how many downloads are downloading,
+    waiting, queued for import or failed, and the running downloads with speed
+    and time left. Each count opens ***Downloads*** with that filter.
+  - ***Friends & Radarr/Sonarr***: each friend's status and when jack last
+    reached them, and when each Radarr/Sonarr last reached jack.
+  - ***Lifetime***: what you downloaded from and shared with friends, and how
+    many downloads started and were imported, once anything has moved.
+- ***Friends' library***: everything your friends share, to search and request
+  into your library ([below](#friends-library)).
+- ***Downloads***: every download with its status and actions
+  ([below](#downloads)).
+- ***Live traffic***: what is moving right now, in both directions, with the
+  pause buttons ([below](#live-traffic)).
+- ***Friends***: one card per friend, and friends of friends
+  ([below](#friends)).
 - ***Logs***: live-tail the backend's logs. A line with a known fix has a help
-  icon; click the line for a link to the fix.
-- ***Settings***: one page, with these sections in this order:
-  - ***jack***: ***Address Radarr/Sonarr use to reach jack***
-    ([`jack.internalUrl`](/reference/configuration#jack-internalurl)). It
-    applies right away.
-  - ***Downloads***: the whole
-    [`downloads`](/reference/configuration#downloads) block, covering where
-    finished files land, how many downloads run at once, whether jack drops its
-    copy after an import, and the retry and import-watcher tuning.
-  - ***Radarr & Sonarr***: add, edit, and remove your Radarr/Sonarr
-    connections, and see what jack set up in each
-    ([below](#settings-radarr-sonarr)).
-  - ***Quick linking***: how friends reach this instance, plus the buttons that
-    generate and import [quick links](/guide/quick-links).
-  - ***Friends you download from***: add, edit, and remove the friends whose
-    libraries you download from.
-  - ***Friend access keys***: issue and revoke the keys you hand to friends.
-  - ***Friends of friends***: the
-    [`discovery`](/reference/configuration#discovery) block.
+  icon; click the line for a link to the fix. ***Copy support info*** is in the
+  header ([below](#support-info)).
+- ***Settings***, in tabs:
+  - ***Radarr & Sonarr***:
+    - ***Address Radarr/Sonarr use to reach jack***
+      ([`jack.internalUrl`](/reference/configuration#jack-internalurl)). It
+      applies right away.
+    - ***Downloads***: the whole
+      [`downloads`](/reference/configuration#downloads) block, and the folder
+      check ([below](#settings-radarr-sonarr-downloads)).
+    - ***Radarr & Sonarr***: add, edit, and remove your Radarr/Sonarr
+      connections, and see what jack set up in each
+      ([below](#settings-radarr-sonarr)).
+  - ***Sharing***:
+    - ***Your public address***: how friends' jacks reach yours
+      ([below](#settings-sharing)).
+    - ***Friends of friends***: the
+      [`discovery`](/reference/configuration#discovery) block.
+    - ***Security***: the [`security`](/reference/configuration#security)
+      block, and the banned addresses with ***Lift ban***.
   - ***Bandwidth***: the [`bandwidth`](/reference/configuration#bandwidth)
-    block.
-  - ***RSS feed***: the [`torznab`](/reference/configuration#torznab) block.
+    block, and ***Pause sharing*** and ***Pause downloads***.
   - ***Notifications***: the
     [`notifications`](/reference/configuration#notifications) block.
-  - ***Security***: the [`security`](/reference/configuration#security) block.
-  - ***About***: jack's version and the TMDB attribution.
+  - ***Advanced***:
+    - ***RSS feed***: the [`torznab`](/reference/configuration#torznab) block.
+    - ***API keys for other tools***: keys that aren't on a friend's card
+      ([below](#settings-advanced)).
+    - ***About***: which build jack and jack-ui run, and ***Copy support
+      info***.
 
 Links to a setting from elsewhere in the UI, such as the setup card on the
-***Dashboard***, open ***Settings*** scrolled to that section.
+***Dashboard***, open the right tab of ***Settings*** scrolled to that section.
+Older links to the single ***Settings*** page land on the tab that holds the
+section now.
 
-Each section of ***Settings*** saves on its own. Leaving ***Settings*** while
-a section has unsaved changes asks first, naming the sections, for example
-***Leave without saving Downloads?*** with ***Stay*** and ***Leave without
-saving***. Reloading or closing the tab gets the browser's own prompt instead.
-A dialog such as ***Connect Radarr or Sonarr*** stays open on a click outside
-it or on Escape once you've changed a field; close it with its own buttons.
+Each section of ***Settings*** saves on its own. Switching tabs or leaving
+***Settings*** while a section has unsaved changes asks first, naming the
+sections, for example ***Leave without saving Downloads?*** with ***Stay*** and
+***Leave without saving***. Reloading or closing the tab gets the browser's own
+prompt instead. A dialog such as ***Connect Radarr or Sonarr*** stays open on a
+click outside it or on Escape once you've changed a field; close it with its
+own buttons.
 
 Some settings only apply when jack starts, such as turning on downloads or a
 new ***Completed folder***. Once you save one, a bar at the top of every page
@@ -69,7 +84,198 @@ settings are active.*** jack-ui itself never needs a restart.
 Don't want it? Delete the `jack-ui` service and the backend's
 `JACK_MANAGEMENT_KEY` line to run jack headless.
 
-## Settings -> Downloads
+## Friends' library
+
+***Friends' library*** shows every movie and show your friends share, one card
+per title, with every friend who has it. The toolbar narrows the list:
+
+- ***Search titles or years***: each word you type must appear in the title or
+  the year.
+- ***All***, ***Movies*** or ***TV***.
+- The sort: ***Recently added*** (the default), ***Title***, ***Year*** or
+  ***Rating***. ***Title*** ignores leading punctuation and a leading "The",
+  "A" or "An". The browser remembers your choice.
+- With two or more friends, ***All friends*** or one friend's name.
+
+Click a title, then ***Download*** next to a friend's copy. The dialog asks
+which Radarr or Sonarr to send it to and its root folder. For a show, jack
+queues every episode that friend has. The confirmation, such as ***Sent to
+Radarr.***, has ***View downloads***.
+
+When jack can't download a title, the panel says why above ***Download***,
+with the button that fixes it:
+
+- Downloads are off: ***Turn on downloads***.
+- Downloads were turned on after jack started: restart the jack container.
+- No Radarr (or Sonarr) has ***Download from friends into this Radarr*** on,
+  or jack can't reach the one that has: ***Open Radarr & Sonarr***.
+
+When a friend's jack doesn't answer, a banner such as ***Alice is offline.
+Showing their library from 3 hours ago.*** keeps their titles on the page.
+***Download*** stays available, with a warning that it may fail until they're
+back.
+
+## Downloads
+
+***Downloads*** opens on ***Active***: what is downloading, waiting for import
+or failed. The other filters are ***Downloading***, ***Import queued***,
+***Failed***, ***Cancelled***, ***Imported*** and ***All***. A link such as
+`/downloads?status=failed` opens a filter directly; the ***Dashboard*** uses
+these.
+
+Each row shows its status:
+
+- ***Downloading***, with speed and time left under the progress bar.
+- ***Waiting for a free slot***: more downloads are running than ***Downloads
+  at once*** allows.
+- ***Paused***: downloads are paused, and this one starts when you resume
+  them.
+- ***Retrying at 14:32***: the last attempt hit a network error, a timeout or
+  a busy friend. The line under the file name says which attempt failed and
+  why.
+- ***Import queued***: finished, and waiting for Radarr/Sonarr to import it.
+- ***Imported***.
+- ***Failed***, with the error.
+- ***Cancelled***: you cancelled it. It doesn't count as failed.
+
+The actions:
+
+- ***Cancel*** stops a running download after asking ***Cancel this
+  download?***. The partial file is kept.
+- ***Retry*** starts a failed or cancelled download again. A cancelled one
+  continues from the partial file. Under ***Active*** and ***Failed***,
+  ***Retry all failed*** retries every failed download that can be retried.
+- ***Remove***, in the ***...*** menu, removes the row and jack's own copy of
+  the file, partial or finished. What Radarr/Sonarr already imported stays in
+  your library.
+
+## Live traffic
+
+***Live traffic*** lists every running download and upload, with the friend,
+progress, speed and time left. While a bandwidth schedule period applies, a
+line names it with a link to edit it.
+
+The header has ***Pause sharing*** and ***Pause downloads***, and so does
+***Settings -> Bandwidth***. Each pauses ***For 1 hour***, ***For 4 hours***,
+until the next 08:00, or ***Until I resume***:
+
+- **Sharing paused**: friends' jacks are told sharing is paused and try again
+  later. Uploads already running finish. A friend's jack gives up on a
+  download after about 24 hours, so ***Until I resume*** warns about that.
+- **Downloads paused**: new downloads wait in the queue as ***Paused***.
+  Downloads already running finish. The button only shows while downloads are
+  on.
+
+While a pause lasts, the button reads, for example, ***Sharing paused until
+18:30***, with ***Resume*** next to it. The ***Dashboard*** says so under
+***Right now***. A pause survives a restart of jack.
+
+## Friends
+
+***Friends*** shows one card per friend, with both directions together: the
+jack you download from, and the keys that let your friend download from you.
+The badge says where you stand:
+
+- ***Connected both ways***: you download from them, and their jack used your
+  key in the last 24 hours.
+- ***Waiting for Alice***: you download from Alice and sent them a link, but
+  their jack hasn't used your key in the last 24 hours. The card offers
+  ***Send a new link*** in case they lost it.
+- ***Only one way***: one direction is missing, and the card offers the
+  button that adds it:
+  - ***Paste Alice's link*** when you don't download from Alice yet.
+  - ***Send Alice a link*** when Alice can't download from you yet.
+- When the last check of their jack failed, the badge shows the status
+  instead: ***Offline since 14:02***, ***Rejected your key***, ***Is blocking
+  you*** or ***Needs a newer jack***. A line under it says what to do, and
+  ***Rejected your key*** comes with ***Paste new link***.
+
+Under ***You download from Alice***, the card shows the status (***Online***,
+or ***Checking...*** until the first check), when jack last reached their
+jack, its address and build, and what you downloaded today, in 7 days and in
+30 days. Under ***Alice downloads from you***, it shows when their jack last
+used each key, such as ***Last connected 3 min ago*** or ***Never used***, what
+they downloaded, and the upload limits each friend gets, with a link to
+***Settings -> Bandwidth***.
+
+jack checks every friend's jack every 5 minutes; ***Check now*** checks them
+all at once. Daily totals reset at midnight in jack's time zone.
+
+The ***...*** menu on a card has:
+
+- ***Rename***: renames the friend, and the keys named after them.
+- ***Change address or key***: edits the address and key you use for their
+  jack, or takes a new link from them (***Paste it instead***).
+- ***Send a new link***: see [Invite a friend](#invite-a-friend).
+- ***Remove friend***: asks ***Remove Alice?*** with a box for each
+  direction, all ticked:
+  - ***Stop downloading from Alice***: removes their jack from your friends,
+    and any other address you saved for it. Downloads in progress finish.
+  - ***Revoke Alice's access (key 'Alice')***, one per key: their jack can no
+    longer search or download from you.
+
+  Untick what you want to keep, then click ***Remove***.
+
+A key and an address with matching names aren't put together by themselves.
+The card then asks, for example ***Is this the Alice you download from?***,
+and ***Link*** puts both on one card.
+
+***Not linked to a friend*** lists what isn't on a card:
+
+- Keys made by hand, or before jack recorded which friend a key is for. Pick
+  the friend whose jack uses the key under ***Link to...***, or click ***Link***
+  when jack suggests one by name. These keys also show under
+  ***Settings -> Advanced -> API keys for other tools*** until you link them.
+- A second address for a friend's jack, such as their old one. jack uses the
+  one that answers; ***Remove this address*** drops the other.
+
+***Friends of friends*** below the cards lists the people your friends
+introduced, with their requests to connect.
+
+### Invite a friend
+
+***Invite a friend*** makes an [invite link](/guide/quick-links) for one
+friend:
+
+1. If ***Name friends see*** or ***Address friends use*** is missing, the
+   dialog asks for them first (***First, set the address friends use***, then
+   ***Save and continue***).
+2. ***Who is this link for?***: your friend's name. It names the key the link
+   carries and their card.
+3. ***Create invite link***, then ***Copy link***, and send it. The link is
+   shown once.
+
+When the name matches a friend you already download from, ***This is the Alice
+you download from*** (ticked) puts the new key on their card. When it matches
+a friend who already has a key, the dialog offers ***Send a new link
+instead***.
+
+***Send a new link*** on a friend's card makes a link with a new key. jack
+revokes the old key if their jack never used it. If it did, or jack can't
+tell, the dialog asks: ***Replace*** revokes the old key, ***Keep both***
+leaves it working.
+
+### Add a friend
+
+***Add a friend*** takes the link a friend sent you: paste it into ***Paste
+the link your friend sent***, click ***Continue***, check the name and address,
+and click ***Add friend***. ***Add without a link*** opens an empty form for an
+address and key typed by hand.
+
+Saving connects to their jack. If it doesn't answer, the dialog says why, for
+example that the address doesn't resolve or the connection was refused. For a
+problem that may be temporary, ***Add anyway, keep trying*** saves the friend
+and jack keeps retrying; ***Back to edit*** returns to the form. When their
+jack answers but refuses, for example because it doesn't accept the key, the
+dialog says so and doesn't offer ***Add anyway, keep trying***.
+
+If you haven't sent that friend a link yet, the dialog then offers ***Invite
+Alice***.
+
+Links elsewhere in the UI open these dialogs directly: `/friends?action=invite`
+and `/friends?action=add`.
+
+## Settings -> Radarr & Sonarr -> Downloads
 
 The whole [`downloads`](/reference/configuration#downloads) block is editable
 here, so there's no reason to hand-edit `config.jsonc` for it:
@@ -105,6 +311,25 @@ here is read at startup, so restart the jack container** to apply it. After
 saving, the message names what still needs a restart, and so does the bar at
 the top of every page until you restart.
 
+### Folder check
+
+***Folder check*** under the form checks, with the saved settings:
+
+- that jack sees each library a Radarr/Sonarr shares, at the path that
+  Radarr/Sonarr uses, and can read a file or two from it.
+- that each Radarr/Sonarr that receives downloads sees the ***Completed
+  folder*** at the same path as jack. jack writes a test file there and asks
+  Radarr/Sonarr to list it.
+
+***Check folders*** runs it, which can take up to 30 seconds. It shows ***All
+folders line up.*** or the first problem, naming the path and the template to
+change, and ***Show details*** lists every check. It also runs by itself after
+you save a new ***Completed folder***, and after you connect a Radarr/Sonarr or
+change its address or roles. Each card under ***Radarr & Sonarr*** and the
+setup card on the ***Dashboard*** show the result too, until you reload the
+page. With downloads off, ***Check folders*** sits above the cards under
+***Radarr & Sonarr*** instead.
+
 ## Settings -> Radarr & Sonarr
 
 With downloads on, saving a Radarr or Sonarr that has ***Download from friends
@@ -131,29 +356,71 @@ The server's card then shows:
   link.
 - ***Register again***, which adds jack and runs the tests again, for example
   after you fixed the address or Radarr was down.
+- The result of the last [folder check](#folder-check) for that server.
 
 [`servers[].autoregister`](/reference/configuration#servers-autoregister)
 lists every time jack registers itself.
 
-## Settings -> Quick linking
+## Settings -> Sharing
 
-This section holds the [`jack.external`](/reference/configuration#jack-external)
-profile, meaning the ***Instance name***, ***External URL***, and any ***Proxy
-headers*** a friend's jack needs to reach you, along with the two buttons that
-use it:
+***Your public address*** holds the
+[`jack.external`](/reference/configuration#jack-external) profile that invite
+links carry:
 
-- ***Generate quick link*** issues a fresh peer API key and encodes it, together
-  with the profile, into a single shareable string. It's enabled only once the
-  profile is saved, with a line under the button saying what is missing until
-  then. The link is revealed exactly once.
-- ***Add via quick link*** decodes a link a friend sent you and opens the
-  ***Add a friend*** form prefilled, for you to review before saving.
+- ***Name friends see***: how you show up when a friend adds you, at most 60
+  characters.
+- ***Address friends use***: your public jack address, for example
+  `https://jack.example.com`.
+- ***Proxy headers (optional)***: headers a friend's jack must send to get
+  through your proxy. Every invite link you create includes them.
+
+***Check*** under the address has jack fetch `/ping` there with those
+headers, the way a friend's jack would, within 10 seconds. It checks what you
+typed, saved or not, and shows ***Answers from this server.*** or what went
+wrong. The request starts on your server, so it can't show whether friends
+outside your network get through; your friend's import is the real test.
 
 ***Save changes*** stores the profile and only lights up once something
-changed; ***Revert*** discards your edits.
+changed; ***Revert*** discards your edits. ***Remove*** deletes the profile.
+Friends who already have one of your links keep their access, but until you set
+an address again you can't create invite links or connect with friends of
+friends.
 
-Treat a generated link as a credential. [Quick links](/guide/quick-links) covers
-the full workflow and how to revoke one.
+Friends of friends see you under ***Name friends see*** as well. ***Use a
+different name for friends of friends*** in the ***Friends of friends***
+section sets another one.
+
+## Settings -> Advanced
+
+***API keys for other tools*** lists the keys that aren't on a friend's card:
+keys for a script or another tool, and friends' keys made before jack recorded
+which friend a key is for. ***Create key*** makes one and shows it once. The
+pencil edits a key's name, description and expiration, and the bin revokes it.
+Each key counts as one friend for the per-friend upload limits. To let a friend
+download from you, use ***Invite a friend*** on ***Friends*** instead.
+
+***About*** shows which build each container runs, for example `jack build
+4ca4a2a (17 Oct) · UI build 4ca4a2a`, and warns ***jack and jack-ui run
+different builds. Update both containers.*** when they differ. It also holds
+the TMDB attribution while jack uses a TMDB key, and ***Copy support info***.
+
+## Support info
+
+***Copy support info***, in the ***Logs*** header and under ***Settings ->
+Advanced -> About***, copies a summary to paste into a message to whoever
+helps you:
+
+- jack's build, time zone, and the host of the address Radarr/Sonarr use.
+- Whether downloads are on, a restart is pending, or anything is paused.
+- Each Radarr/Sonarr: its roles, whether it's connected, and what jack set up
+  in it.
+- Each friend: status, last error and build.
+- Each key's name and when it was last used.
+- The last 50 warnings and errors from the log.
+
+Keys, header values and webhook URLs are left out. Error messages and log
+lines can still contain the addresses of your Radarr, Sonarr and friends, so
+read it before you post it anywhere public.
 
 ## Secret fields
 
@@ -212,21 +479,22 @@ for the full UI configuration reference.
 
 ## Live updates
 
-The UI doesn't poll. Every page keeps the overview
+Every page keeps the overview
 [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events)
-stream open through the BFF, for the restart bar and the ***Dashboard***.
-***Downloads***, ***Live traffic*** and ***Settings*** open a stream of their
-own. jack pushes a fresh snapshot the moment something changes: a download's
-progress, a connection's state, or a friend or Radarr/Sonarr you just edited.
-There is no refresh interval to tune and no manual refresh button.
+stream open through the BFF, for the restart bar, the ***Dashboard*** and
+friends' status. ***Downloads***, ***Live traffic***, ***Settings*** and the
+pause buttons open a stream of their own. jack pushes a fresh snapshot the
+moment something changes: a download's progress, a connection's state, a pause,
+or a friend or Radarr/Sonarr you just edited. ***Friends*** also reloads every
+30 seconds for the traffic totals. There is no refresh interval to tune.
 
 The streams are plain `GET` endpoints on the management API:
 
 | Stream | What it pushes |
 | --- | --- |
-| `/overview/stream` | Connector overview, registration results, download state and pending restarts |
+| `/overview/stream` | Connector overview, friends' health after every check, registration results, download state and pending restarts |
 | `/downloads/stream` | Every persisted download change |
-| `/transfers/stream` | Running uploads and downloads, every second while any run |
+| `/transfers/stream` | Running uploads and downloads, every second while any run, and every pause and resume |
 | `/config/stream` | Peer and server config changes, and each server's registration results |
 
 Each sends its current snapshot immediately on connect, then a full snapshot per

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { decodeQuickLink } from './quick-link'
+import { decodeQuickLink, readQuickLink } from './quick-link'
 
 function base64Url(text: string): string {
   const binary = String.fromCharCode(...new TextEncoder().encode(text))
@@ -61,5 +61,23 @@ describe('decodeQuickLink', () => {
       expect(String(error)).not.toContain(secret)
     }
     expect(() => decodeQuickLink(`jack-link:v1:${'a'.repeat(40_000)}`)).toThrow('too large')
+  })
+})
+
+describe('readQuickLink', () => {
+  test('returns the friend from a valid link, ignoring surrounding whitespace', () => {
+    expect(readQuickLink(`  ${link(validPayload)}\n`).peer?.name).toBe('Amigo’s Jack')
+  })
+
+  test.each([
+    ['empty input', '   ', 'Paste the link'],
+    ['a web address', 'https://jack.friend.example', 'web address'],
+    ['a damaged link', `${link(validPayload).slice(0, 30)}`, 'incomplete or damaged'],
+    ['something else', 'hello', 'isn\'t an invite link'],
+    ['oversized input', `jack-link:v1:${'a'.repeat(40_000)}`, 'too long'],
+  ])('explains %s', (_case, input, message) => {
+    const result = readQuickLink(input)
+    expect(result.peer).toBeUndefined()
+    expect(result.error).toContain(message)
   })
 })

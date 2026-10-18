@@ -7,11 +7,13 @@ description: Connect jack instances securely, exchange scoped peer API keys, and
 jack authenticates each external surface by **key type**, so a credential only
 works where it's meant to (`/ping` is the only unauthenticated route):
 
-- **Peer API keys.** Issued per peer from the management UI's ***Friend access
-  keys*** section, from the management API, or implicitly when you generate a
-  [quick link](/guide/quick-links). They are named, revocable, and optionally
-  expiring. Scoped to the **peer API** (`/handshake`, `/peer/*`): a peer key
-  **cannot** query your Torznab indexer or act as your download client.
+- **Peer API keys.** Issued per friend: every
+  [invite link](/guide/quick-links) carries a new one, and ***Settings ->
+  Advanced -> API keys for other tools -> Create key*** in the management UI,
+  or the management API, makes one by hand. They are named, revocable, and
+  optionally expiring. Scoped to the **peer API** (`/handshake`, `/peer/*`): a
+  peer key **cannot** query your Torznab indexer or act as your download
+  client.
 - **Managed keys.** jack mints these automatically and registers them in your
   Radarr/Sonarr when it auto-registers as their indexer + download client.
   Scoped to the ***arr surface** (`/torznab`, the qBittorrent API); you never
@@ -31,23 +33,25 @@ instance can reach your peer API, plus a **peer API key**. This public or
 LAN-reachable peer URL is independent of `jack.internalUrl`, which is the
 address your own Radarr/Sonarr use to reach jack.
 
-### With a quick link
+### With an invite link
 
-The easiest way to do that exchange is a [quick link](/guide/quick-links):
-generate one in the management UI and send it to your friend, who pastes it into
-theirs. The link carries your peer URL, a peer API key issued on the spot, and
-any proxy headers needed to reach you, so neither of you types a credential by
-hand.
+The easiest way to do that exchange is an [invite link](/guide/quick-links):
+***Friends -> Invite a friend*** in the management UI makes one, and your
+friend pastes it under ***Friends -> Add a friend*** in theirs. The link
+carries your peer URL, a peer API key issued on the spot, and any proxy
+headers needed to reach you, so neither of you types a credential by hand.
 
 ### By hand
 
-You can also exchange the two values yourself, which is what a quick link
+You can also exchange the two values yourself, which is what an invite link
 automates:
 
 - **You give a friend** your reachable peer URL plus a peer API key you issue
-  them (management UI, ***Friend access keys***). They add you with ***Add a
-  friend*** under ***Settings -> Friends you download from***, or under `peers`
-  in *their* config:
+  them under ***Settings -> Advanced -> API keys for other tools -> Create
+  key***. Once you've added them too, pick their name under ***Link to...***
+  in ***Friends -> Not linked to a friend***, so the key shows on their card.
+  They add you with ***Friends -> Add a friend -> Add without a link***, or
+  under `peers` in *their* config:
 
   ```jsonc
   {

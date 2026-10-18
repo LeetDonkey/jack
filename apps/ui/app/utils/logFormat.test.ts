@@ -19,7 +19,7 @@ describe('logHelp', () => {
   })
 
   test('links a refused *arr address to the Security settings', () => {
-    const message = 'Refused the Radarr/Sonarr API to an address outside your LAN. If it is your own Radarr or Sonarr, add it under Settings -> Security -> Also allow.'
+    const message = 'Refused the Radarr/Sonarr API to an address outside your LAN. If it is your own Radarr or Sonarr, add it under Settings -> Sharing -> Security -> Also allow.'
     expect(logHelp({ message })).toEqual({ label: 'Open Security settings', to: settingsLink('security'), external: false })
   })
 

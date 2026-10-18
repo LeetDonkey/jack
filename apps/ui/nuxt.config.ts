@@ -1,6 +1,4 @@
 // https://nuxt.com/docs/api/configuration/nuxt-config
-import pkg from './package.json'
-
 export default defineNuxtConfig({
   compatibilityDate: '2025-01-01',
   devtools: { enabled: false },
@@ -10,10 +8,12 @@ export default defineNuxtConfig({
 
   css: ['~/assets/css/main.css'],
 
-  // Peers and Servers are now sections of the Settings page; keep old
-  // links/bookmarks (including the former Connectors page) working.
+  // Old pages, kept working for links and bookmarks. Friends have their own page,
+  // Radarr/Sonarr live on the first Settings tab, and the former Connectors page
+  // became Settings. Old /settings#<section> links are moved to their tab by the
+  // Settings page itself (pages/settings.vue), since a hash never reaches the server.
   routeRules: {
-    '/peers': { redirect: '/settings#peers' },
+    '/peers': { redirect: '/friends' },
     '/servers': { redirect: '/settings#servers' },
     '/connectors': { redirect: '/settings' },
   },
@@ -44,11 +44,5 @@ export default defineNuxtConfig({
     // Seals the cookie that holds the management key in cookie mode. MUST be set
     // (>= 32 chars) in production; the default is a clearly-insecure dev value.
     sessionKey: 'dev-insecure-session-key-change-me-please-1234',
-
-    // Browser-exposed: the app version, baked from package.json at build time and
-    // shown in Settings → About.
-    public: {
-      appVersion: pkg.version,
-    },
   },
 })

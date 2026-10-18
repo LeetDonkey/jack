@@ -60,7 +60,7 @@ export function lanGuard(access: () => ArrAccess) {
       if (warned.size >= 1000)
         warned.clear()
       warned.add(shown)
-      logger.warn({ ip: shown, path: c.req.path }, 'Refused the Radarr/Sonarr API to an address outside your LAN. If it is your own Radarr or Sonarr, add it under Settings -> Security -> Also allow.')
+      logger.warn({ ip: shown, path: c.req.path }, 'Refused the Radarr/Sonarr API to an address outside your LAN. If it is your own Radarr or Sonarr, add it under Settings -> Sharing -> Security -> Also allow.')
     }
     c.set('lanRefused', true)
     return c.json({ error: 'Not available from this address' }, 403)

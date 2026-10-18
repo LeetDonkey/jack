@@ -2,14 +2,14 @@ import type { ComputedRef, InjectionKey, Ref } from 'vue'
 import { UnsavedChangesModal } from '#components'
 
 /**
- * Warns before unsaved settings are thrown away. Settings is one long page of
+ * Warns before unsaved settings are thrown away. Each Settings tab is a stack of
  * separately saved forms, so an edit made further up is easy to leave behind.
  *
- * The settings page calls `provideUnsavedGuard()` once. Each form calls
- * `useUnsavedGuard().track(label, dirty)` in its setup. Leaving the page then asks
- * first while any tracked form is dirty: the browser's own prompt on reload or
- * close, an in-app dialog on navigation within jack-ui. Moving between sections of
- * Settings (hash links) doesn't count as leaving.
+ * The Settings shell (pages/settings.vue) calls `provideUnsavedGuard()` once. Each
+ * form calls `useUnsavedGuard().track(label, dirty)` in its setup. While any
+ * tracked form is dirty, these ask first: the browser's own prompt on reload or
+ * close, and an in-app dialog when leaving Settings or switching to another tab.
+ * Moving between sections of the same tab (hash links) doesn't count as leaving.
  */
 
 type DirtyRef = Ref<boolean> | ComputedRef<boolean>
@@ -51,7 +51,7 @@ export function provideUnsavedGuard() {
   const overlay = useOverlay()
   let asking: Promise<boolean> | undefined
 
-  onBeforeRouteLeave(async () => {
+  async function confirmLeave(): Promise<boolean> {
     const labels = dirtyLabels.value
     if (!labels.length)
       return true
@@ -63,7 +63,13 @@ export function provideUnsavedGuard() {
         asking = undefined
       })
     return await asking
-  })
+  }
+
+  onBeforeRouteLeave(confirmLeave)
+  // Tabs are child routes of the page that provides the guard, so switching tabs
+  // updates its route instead of leaving it. Only the tab's forms unmount then;
+  // a new hash on the same tab keeps them.
+  onBeforeRouteUpdate((to, from) => to.path === from.path || confirmLeave())
 }
 
 /**

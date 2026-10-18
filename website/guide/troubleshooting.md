@@ -44,7 +44,7 @@ The usual causes:
   addresses), from a VPS or another site, over a global IPv6 address, or
   `jack.internalUrl` is your public domain so the *arr goes through your
   reverse proxy. Use a LAN address in `jack.internalUrl`, or add the *arr's
-  address under ***Settings -> Security -> Also allow***.
+  address under ***Settings -> Sharing -> Security -> Also allow***.
 
 ## qBittorrent download client test fails / `Failed to register download client`
 
@@ -61,8 +61,8 @@ jack to *arr's network (the `networks:` block in the example compose).
 jack runs the same test after each registration, and the server's card in the
 management UI says what failed in plain words, for example ***Radarr can't
 resolve jack. Use your server's IP in Address Radarr/Sonarr use to reach
-jack.*** A new address saved under ***Settings -> jack*** applies right away:
-jack updates every *arr and tests again.
+jack.*** A new address saved under ***Settings -> Radarr & Sonarr*** applies
+right away: jack updates every *arr and tests again.
 
 When *arr refuses the download client itself (`Failed to register download
 client` in the log), jack leaves the indexer as it was, so it stays bound to
@@ -76,6 +76,11 @@ never pick the file up. jack writes finished files to the **literal**
 `downloads.completedPath`, and *arr imports them by resolving that path in **its
 own** filesystem, so the completed folder must exist at the **same path**
 inside the Radarr/Sonarr containers.
+
+***Check folders*** under ***Settings -> Radarr & Sonarr -> Downloads*** in the
+management UI tests this: jack writes a file to the completed folder and asks
+each Radarr/Sonarr that receives downloads to list it at the same path. The
+result names the server and the path that doesn't match.
 
 **Fix:** mount the **same host folder** into Radarr **and** Sonarr at the **same
 container path** jack uses. If jack has:
@@ -122,12 +127,12 @@ jack turns it off in that *arr (the `Turned off the Jack indexer` warning in
 the log). Registering with downloads on turns it back on, bound to jack's
 client.
 
-**Fix:** add a `downloads` block with `completedPath`, or click ***Turn on
-downloads*** under ***Settings -> Downloads*** in the management UI, and
-restart jack. Saving it in the management UI registers both right away; the
-restart starts the download client. Until then, the management UI names
-***Downloads*** in a bar at the top of every page, and each server's card reads
-`download client waits for a restart`.
+**Fix:** add a `downloads` block with `completedPath`, or click ***Turn
+on downloads*** under ***Settings -> Radarr & Sonarr -> Downloads*** in the
+management UI, and restart jack. Saving it in the management UI registers both
+right away; the restart starts the download client. Until then, the management
+UI names ***Downloads*** in a bar at the top of every page, and each server's
+card reads `download client waits for a restart`.
 
 If registration fails with `Failed to register indexer`, check that the
 destination server is reachable and its API key is correct. Registration logs
@@ -173,10 +178,11 @@ the folder fills up.
 
 **Fix:** turn on
 [`downloads.unlinkImportedFiles`](/reference/configuration#downloads-unlinkimportedfiles),
-in `config.jsonc` or from ***Settings -> Downloads*** in the management UI. It
-applies immediately, with no restart. jack then unlinks its copy as each import
-is confirmed, and only then: one file per confirmed import, never your library.
-Details in [After the import](/guide/how-it-works#after-the-import).
+in `config.jsonc` or from ***Settings -> Radarr & Sonarr -> Downloads*** in
+the management UI. It applies immediately, with no restart. jack then unlinks
+its copy as each import is confirmed, and only then: one file per confirmed
+import, never your library. Details in
+[After the import](/guide/how-it-works#after-the-import).
 
 This only affects downloads imported **after** you enable it. Files already in
 the folder are yours to clear out; deleting the download rows from the
@@ -233,3 +239,8 @@ Set `LOG_LEVEL=trace` to log every HTTP request (method, path, status,
 duration). Registration failures always log the raw *arr response body at
 `error` level. That body carries the real validation message and usually tells
 you exactly what *arr is unhappy about.
+
+To ask someone for help, click ***Copy support info*** in the management UI's
+***Logs*** header. It copies jack's build, the state of each Radarr/Sonarr and
+friend, and the last 50 warnings and errors, with keys, header values and
+webhook URLs left out. See [Support info](/guide/management-ui#support-info).

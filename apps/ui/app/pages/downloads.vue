@@ -1,17 +1,17 @@
 <script setup lang="ts">
 import type { BadgeProps, TableColumn } from '@nuxt/ui'
-import type { DownloadItem } from '~/types/management'
-import type { DownloadAction } from '~/utils/download-actions'
-
-type StatusFilter = DownloadItem['status'] | 'all'
+import type { ActivityDownload, ActivityTransfer, ActivityTransfersSnapshot } from '~/types/activity'
+import type { DownloadAction, DownloadFilter, DownloadState } from '~/utils/download-actions'
 
 const { request, extractError } = useManagement()
 const toast = useToast()
+const route = useRoute()
+const router = useRouter()
 
 const { data, pending, error, refresh } = await useAsyncData('downloads', () =>
-  request<{ downloads: DownloadItem[] }>('downloads'))
+  request<{ downloads: ActivityDownload[] }>('downloads'))
 
-const { connected, hasConnectedOnce } = useManagementStream<{ downloads: DownloadItem[] }>('downloads/stream', (snapshot) => {
+const { connected, hasConnectedOnce } = useManagementStream<{ downloads: ActivityDownload[] }>('downloads/stream', (snapshot) => {
   data.value = snapshot
   error.value = undefined
 })
@@ -40,79 +40,48 @@ async function retryLoad() {
   ])
 }
 
-const pendingActions = ref<Record<number, DownloadAction | undefined>>({})
+// ── Filter ──────────────────────────────────────────────────────────────────
 
-function confirmationFor(download: DownloadItem, action: DownloadAction): string | null {
-  if (action === 'cancel')
-    return `Cancel ${download.filename}? Its partial file will be kept so the transfer can be retried.`
-  if (action === 'delete')
-    return `Delete ${download.filename}? This removes its history and any partial or completed download artifact.`
-  return null
-}
-
-async function runAction(download: DownloadItem, action: DownloadAction) {
-  if (pendingActions.value[download.id])
-    return
-  const confirmation = confirmationFor(download, action)
-  // eslint-disable-next-line no-alert -- destructive actions require confirmation
-  if (confirmation && !window.confirm(confirmation))
-    return
-
-  pendingActions.value[download.id] = action
-  try {
-    if (action === 'delete')
-      await request<{ ok: true }>(`downloads/${download.id}`, { method: 'DELETE' })
-    else
-      await request<{ download: DownloadItem }>(`downloads/${download.id}/${action}`, { method: 'POST' })
-    toast.add({
-      title: action === 'cancel' ? 'Download cancelled' : action === 'retry' ? 'Download retry started' : 'Download deleted',
-      color: 'success',
-    })
-    await refresh()
-  }
-  catch (actionError) {
-    toast.add({
-      title: `Failed to ${action} download`,
-      description: extractError(actionError),
-      color: 'error',
-    })
-  }
-  finally {
-    delete pendingActions.value[download.id]
-  }
-}
-
-const statusBadge: Record<DownloadItem['status'], { color: BadgeProps['color'], label: string }> = {
-  downloading: { color: 'primary', label: 'Downloading' },
-  import_queued: { color: 'warning', label: 'Import queued' },
-  imported: { color: 'success', label: 'Imported' },
-  failed: { color: 'error', label: 'Failed' },
-}
-
-// Filter chips double as the at-a-glance status breakdown; counts come straight
-// from the loaded list so they stay in sync with whatever's on screen.
-const filter = ref<StatusFilter>('all')
-const counts = computed(() => {
-  const all = data.value?.downloads ?? []
-  return {
-    all: all.length,
-    downloading: all.filter(d => d.status === 'downloading').length,
-    import_queued: all.filter(d => d.status === 'import_queued').length,
-    imported: all.filter(d => d.status === 'imported').length,
-    failed: all.filter(d => d.status === 'failed').length,
-  }
+// The chip in force lives in the address (`?status=failed`), so the Dashboard can
+// link straight to it and Back returns to it. Active is the default and has no query.
+const filter = ref<DownloadFilter>(parseDownloadFilter(route.query.status) ?? 'active')
+watch(() => route.query.status, (status) => {
+  filter.value = parseDownloadFilter(status) ?? 'active'
 })
-const chips = computed<{ key: StatusFilter, label: string, color: BadgeProps['color'] }[]>(() => [
-  { key: 'all', label: 'All', color: 'neutral' },
+function setFilter(next: DownloadFilter) {
+  filter.value = next
+  const status = next === 'active' ? undefined : next
+  if (route.query.status !== status)
+    void router.replace({ query: { ...route.query, status } })
+}
+
+const downloads = computed(() => data.value?.downloads ?? [])
+const counts = computed(() => Object.fromEntries(DOWNLOAD_FILTERS.map(f =>
+  [f, downloads.value.filter(d => matchesDownloadFilter(d, f)).length])) as Record<DownloadFilter, number>)
+
+const CHIPS: Array<{ key: DownloadFilter, label: string, color: BadgeProps['color'] }> = [
+  { key: 'active', label: 'Active', color: 'primary' },
   { key: 'downloading', label: 'Downloading', color: 'primary' },
   { key: 'import_queued', label: 'Import queued', color: 'warning' },
-  { key: 'imported', label: 'Imported', color: 'success' },
   { key: 'failed', label: 'Failed', color: 'error' },
-])
-const filtered = computed(() => {
-  const all = data.value?.downloads ?? []
-  return filter.value === 'all' ? all : all.filter(d => d.status === filter.value)
-})
+  { key: 'cancelled', label: 'Cancelled', color: 'neutral' },
+  { key: 'imported', label: 'Imported', color: 'success' },
+  { key: 'all', label: 'All', color: 'neutral' },
+]
+// Cancelled shows up only when there is something to show, or it was asked for.
+const chips = computed(() => CHIPS.filter(chip => chip.key !== 'cancelled' || counts.value.cancelled > 0 || filter.value === 'cancelled'))
+
+const EMPTY_FILTER: Record<DownloadFilter, string> = {
+  active: 'Nothing is downloading, waiting for import or failed.',
+  downloading: 'Nothing is downloading.',
+  import_queued: 'Nothing is waiting for Radarr/Sonarr to import it.',
+  failed: 'No failed downloads.',
+  cancelled: 'No cancelled downloads.',
+  imported: 'Nothing imported yet.',
+  all: 'No downloads.',
+}
+
+const filtered = computed(() => downloads.value.filter(d => matchesDownloadFilter(d, filter.value)))
 
 // Client-side pagination: just slice the filtered list. No server round-trips.
 const PAGE_SIZE = 10
@@ -133,7 +102,166 @@ watch(pageCount, (count) => {
     page.value = count
 })
 
-const columns: TableColumn<DownloadItem>[] = [
+// ── Speed and time left ─────────────────────────────────────────────────────
+
+// Live traffic's snapshot carries speed and time left per transfer. Its stream sends
+// one every second while anything moves, so it is open only while this page shows a
+// running download.
+const transfers = ref<ActivityTransfersSnapshot | null>(null)
+const showsRunning = computed(() => paged.value.some(d => d.status === 'downloading'))
+let stopTransfers: (() => void) | undefined
+function followTransfers(on: boolean) {
+  if (on && !stopTransfers) {
+    stopTransfers = subscribeManagementStream<ActivityTransfersSnapshot>('transfers/stream', {
+      onSnapshot: (snapshot) => {
+        transfers.value = snapshot
+      },
+    }, async () => {
+      await request('ping')
+    })
+  }
+  else if (!on && stopTransfers) {
+    stopTransfers()
+    stopTransfers = undefined
+    transfers.value = null
+  }
+}
+watch(showsRunning, followTransfers)
+onMounted(() => followTransfers(showsRunning.value))
+onBeforeUnmount(() => followTransfers(false))
+
+const transferByDownload = computed(() => {
+  const map = new Map<number, ActivityTransfer>()
+  for (const transfer of transfers.value?.transfers ?? []) {
+    if (transfer.direction === 'download' && transfer.downloadId != null)
+      map.set(transfer.downloadId, transfer)
+  }
+  return map
+})
+const downloadsPaused = computed(() => transfers.value?.paused?.downloads.paused ?? false)
+
+function stateOf(download: ActivityDownload): DownloadState {
+  return downloadState(download, { downloadsPaused: downloadsPaused.value })
+}
+
+// "12.0 MB/s · 4m 10s left" for a download that is moving right now.
+function speedLine(download: ActivityDownload): string | null {
+  const transfer = download.status === 'downloading' ? transferByDownload.value.get(download.id) : undefined
+  if (!transfer)
+    return null
+  return transfer.etaSeconds == null
+    ? formatRate(transfer.bytesPerSecond)
+    : `${formatRate(transfer.bytesPerSecond)} · ${formatEta(transfer.etaSeconds)} left`
+}
+
+const NOTE_CLASS: Record<DownloadState['noteTone'], string> = {
+  error: 'text-error',
+  warning: 'text-warning',
+  muted: 'text-muted',
+}
+
+// ── Actions ─────────────────────────────────────────────────────────────────
+
+const pendingActions = ref<Record<number, DownloadAction | undefined>>({})
+
+const ACTION_COPY: Record<DownloadAction, { done: string, verb: string }> = {
+  cancel: { done: 'Download cancelled', verb: 'cancel' },
+  retry: { done: 'Retrying the download', verb: 'retry' },
+  delete: { done: 'Download removed', verb: 'remove' },
+}
+
+async function runAction(download: ActivityDownload, action: DownloadAction) {
+  if (pendingActions.value[download.id])
+    return
+  pendingActions.value[download.id] = action
+  try {
+    if (action === 'delete')
+      await request<{ ok: true }>(`downloads/${download.id}`, { method: 'DELETE' })
+    else
+      await request<{ download: ActivityDownload }>(`downloads/${download.id}/${action}`, { method: 'POST' })
+    toast.add({
+      title: ACTION_COPY[action].done,
+      description: action === 'cancel' ? 'Retry continues from the partial file.' : undefined,
+      color: 'success',
+    })
+    await refresh()
+  }
+  catch (actionError) {
+    toast.add({
+      title: `Could not ${ACTION_COPY[action].verb} the download`,
+      description: extractError(actionError),
+      color: 'error',
+    })
+  }
+  finally {
+    delete pendingActions.value[download.id]
+  }
+}
+
+// Cancel and Remove ask first, in the app's own dialog.
+const confirming = ref<{ download: ActivityDownload, action: 'cancel' | 'delete' } | null>(null)
+const CONFIRM_COPY = {
+  cancel: {
+    title: 'Cancel this download?',
+    body: 'The partial file is kept so you can retry it later.',
+    keep: 'Keep downloading',
+    confirm: 'Cancel download',
+  },
+  delete: {
+    title: 'Remove this download?',
+    body: 'jack removes it from this list and deletes its own copy of the file, partial or finished. Anything Radarr/Sonarr already imported stays in your library.',
+    keep: 'Keep',
+    confirm: 'Remove',
+  },
+} as const
+
+function onAction(download: ActivityDownload, action: DownloadAction) {
+  if (action === 'retry')
+    void runAction(download, action)
+  else
+    confirming.value = { download, action }
+}
+
+function confirmAction() {
+  const target = confirming.value
+  confirming.value = null
+  if (target)
+    void runAction(target.download, target.action)
+}
+
+// "Retry all failed" goes through the failures Retry can start, one at a time.
+const retryable = computed(() => retryableFailures(downloads.value))
+const showRetryAll = computed(() => (filter.value === 'failed' || filter.value === 'active') && retryable.value.length > 0)
+const retryingAll = ref(false)
+async function retryAllFailed() {
+  const rows = retryable.value.filter(d => !pendingActions.value[d.id])
+  if (retryingAll.value || rows.length === 0)
+    return
+  retryingAll.value = true
+  let started = 0
+  let firstError: string | null = null
+  for (const download of rows) {
+    pendingActions.value[download.id] = 'retry'
+    try {
+      await request(`downloads/${download.id}/retry`, { method: 'POST' })
+      started++
+    }
+    catch (err) {
+      firstError ??= extractError(err)
+    }
+    finally {
+      delete pendingActions.value[download.id]
+    }
+  }
+  retryingAll.value = false
+  if (firstError === null)
+    toast.add({ title: started === 1 ? 'Retrying 1 download' : `Retrying ${started} downloads`, color: 'success' })
+  else
+    toast.add({ title: `Retried ${started} of ${rows.length} downloads`, description: firstError, color: 'warning' })
+  await refresh()
+}
+
+const columns: TableColumn<ActivityDownload>[] = [
   { accessorKey: 'filename', header: 'File' },
   { accessorKey: 'peerName', header: 'From' },
   { accessorKey: 'status', header: 'Status' },
@@ -193,21 +321,32 @@ const columns: TableColumn<DownloadItem>[] = [
       </UCard>
 
       <div v-else-if="data" class="space-y-4">
-        <!-- Status filter / breakdown -->
-        <div class="flex flex-wrap gap-2">
+        <!-- Status filter / breakdown. Wraps on a phone. -->
+        <div class="flex flex-wrap items-center gap-2">
           <UButton
             v-for="chip in chips"
             :key="chip.key"
             :color="chip.color"
             :variant="filter === chip.key ? 'subtle' : 'ghost'"
             size="sm"
-            @click="() => { filter = chip.key }"
+            :aria-pressed="filter === chip.key"
+            @click="setFilter(chip.key)"
           >
             {{ chip.label }}
             <UBadge :color="chip.color" :variant="filter === chip.key ? 'solid' : 'soft'" size="sm">
               {{ counts[chip.key] }}
             </UBadge>
           </UButton>
+          <UButton
+            v-if="showRetryAll"
+            :label="`Retry all failed (${retryable.length})`"
+            icon="i-ph-arrow-clockwise"
+            size="sm"
+            variant="soft"
+            class="sm:ml-auto"
+            :loading="retryingAll"
+            @click="retryAllFailed"
+          />
         </div>
 
         <!-- Desktop: the full table. -->
@@ -217,8 +356,13 @@ const columns: TableColumn<DownloadItem>[] = [
               <p class="font-medium text-default" :title="row.original.filename">
                 {{ row.original.filename }}
               </p>
-              <p v-if="row.original.error" class="text-xs text-error" :title="row.original.error">
-                {{ row.original.error }}
+              <p
+                v-if="stateOf(row.original).note"
+                class="text-xs break-words"
+                :class="NOTE_CLASS[stateOf(row.original).noteTone]"
+                :title="row.original.error ?? undefined"
+              >
+                {{ stateOf(row.original).note }}
               </p>
               <p v-else-if="row.original.expectedBytesMismatch" class="text-xs text-warning">
                 size mismatch
@@ -230,12 +374,15 @@ const columns: TableColumn<DownloadItem>[] = [
             </template>
 
             <template #status-cell="{ row }">
-              <UBadge v-bind="statusBadge[row.original.status]" variant="subtle" />
+              <UBadge :color="stateOf(row.original).color" :label="stateOf(row.original).label" variant="subtle" />
             </template>
 
             <template #progress-cell="{ row }">
               <div class="w-44">
                 <ProgressBar :value="row.original.progress" />
+                <p v-if="speedLine(row.original)" class="mt-1 text-xs tabular-nums text-muted">
+                  {{ speedLine(row.original) }}
+                </p>
               </div>
             </template>
 
@@ -253,13 +400,14 @@ const columns: TableColumn<DownloadItem>[] = [
               <DownloadActions
                 :download="row.original"
                 :pending="pendingActions[row.original.id]"
-                @action="runAction(row.original, $event)"
+                @action="onAction(row.original, $event)"
               />
             </template>
 
             <template #empty>
-              <div class="py-6 text-center text-sm text-muted">
-                No {{ statusBadge[filter as DownloadItem['status']].label.toLowerCase() }} downloads.
+              <div class="flex flex-col items-center gap-2 py-6 text-center text-sm text-muted">
+                {{ EMPTY_FILTER[filter] }}
+                <UButton v-if="filter !== 'all'" label="Show all" color="neutral" variant="link" size="sm" @click="setFilter('all')" />
               </div>
             </template>
           </UTable>
@@ -269,40 +417,45 @@ const columns: TableColumn<DownloadItem>[] = [
         <div class="space-y-2 lg:hidden">
           <UCard v-for="d in paged" :key="d.id" variant="subtle" :ui="{ body: 'p-3' }">
             <div class="space-y-2.5">
-              <div class="flex items-start justify-between gap-3">
-                <div class="min-w-0">
-                  <p class="font-medium break-words text-default" :title="d.filename">
-                    {{ d.filename }}
-                  </p>
-                  <p v-if="d.error" class="mt-0.5 text-xs text-error">
-                    {{ d.error }}
-                  </p>
-                  <p v-else-if="d.expectedBytesMismatch" class="mt-0.5 text-xs text-warning">
-                    size mismatch
-                  </p>
+              <div class="min-w-0 space-y-1.5">
+                <p class="font-medium break-words text-default" :title="d.filename">
+                  {{ d.filename }}
+                </p>
+                <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+                  <UBadge :color="stateOf(d).color" :label="stateOf(d).label" variant="subtle" />
+                  <span class="min-w-0 truncate">from {{ d.peerName }}</span>
                 </div>
-                <UBadge v-bind="statusBadge[d.status]" variant="subtle" class="shrink-0" />
+                <p v-if="stateOf(d).note" class="text-xs break-words" :class="NOTE_CLASS[stateOf(d).noteTone]">
+                  {{ stateOf(d).note }}
+                </p>
+                <p v-else-if="d.expectedBytesMismatch" class="text-xs text-warning">
+                  size mismatch
+                </p>
               </div>
               <ProgressBar :value="d.progress" />
-              <div class="flex items-center justify-between gap-2 text-xs text-muted">
-                <span class="truncate">{{ d.peerName }}</span>
-                <span class="shrink-0 tabular-nums">{{ formatBytes(d.totalBytes) }} · {{ formatAgo(d.updatedAt) }} ago</span>
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <span class="min-w-0 text-xs tabular-nums text-muted">
+                  {{ formatBytes(d.totalBytes) }} · {{ speedLine(d) ?? `${formatAgo(d.updatedAt)} ago` }}
+                </span>
+                <DownloadActions
+                  class="ml-auto"
+                  :download="d"
+                  :pending="pendingActions[d.id]"
+                  labelled
+                  @action="onAction(d, $event)"
+                />
               </div>
-              <DownloadActions
-                :download="d"
-                :pending="pendingActions[d.id]"
-                @action="runAction(d, $event)"
-              />
             </div>
           </UCard>
 
-          <p v-if="paged.length === 0" class="py-6 text-center text-sm text-muted">
-            No {{ statusBadge[filter as DownloadItem['status']].label.toLowerCase() }} downloads.
-          </p>
+          <div v-if="paged.length === 0" class="flex flex-col items-center gap-2 py-6 text-center text-sm text-muted">
+            {{ EMPTY_FILTER[filter] }}
+            <UButton v-if="filter !== 'all'" label="Show all" color="neutral" variant="link" size="sm" @click="setFilter('all')" />
+          </div>
         </div>
 
         <!-- Pagination shared by both layouts. -->
-        <div v-if="total > 0" class="flex items-center justify-between gap-4">
+        <div v-if="total > 0" class="flex flex-wrap items-center justify-between gap-4">
           <p class="text-xs tabular-nums text-muted">
             Showing {{ showingFrom }}–{{ showingTo }} of {{ total }}
           </p>
@@ -318,4 +471,35 @@ const columns: TableColumn<DownloadItem>[] = [
       </div>
     </template>
   </UDashboardPanel>
+
+  <UModal
+    :open="confirming !== null"
+    :title="confirming ? CONFIRM_COPY[confirming.action].title : ''"
+    :ui="{ footer: 'justify-end' }"
+    @update:open="(open: boolean) => { if (!open) confirming = null }"
+  >
+    <template #body>
+      <div v-if="confirming" class="space-y-2">
+        <p class="text-sm font-medium break-words text-default">
+          {{ confirming.download.filename }}
+        </p>
+        <p class="text-sm text-muted">
+          {{ CONFIRM_COPY[confirming.action].body }}
+        </p>
+      </div>
+    </template>
+    <template #footer>
+      <UButton
+        :label="confirming ? CONFIRM_COPY[confirming.action].keep : 'Keep'"
+        color="neutral"
+        variant="ghost"
+        @click="confirming = null"
+      />
+      <UButton
+        :label="confirming ? CONFIRM_COPY[confirming.action].confirm : 'Confirm'"
+        color="error"
+        @click="confirmAction"
+      />
+    </template>
+  </UModal>
 </template>

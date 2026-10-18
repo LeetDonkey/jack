@@ -118,8 +118,9 @@ failed import keeps its file, and so does a file another download still needs.
 jack removes that one file and nothing else; it never touches your library.
 
 Turn on ***Remove jack's copy after Radarr/Sonarr import it*** under
-***Settings -> Downloads*** in the [management UI](/guide/management-ui), or
-set it in `config.jsonc`. Saved from the UI, it applies without a restart.
+***Settings -> Radarr & Sonarr -> Downloads*** in the
+[management UI](/guide/management-ui), or set it in `config.jsonc`. Saved from
+the UI, it applies without a restart.
 
 ## 3. Serving as a peer to others
 

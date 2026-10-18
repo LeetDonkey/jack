@@ -260,6 +260,14 @@ const summary = computed(() => {
                 @click="toggleLive"
               />
               <UButton icon="i-ph-trash" label="Clear" color="neutral" variant="ghost" size="sm" @click="clear" />
+              <!-- Icon only until md, so the navbar fits from sm up. -->
+              <SupportInfoButton
+                variant="ghost"
+                size="sm"
+                aria-label="Copy support info"
+                title="Copy support info"
+                :ui="{ label: 'hidden md:inline' }"
+              />
             </div>
           </div>
         </template>
@@ -270,7 +278,7 @@ const summary = computed(() => {
       <div class="flex h-full flex-col gap-3">
         <!-- Filter bar -->
         <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <div class="flex w-full items-center gap-2 sm:hidden">
+          <div class="flex w-full flex-wrap items-center gap-2 sm:hidden">
             <USelect v-model="level" :items="levelItems" size="sm" class="w-36" aria-label="Minimum log level" />
             <UButton
               class="ms-auto"
@@ -282,6 +290,8 @@ const summary = computed(() => {
               @click="toggleLive"
             />
             <UButton icon="i-ph-trash" label="Clear" color="neutral" variant="ghost" size="sm" @click="clear" />
+            <!-- Wraps to a line of its own when the row is full. -->
+            <SupportInfoButton variant="ghost" size="sm" />
           </div>
           <UInput
             v-model="query"
