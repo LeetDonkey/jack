@@ -3,6 +3,7 @@ import type { ArrServerConnector } from '../../lib/servers/arr/base'
 import type { ServerConnector } from '../../lib/servers/base'
 import type { PeerConnector } from '../../lib/servers/peer'
 import type { DownloadRecord, DownloadsRepository } from '../downloads/downloads.repository'
+import type { PeerHealth, PeerHealthMonitor } from '../friends/peer-health'
 import type { RegistrationStatus } from '../registration/registration.service'
 import type { RestartReason } from './restart-pending'
 import { DOWNLOAD_STATUSES } from '../../database/schema'
@@ -20,7 +21,14 @@ export interface StatusExtras {
   system?: () => SystemStatus
   /** More change feeds the overview stream follows (e.g. config saves, for restartPending). */
   subscriptions?: Array<(subscriber: () => void) => () => void>
+  /** Each peer's last health check; the overview stream follows its checks. */
+  health?: Pick<PeerHealthMonitor, 'get' | 'subscribe'>
 }
+
+/** A peer's health as the overview shows it. */
+export type OverviewPeerHealth = Pick<PeerHealth, 'online' | 'offlineSince' | 'lastSeenAt' | 'lastError' | 'lastErrorCode' | 'checkedAt'>
+
+const UNCHECKED: OverviewPeerHealth = { online: null, offlineSince: null, lastSeenAt: null, lastError: null, lastErrorCode: null, checkedAt: null }
 
 // The management surface can expose richer detail than the public API: every
 // connector here carries its URL-derived `id` (the management UI keys edit/delete
@@ -66,6 +74,7 @@ export class StatusController {
       this.connectors.subscribe?.(subscriber),
       this.downloads?.subscribe(subscriber),
       this.extras.registrations?.subscribe(subscriber),
+      this.extras.health?.subscribe(subscriber),
       ...(this.extras.subscriptions ?? []).map(subscribe => subscribe(subscriber)),
     ].filter((unsubscribe): unsubscribe is () => void => Boolean(unsubscribe))
     return () => {
@@ -81,6 +90,13 @@ export class StatusController {
   /** Whether download-backed endpoints are available (a repository was injected). */
   get hasDownloads() {
     return this.downloads !== undefined
+  }
+
+  private peerHealth(peer: PeerConnector): OverviewPeerHealth {
+    if (!this.extras.health)
+      return UNCHECKED
+    const { online, offlineSince, lastSeenAt, lastError, lastErrorCode, checkedAt } = this.extras.health.get(peer)
+    return { online, offlineSince, lastSeenAt, lastError, lastErrorCode, checkedAt }
   }
 
   getOverview() {
@@ -102,11 +118,15 @@ export class StatusController {
         mismatched++
     }
 
+    const peerItems = peers.map(p => ({ ...baseConnector(p), version: p.peerVersion, health: this.peerHealth(p) }))
+
     return {
       peers: {
         total: peers.length,
         initialized: peers.filter(p => p.isInitialized).length,
-        items: peers.map(p => ({ ...baseConnector(p), version: p.peerVersion })),
+        // From the health checks: the peers whose last check passed.
+        online: peerItems.filter(p => p.health.online === true).length,
+        items: peerItems,
       },
       servers: {
         total: servers.length,

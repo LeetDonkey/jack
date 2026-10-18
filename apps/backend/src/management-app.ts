@@ -1,4 +1,5 @@
 import type { ConnectorManager } from './lib/servers'
+import type { ApiKeyMeta } from './modules/api-keys/api-key-meta'
 import type { ApiKeysRepository } from './modules/api-keys/api-keys.repository'
 import type { ConfigService } from './modules/config/config.service'
 import type { DownloadsRepository } from './modules/downloads/downloads.repository'
@@ -51,6 +52,8 @@ export function getManagementApp(params: {
   importWatcher?: ImportWatcher
   transfersService?: TransfersService
   apiKeysRepository?: ApiKeysRepository
+  /** Last use and peer links of API keys (fork table api_key_meta). */
+  apiKeyMeta?: ApiKeyMeta
   tmdbApiKey?: string
   peerHealth?: PeerHealthMonitor
   notifications?: NotificationsService
@@ -94,6 +97,7 @@ export function getManagementApp(params: {
   const statusController = new StatusController(params.connectors, params.downloadsRepository, {
     registrations: params.registrations,
     system: params.system,
+    health: params.peerHealth,
     // restartPending changes with every config save.
     subscriptions: configService ? [subscriber => configService.subscribe(subscriber)] : [],
   })
@@ -118,6 +122,8 @@ export function getManagementApp(params: {
       ledger: params.transfersService?.ledger,
       monitor: params.transfersService?.monitor,
       apiKeys: params.apiKeysRepository,
+      keyMeta: params.apiKeyMeta,
+      identities: params.introductions,
       bandwidth: () => params.configService?.getBandwidth(),
     }))
   }
@@ -136,7 +142,11 @@ export function getManagementApp(params: {
   app.route('/catalog', getCatalogRouter(catalogController))
 
   if (params.apiKeysRepository) {
-    const apiKeysController = new ApiKeysController(params.apiKeysRepository)
+    const apiKeysController = new ApiKeysController(params.apiKeysRepository, {
+      meta: params.apiKeyMeta,
+      bindings: params.introductions,
+      peerExists: id => params.connectors.peers.some(p => p.id === id),
+    })
     app.route('/api-keys', getApiKeysRouter(apiKeysController))
 
     if (params.configService)

@@ -6,16 +6,18 @@ import { DownloadsConfig, getAppConfig, SecurityConfig, TorznabConfig } from './
 import { getAppEnvs } from './lib/envs'
 import { startPublicServer } from './lib/public-server'
 import { ConnectorManager } from './lib/servers'
+import { generateId } from './lib/servers/base'
 import { PROTOCOL_VERSION } from './lib/version'
 import { logger } from './logger'
 import { getManagementApp } from './management-app'
+import { ApiKeyMeta } from './modules/api-keys/api-key-meta'
 import { ApiKeysController } from './modules/api-keys/api-keys.controller'
 import { ApiKeysRepository } from './modules/api-keys/api-keys.repository'
 import { ConfigService } from './modules/config/config.service'
 import { DownloadsRepository } from './modules/downloads/downloads.repository'
 import { DownloadsService } from './modules/downloads/downloads.service'
 import { ImportWatcher } from './modules/downloads/import-watcher'
-import { PeerHealthMonitor } from './modules/friends/peer-health'
+import { PeerHealthMonitor, peerHealthNotification } from './modules/friends/peer-health'
 import { IntroStore } from './modules/introductions/intro-store'
 import { IntroductionsService } from './modules/introductions/introductions.service'
 import { ManagedKeysRepository } from './modules/managed-keys/managed-keys.repository'
@@ -45,6 +47,8 @@ await connectorManager.initAll()
 const database = await openDatabase({ appConfigPath: envs.APP_CONFIG_PATH })
 const downloadsRepository = new DownloadsRepository(database.db)
 const apiKeysRepository = new ApiKeysRepository(database.db)
+// Last use and peer link per API key, for the friends view (fork table).
+const apiKeyMeta = new ApiKeyMeta(database.sqlite)
 const managedKeysRepository = new ManagedKeysRepository(database.db)
 
 // Seed the management service from the shared raw object returned by getAppConfig
@@ -111,7 +115,7 @@ const bans = new BanList(database.sqlite, securityConfig)
 
 // Meeting friends of friends. Needs the management API's config service, since
 // accepting adds a peer to the config file.
-const apiKeysController = new ApiKeysController(apiKeysRepository)
+const apiKeysController = new ApiKeysController(apiKeysRepository, { meta: apiKeyMeta })
 const introductions = configService
   ? new IntroductionsService({
       store: new IntroStore(database.sqlite),
@@ -126,11 +130,13 @@ const introductions = configService
       },
       peers: () => connectorManager.peers,
       issueKey: (name, description) => {
-        const created = apiKeysController.create({ name, description })
+        const created = apiKeysController.create({ name, description }, { origin: 'introduction' })
         return { id: created.id, key: created.key }
       },
       apiKeyName: id => apiKeysRepository.get(id)?.name ?? null,
       addPeer: peer => configService.addPeer(peer, { force: true }),
+      linkKey: (apiKeyId, peerUrl) => apiKeyMeta.setPeer(apiKeyId, generateId(peerUrl)),
+      keyPeerId: apiKeyId => apiKeyMeta.get(apiKeyId).peerId,
     })
   : undefined
 introductions?.start()
@@ -147,6 +153,7 @@ const app = getApp(envs, config, connectorManager, {
   trustedProxies: () => securityConfig().trustedProxies,
   internalUrl: currentInternalUrl,
   onArrContact: id => registrations.recordContact(id),
+  onPeerKeyUsed: id => apiKeyMeta.touch(id),
 })
 // Public server on node:http (see startPublicServer for why).
 const server = startPublicServer(app.fetch, envs.PORT)
@@ -186,10 +193,7 @@ const peerHealth = new PeerHealthMonitor(
   () => (notificationsConfig()?.peerOfflineMinutes ?? 60) * 60_000,
 )
 peerHealth.onEvent((event) => {
-  const { name } = event.peer
-  void notifications.send(event.type === 'offline'
-    ? { event: 'peer-offline', title: `${name} is offline`, message: `jack hasn't reached ${name} for ${event.offlineMinutes} minutes. Downloads from them wait and retry.${event.peer.lastError ? `\nLast error: ${event.peer.lastError}` : ''}` }
-    : { event: 'peer-back', title: `${name} is back`, message: `${name} answers again after ${event.offlineMinutes} minutes offline.` })
+  void notifications.send(peerHealthNotification(event))
 })
 downloadsService?.onDownloadFailed((record, error) => {
   void notifications.send({ event: 'download-failed', title: `Download failed: ${record.filename}`, message: `From ${record.peerName}: ${error}` })
@@ -199,6 +203,19 @@ notifications.startDailySummary(() => buildDailySummary(
   downloadsRepository.list(),
   new Date(),
 ))
+// A saved peer is checked at once, so its status is current without waiting for
+// the next 5-minute round. Keys linked to it and the identity it reported follow
+// a changed url (new id); a removed peer's identity is forgotten.
+configService?.onPeerSaved((id, previousId) => {
+  if (previousId && previousId !== id) {
+    apiKeyMeta.reassignPeer(previousId, id)
+    introductions?.movePeer(previousId, id)
+  }
+  const peer = connectorManager.peers.find(p => p.id === id)
+  if (peer)
+    void peerHealth.check(peer)
+})
+configService?.onPeerRemoved(id => introductions?.forgetPeer(id))
 bans.onBan((ban) => {
   void notifications.send({ event: 'ip-banned', title: `Banned ${ban.ip}`, message: `${ban.failures} failed attempts on the public port (last: ${ban.reason}). Banned until ${new Date(ban.bannedUntil).toLocaleString('en-GB')}. Lift it under Settings -> Security.` })
 })
@@ -223,6 +240,7 @@ function startManagementServer() {
     importWatcher,
     transfersService,
     apiKeysRepository,
+    apiKeyMeta,
     tmdbApiKey: config.jack.tmdbApiKey,
     peerHealth,
     notifications,

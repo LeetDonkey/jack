@@ -52,6 +52,8 @@ interface AppServices {
   internalUrl?: () => string
   /** Called with the destination id whenever its Radarr/Sonarr authenticates (Torznab or qBittorrent). */
   onArrContact?: (destinationId: string) => void
+  /** Called with the api_key id whenever a friend's jack authenticates with it (/handshake, /peer/*). */
+  onPeerKeyUsed?: (apiKeyId: number) => void
 }
 
 // This is the external surface, gated per audience rather than by one global key:
@@ -114,7 +116,7 @@ export function getApp(envs: Envs, config: AppConfig, connManager: { servers: Co
   const masterKey = config.jack.apiKey ?? ''
   // Peer scope: other Jacks present regular api_keys. *arr scope: the operator's
   // Radarr/Sonarr present the managed key Jack registered with them.
-  const peerAuth = requireApiKey(masterKey, { type: 'api_key', repository: services.apiKeysRepository })
+  const peerAuth = requireApiKey(masterKey, { type: 'api_key', repository: services.apiKeysRepository, onAuthenticated: services.onPeerKeyUsed })
   const arrAuth = requireApiKey(masterKey, { type: 'managed_key', repository: services.managedKeysRepository, onAuthenticated: services.onArrContact })
 
   // Peer handshake — other Jacks probe this at init to read our identity and

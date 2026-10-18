@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { Hono } from 'hono'
+import { HTTPException } from 'hono/http-exception'
 import { FetchError } from '../lib/errors/FetchError'
 import { UnauthorizedError } from '../lib/errors/UnauthorizedError'
 import { handleError } from '../middleware/handle-error'
@@ -77,6 +78,29 @@ describe('handleError', () => {
         expect(body).toContain('<error code="100"')
         expect(body).toContain('description="Unauthorized: invalid API key"')
       }
+    })
+  })
+
+  describe('Hono HTTP exceptions', () => {
+    function httpExceptionApp(options?: { exposeDetails?: boolean }) {
+      const app = new Hono()
+      app.post('/body', () => {
+        throw new HTTPException(400, { message: 'Malformed JSON in request body' })
+      })
+      app.onError(handleError('test', options))
+      return app
+    }
+
+    test('keep their status, with an opaque body on the peer-facing side', async () => {
+      const res = await httpExceptionApp().request('/body', { method: 'POST' })
+      expect(res.status).toBe(400)
+      expect(await res.json()).toEqual({ ok: false, error: { code: 'HTTP_ERROR', message: 'Bad request' } })
+    })
+
+    test('a 400 answers in the validation format on the management side', async () => {
+      const res = await httpExceptionApp({ exposeDetails: true }).request('/body', { method: 'POST' })
+      expect(res.status).toBe(400)
+      expect((await res.json() as any).error).toEqual({ code: 'VALIDATION_ERROR', message: 'Malformed JSON in request body', field: null, issues: [{ field: null, message: 'Malformed JSON in request body' }] })
     })
   })
 

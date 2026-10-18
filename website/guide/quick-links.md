@@ -127,3 +127,15 @@ To generate a link outside the UI, call
 management API. A missing external profile, or one
 with a secret reference that cannot be resolved, fails the request before any
 key is issued, so a broken profile leaves no orphaned credential.
+
+Two optional body fields tie the new key to a friend:
+
+- **`peerId`**: the peer you download from that friend. The friends view then
+  shows the peer and the key as one friend.
+- **`replaceKeyId`**: an earlier key for the same friend. jack revokes it when
+  no jack ever used it and no jack identity is bound to it. Otherwise the old
+  key stays, and `replaced.keptBecause` says why:
+  - `used`: a jack used it.
+  - `bound`: a jack identity is bound to it.
+  - `unknown`: it is older than jack's record of key use and wasn't used
+    since, so a jack may still rely on it.

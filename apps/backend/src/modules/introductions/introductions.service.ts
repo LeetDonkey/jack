@@ -28,6 +28,10 @@ export interface IntroductionsDeps {
   issueKey: (name: string, description: string) => { id: number, key: string }
   apiKeyName: (id: number) => string | null
   addPeer: (peer: { name: string, url: string, apiKey: string, headers: Record<string, string> }) => Promise<void>
+  /** Link the key we issued to the peer an introduction added: both are the same friend. */
+  linkKey?: (apiKeyId: number, peerUrl: string) => void
+  /** The peer id a key is explicitly linked to, or null. */
+  keyPeerId?: (apiKeyId: number) => string | null
   now?: () => Date
 }
 
@@ -41,7 +45,8 @@ export interface DirectoryPerson {
 export interface IntroductionsOverview {
   me: { id: string, name: string | null, discoverable: boolean, introduce: boolean, ready: boolean, missing: string[] }
   people: DirectoryPerson[]
-  threads: Array<IntroThread & { safetyCode: string }>
+  /** `ended`: a connected thread whose person is no longer one of your peers (removed since); you can ask to connect again. */
+  threads: Array<IntroThread & { safetyCode: string, ended: boolean }>
 }
 
 const PROFILE_TTL_MS = 10 * 60_000
@@ -86,6 +91,8 @@ export class IntroductionsService {
   start(): void {
     if (this.timer)
       return
+    // At once too: the sync fills the peer identities the friends view links by.
+    void this.sync()
     this.timer = setInterval(() => void this.sync(), SYNC_INTERVAL_MS)
     ;(this.timer as { unref?: () => void }).unref?.()
   }
@@ -94,6 +101,91 @@ export class IntroductionsService {
     if (this.timer)
       clearInterval(this.timer)
     this.timer = undefined
+  }
+
+  // ── What the friends view links by ─────────────────────────────────────────
+
+  /**
+   * The identity a peer's jack reported: from the syncs' cache, else the last one
+   * stored, so a peer that is down (after a restart, say) keeps it. Null when it
+   * never reported one.
+   */
+  peerIdentity(peerId: string): string | null {
+    return this.profiles.get(peerId)?.profile?.id ?? this.storedIdentity(peerId)
+  }
+
+  /** A peer's url, and so its id, changed: keep what it reported under the new id. */
+  movePeer(oldPeerId: string, newPeerId: string): void {
+    this.profiles.delete(oldPeerId)
+    this.directories.delete(oldPeerId)
+    this.deps.store.movePeer(oldPeerId, newPeerId)
+  }
+
+  /** A peer was removed: forget what it reported. */
+  forgetPeer(peerId: string): void {
+    this.profiles.delete(peerId)
+    this.directories.delete(peerId)
+    this.deps.store.forgetPeer(peerId)
+  }
+
+  private storedIdentity(peerId: string): string | null {
+    try {
+      return this.deps.store.peerIdentity(peerId)
+    }
+    catch (err) {
+      logger.warn({ err, peerId }, 'Could not read a peer\'s stored identity')
+      return null
+    }
+  }
+
+  private storeIdentity(peerId: string, identityId: string | null): void {
+    try {
+      this.deps.store.setPeerIdentity(peerId, identityId)
+    }
+    catch (err) {
+      logger.warn({ err, peerId }, 'Could not store a peer\'s identity')
+    }
+  }
+
+  // The identities our current peers reported, including ones that are down now.
+  private knownIdentities(profiles: Array<{ peer: IntroPeer, profile: IntroProfile | null }>): Set<string> {
+    const ids = profiles.map(p => p.profile?.id ?? this.storedIdentity(p.peer.id))
+    return new Set(ids.filter((id): id is string => id != null))
+  }
+
+  /** Every API key a friend's jack used for introduction mail, with its identity. */
+  keyBindings(): Array<{ apiKeyId: number, identityId: string, boundAt: string }> {
+    return this.deps.store.bindings()
+  }
+
+  /** Called when a key is revoked: it no longer speaks for that identity. */
+  forgetKey(apiKeyId: number): void {
+    this.deps.store.unbind(apiKeyId)
+  }
+
+  // A connected thread counts as ended once its person is no longer one of our
+  // peers: no current peer reports (or last reported) that identity, and the key
+  // we issued in it isn't linked to a current peer either.
+  private endedThreads(profiles: Array<{ peer: IntroPeer, profile: IntroProfile | null }>): (thread: IntroThread) => boolean {
+    const identities = this.knownIdentities(profiles)
+    const peerIds = new Set(this.deps.peers().map(p => p.id))
+    return (thread) => {
+      if (thread.state !== 'connected' || identities.has(thread.peerId))
+        return false
+      const linkedPeer = thread.apiKeyId != null ? this.deps.keyPeerId?.(thread.apiKeyId) : null
+      return !(linkedPeer && peerIds.has(linkedPeer))
+    }
+  }
+
+  private linkKey(apiKeyId: number | null, peerUrl: string): void {
+    if (apiKeyId == null)
+      return
+    try {
+      this.deps.linkKey?.(apiKeyId, peerUrl)
+    }
+    catch (err) {
+      logger.warn({ err, apiKeyId }, 'Could not link an introduction key to its peer')
+    }
   }
 
   // ── What direct friends see ────────────────────────────────────────────────
@@ -167,7 +259,15 @@ export class IntroductionsService {
       const cached = this.profiles.get(peer.id)
       if (cached && now - cached.at < PROFILE_TTL_MS)
         return { peer, profile: cached.profile }
-      const profile = await peer.introProfile().catch(() => cached?.profile ?? null)
+      let profile: IntroProfile | null
+      try {
+        profile = await peer.introProfile()
+        // An answer, so the stored identity follows it (null: no introductions there).
+        this.storeIdentity(peer.id, profile?.id ?? null)
+      }
+      catch {
+        profile = cached?.profile ?? null
+      }
       this.profiles.set(peer.id, { at: now, profile })
       return { peer, profile }
     }))
@@ -297,9 +397,11 @@ export class IntroductionsService {
       // They accepted and sent their card; ours completes the exchange.
       const issued = this.issueCard(thread)
       store.updateThread(thread.requestId, { state: 'connected', apiKeyId: issued })
+      this.linkKey(issued, card.data.url)
     }
     else {
       store.updateThread(thread.requestId, { state: 'connected' })
+      this.linkKey(thread.apiKeyId, card.data.url)
     }
     logger.info({ peer: thread.peerName }, 'Connected with a friend of a friend')
     void this.sync()
@@ -344,7 +446,10 @@ export class IntroductionsService {
       ...(name ? [] : ['a public name']),
       ...(this.deps.external() ? [] : ['quick linking (your external URL)']),
     ]
-    const ownPeerIds = new Set((await this.peerProfiles()).map(p => p.profile?.id).filter(Boolean))
+    const profiles = await this.peerProfiles()
+    // People who already are our peers, also while they are down.
+    const ownPeerIds = this.knownIdentities(profiles)
+    const ended = this.endedThreads(profiles)
     const threads = this.deps.store.threads()
     const people = new Map<string, DirectoryPerson>()
     for (const { peer, directory } of await this.peerDirectories()) {
@@ -353,7 +458,7 @@ export class IntroductionsService {
           continue
         const entry = people.get(person.id) ?? { id: person.id, name: person.name, via: [], status: 'available' as const }
         entry.via.push({ peerId: peer.id, name: directory.introducer.name ?? peer.name ?? peer.url })
-        const thread = threads.find(t => t.peerId === person.id && t.state !== 'declined')
+        const thread = threads.find(t => t.peerId === person.id && t.state !== 'declined' && !ended(t))
         entry.status = thread?.state === 'connected' ? 'connected' : thread ? 'requested' : 'available'
         people.set(person.id, entry)
       }
@@ -361,7 +466,7 @@ export class IntroductionsService {
     return {
       me: { id: me.id, name, discoverable: Boolean(discovery?.discoverable), introduce: discovery?.introduce ?? true, ready: missing.length === 0, missing },
       people: [...people.values()].sort((a, b) => a.name.localeCompare(b.name)),
-      threads: threads.map(t => ({ ...t, safetyCode: safetyCode(me.publicKey, t.peerKey) })),
+      threads: threads.map(t => ({ ...t, safetyCode: safetyCode(me.publicKey, t.peerKey), ended: ended(t) })),
     }
   }
 
@@ -370,7 +475,8 @@ export class IntroductionsService {
     const store = this.deps.store
     if (store.threads().filter(t => t.direction === 'outgoing' && t.state === 'pending').length >= MAX_PENDING_OUTGOING)
       throw new ConflictError('Too many requests waiting for an answer')
-    if (store.threads().some(t => t.peerId === personId && t.state !== 'declined'))
+    const ended = this.endedThreads(await this.peerProfiles())
+    if (store.threads().some(t => t.peerId === personId && t.state !== 'declined' && !ended(t)))
       throw new ConflictError('You already have a request with this person')
     const entry = (await this.peerDirectories()).find(d => d.peer.id === viaPeerId)
     const person = entry?.directory.people.find(p => p.id === personId)

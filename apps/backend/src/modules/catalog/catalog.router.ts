@@ -1,7 +1,8 @@
 import type { CatalogController } from './catalog.controller'
 import { Hono } from 'hono'
-import { describeRoute, validator as zValidator } from 'hono-openapi'
+import { describeRoute } from 'hono-openapi'
 import { z } from 'zod'
+import { validator as zValidator } from '../../lib/validation'
 
 const tmdbParam = z.object({
   mediaType: z.enum(['movie', 'tv']),

@@ -327,8 +327,14 @@ a message to every webhook.
   retries and [`downloads.retryWindowMs`](#downloads-retrywindowms). Cancelling
   a download sends nothing.
 - **`peerOffline`** (default `true`) and **`peerOfflineMinutes`** (default
-  `60`, at least `5`): a peer that hasn't answered its handshake for that
-  long, and again when it is back. Peers are checked every 5 minutes.
+  `60`, at least `5`): a peer whose handshake has failed for that long, and
+  again when it is back. Peers are checked every 5 minutes. The title names
+  the cause:
+  - `<name> is offline`: jack can't reach the peer.
+  - `<name>'s jack rejected your key`: the peer answers 401.
+  - `<name>'s jack is blocking you`: the peer answers 403, for example after
+    a ban.
+  - `<name> needs a newer jack`: the peer runs a version jack can't talk to.
 - **`dailySummaryAt`**: `HH:MM` (server time) for a daily message with GB
   downloaded from and uploaded to each friend that day, and how many downloads
   finished, failed or are still running. Absent means no summary.

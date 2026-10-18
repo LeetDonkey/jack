@@ -4,6 +4,7 @@ import { Hono } from 'hono'
 import { describeRoute, validator as zValidator } from 'hono-openapi'
 import z from 'zod'
 import { IntroMailRequest } from '../../lib/introductions/wire'
+import { validator } from '../../lib/validation'
 
 type PeerSide = Pick<IntroductionsService, 'profile' | 'directoryFor' | 'handleMail'>
 type ManagementSide = Pick<IntroductionsService, 'overview' | 'request' | 'accept' | 'decline' | 'message' | 'sync'>
@@ -53,7 +54,7 @@ export function getIntroductionsRouter(service: ManagementSide) {
   app.get('/', describeRoute({
     tags: ['Introductions'],
     summary: 'Friends of friends and requests',
-    description: 'Your discovery status, the people your friends can introduce you to, and every request with its messages and safety code.',
+    description: 'Your discovery status, the people your friends can introduce you to, and every request with its messages and safety code. A request in state `connected` has `ended: true` once that person is no longer one of your peers (you removed them); they are then listed as `available` again and a new request is allowed.',
     responses: { 200: { description: 'Overview' } },
   }), async c => c.json(await service.overview()))
 
@@ -62,7 +63,7 @@ export function getIntroductionsRouter(service: ManagementSide) {
     summary: 'Ask to connect',
     description: 'Sends a request (with an optional message) to a person, through the friend who listed them. Nothing that locates you is sent.',
     responses: { 200: { description: 'The new request' } },
-  }), zValidator('json', z.object({ personId: z.uuid(), viaPeerId: z.string().min(1), message: Text.optional() })), async (c) => {
+  }), validator('json', z.object({ personId: z.uuid(), viaPeerId: z.string().min(1), message: Text.optional() })), async (c) => {
     const { personId, viaPeerId, message } = c.req.valid('json')
     return c.json(await service.request(personId, viaPeerId, message))
   })
@@ -73,20 +74,20 @@ export function getIntroductionsRouter(service: ManagementSide) {
     summary: 'Accept a request',
     description: 'Accepts, issues an API key for the other person and sends it with your external URL, encrypted for them alone.',
     responses: { 200: { description: 'The request' } },
-  }), zValidator('json', answer), async c => c.json(await service.accept(c.req.param('requestId'), c.req.valid('json').message)))
+  }), validator('json', answer), async c => c.json(await service.accept(c.req.param('requestId'), c.req.valid('json').message)))
 
   app.post('/requests/:requestId/decline', describeRoute({
     tags: ['Introductions'],
     summary: 'Decline a request',
     responses: { 200: { description: 'The request' } },
-  }), zValidator('json', answer), async c => c.json(await service.decline(c.req.param('requestId'), c.req.valid('json').message)))
+  }), validator('json', answer), async c => c.json(await service.decline(c.req.param('requestId'), c.req.valid('json').message)))
 
   app.post('/requests/:requestId/messages', describeRoute({
     tags: ['Introductions'],
     summary: 'Send a message',
     description: 'An end-to-end encrypted message to the other person, carried by your mutual friend.',
     responses: { 200: { description: 'The request' } },
-  }), zValidator('json', z.object({ text: Text })), async c => c.json(await service.message(c.req.param('requestId'), c.req.valid('json').text)))
+  }), validator('json', z.object({ text: Text })), async c => c.json(await service.message(c.req.param('requestId'), c.req.valid('json').text)))
 
   app.post('/sync', describeRoute({
     tags: ['Introductions'],

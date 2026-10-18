@@ -50,7 +50,7 @@ export const managementDocumentation: GenerateSpecOptions['documentation'] = {
   info: {
     title: 'jack management API',
     version: PROTOCOL_VERSION,
-    description: 'Operator-facing API on a separate listener from the public peer port. Drives the management UI: config, status, downloads, logs, catalog, and API keys.',
+    description: 'Operator-facing API on a separate listener from the public peer port. Drives the management UI: config, status, downloads, logs, catalog, and API keys. A request that fails validation answers 400 with `{ ok: false, error: { code: "VALIDATION_ERROR", message, field, issues } }`: `field` is the dotted path of the first offending field (null for the request as a whole), `message` describes it, and `issues` lists every problem as `{ field, message }`. Other errors answer `{ ok: false, error: { code, message } }`.',
   },
   servers: [
     { url: 'http://localhost:5226', description: 'Default local management port (MANAGEMENT_PORT)' },

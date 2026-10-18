@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { ServerType } from '../../lib/config'
+import { PEER_ERROR_CODES } from '../../lib/net/peer-errors'
 import { ServerRegistrationFieldsSchema } from '../registration/registration.schema'
 import { RESTART_REASONS } from './restart-pending'
 
@@ -21,11 +22,21 @@ export const SystemStatusSchema = z.object({
 
 const DownloadRow = z.record(z.string(), z.unknown())
 
+export const PeerHealthSchema = z.object({
+  online: z.boolean().nullable().describe('Whether the last health check (every 5 minutes, and right after the peer is saved) passed; null before the first check'),
+  offlineSince: z.string().nullable().describe('When the checks started failing (ISO 8601); null while online'),
+  lastSeenAt: z.string().nullable().describe('When a check last passed (ISO 8601)'),
+  lastError: z.string().nullable().describe('The last failed check\'s error message; null while online'),
+  lastErrorCode: z.enum(PEER_ERROR_CODES).nullable().describe('Why the last check failed; null while online'),
+  checkedAt: z.string().nullable().describe('When the last check ran (ISO 8601)'),
+})
+
 export const OverviewSchema = z.object({
   peers: z.object({
     total: z.number(),
-    initialized: z.number(),
-    items: z.array(ConnectorFields.extend({ type: z.literal('jack'), version: z.string().nullable() })),
+    initialized: z.number().describe('Peers whose connector connected since boot (it does not notice a peer that went down later; use `online`)'),
+    online: z.number().describe('Peers whose last health check passed'),
+    items: z.array(ConnectorFields.extend({ type: z.literal('jack'), version: z.string().nullable(), health: PeerHealthSchema })),
   }),
   servers: z.object({
     total: z.number(),

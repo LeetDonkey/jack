@@ -1,3 +1,4 @@
+import type { PeerErrorCode } from '../../lib/net/peer-errors'
 import type { ArrServerConnector } from '../../lib/servers/arr/base'
 import type { ServerConnector } from '../../lib/servers/base'
 import type { PeerConnector } from '../../lib/servers/peer'
@@ -5,7 +6,11 @@ import type { DestinationRegistration, RegistrationService, RegistrationStatus }
 import type { ConfigService } from './config.service'
 import { z } from 'zod'
 import { BadRequestError } from '../../lib/errors/BadRequestError'
+import { ConnectorInitializationError } from '../../lib/errors/ConnectorInitializationError'
 import { NotFoundError } from '../../lib/errors/NotFoundError'
+import { PeerConnectionError } from '../../lib/errors/PeerConnectionError'
+import { classifyPeerError, peerErrorStatus } from '../../lib/net/peer-errors'
+import { ValidationError } from '../../lib/validation'
 import { serverRegistrationFields } from '../registration/registration.service'
 
 // How long a save or a register request waits for the registration. The *arr's
@@ -19,6 +24,8 @@ const DEFAULT_REGISTRATION_WAIT_MS = 25_000
 export interface ConfigControllerOptions {
   /** How long a request waits for a registration before answering without it. */
   registrationWaitMs?: number
+  /** Classifies a failed peer handshake (default: classifyPeerError, which may look up the host). */
+  classifyPeerError?: (error: unknown, url: string) => Promise<PeerErrorCode>
 }
 
 /** A registration a request waited for, or `registrationPending` when it took too long. */
@@ -157,8 +164,9 @@ export class ConfigController {
   }
 
   // Single funnel for every mutation: guarantees a service is present and maps a Zod
-  // validation failure to a 400. The router only mounts mutation routes when
-  // `canMutate`, so the guard here is defensive — direct callers still get a clear error.
+  // validation failure to a 400 in the shared format (see lib/validation), with
+  // `field` naming the first offending field. The router only mounts mutation routes
+  // when `canMutate`, so the guard here is defensive — direct callers still get a clear error.
   private async run<T>(run: (service: ConfigService) => Promise<T>): Promise<T> {
     if (!this.configService)
       throw new Error('Config mutations require a configured ConfigService')
@@ -167,7 +175,7 @@ export class ConfigController {
     }
     catch (err) {
       if (err instanceof z.ZodError)
-        throw new BadRequestError(z.prettifyError(err))
+        throw ValidationError.fromZod(err)
       throw err
     }
   }
@@ -177,8 +185,24 @@ export class ConfigController {
     return { ok: true }
   }
 
+  // A failed handshake answers 502 with `reason` (a PeerErrorCode) and
+  // `upstreamStatus`, so the UI can explain it and offer `?force=true` only when
+  // trying again later can help.
+  private async explainPeerError(input: unknown, save: () => Promise<void>): Promise<void> {
+    try {
+      await save()
+    }
+    catch (err) {
+      if (!(err instanceof ConnectorInitializationError) || err instanceof PeerConnectionError)
+        throw err
+      const url = (input as { url?: unknown } | null)?.url
+      const reason = await (this.options.classifyPeerError ?? classifyPeerError)(err, typeof url === 'string' ? url : '')
+      throw new PeerConnectionError(err.message, reason, peerErrorStatus(err), err.cause)
+    }
+  }
+
   addPeer(input: unknown, opts?: { force?: boolean }) {
-    return this.mutate(s => s.addPeer(input, opts))
+    return this.mutate(s => this.explainPeerError(input, () => s.addPeer(input, opts)))
   }
 
   removePeer(id: string) {
@@ -186,7 +210,7 @@ export class ConfigController {
   }
 
   updatePeer(id: string, input: unknown, opts?: { force?: boolean }) {
-    return this.mutate(s => s.updatePeer(id, input, opts))
+    return this.mutate(s => this.explainPeerError(input, () => s.updatePeer(id, input, opts)))
   }
 
   // Both answer once jack is registered in the saved server (see onServerSaved),
