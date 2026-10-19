@@ -1,55 +1,28 @@
-import type { ApiKey, DestinationRegistration, DownloadsConfig, JackConfig, Overview, OverviewServerItem, RestartReason, ServerItem } from '~/types/management'
+import type { ApiKey, DownloadsConfig, JackConfig, Overview, RestartReason, ServerItem } from '~/types/management'
+import type { InternalUrlStep, ServerStep, SetupStepState } from '~/utils/setup-steps'
+import { folderSummary } from '~/utils/folder-check'
+import { addressFailures, serverStepWithAddressFailures, withAddressFailures } from '~/utils/setup-address'
+import { isSetupStepDone, setupDownloadsStep, setupInternalUrlStep, setupServerStep } from '~/utils/setup-steps'
 
 /**
  * State of the dashboard's setup checklist, decided only from data jack serves
- * (config/jack, config/downloads, config/servers, overview, api-keys) plus a few
- * choices the user made on the card, kept in localStorage. The page awaits
- * `whenLoaded()` before it renders, so the card and the attention panel never start
- * from a guess.
+ * (config/jack, config/downloads, config/servers, overview, api-keys), the last
+ * folder check, and a few choices the user made on the card, kept in localStorage.
+ * The page awaits `whenLoaded()` before it renders, so the card and the attention
+ * panel never start from a guess. The steps themselves are decided in
+ * utils/setup-steps.ts, with utils/setup-address.ts for a server that couldn't
+ * reach the address while jack added itself.
  */
 
-// done/open are the usual pair. `check` is the amber "check this" for a value that
-// may be right as it is, or that a Radarr/Sonarr test says is wrong. `skipped` is a
-// step the user opted out of, and `pending` a step that is still being decided (a
-// server that is still connecting, or jack still adding itself to it).
-export type SetupStepState = 'done' | 'open' | 'check' | 'pending' | 'skipped'
-
 // The required steps taken together: `unknown` until the data is in (or when it
-// failed to load), `restart` when only the restart of the jack container is left
-// (the banner on every page says so), and `pending` when nothing is left to do but
-// a server is still connecting or being set up.
+// failed to load), `open` while there is something to do (a step, or a folder
+// check that failed), `restart` when only the restart of the jack container is
+// left (the banner on every page says so), and `pending` when nothing is left to
+// do but a server is still connecting or being set up, or the address waits for
+// its test.
 export type SetupRequiredState = 'unknown' | 'open' | 'restart' | 'pending' | 'done'
 
-/** What jack reports about one Radarr/Sonarr, as the card shows it. */
-export interface ServerNote {
-  id: string
-  name: string
-  message: string
-}
-
-export interface InternalUrlStep {
-  state: SetupStepState
-  // Servers whose own test reached jack at the internal URL.
-  reachedBy: string[]
-  // Servers whose test of jack failed, listed only while none reached it.
-  failures: ServerNote[]
-}
-
-export interface ServerStep {
-  state: SetupStepState
-  // Why the step is open or pending: no server at all, none in the role the user
-  // needs (receiving downloads, or sharing for someone who only shares), none of
-  // them can be reached, jack is still adding itself to them, downloads are off so
-  // jack added nothing, or jack's download client isn't in any of them.
-  reason: 'none' | 'no-destination' | 'no-source' | 'unreachable' | 'registering' | 'downloads-off' | 'no-client' | null
-  // The servers behind the state.
-  names: string[]
-  // With `no-client`: why jack's download client isn't in each of them.
-  problems: ServerNote[]
-}
-
 const FLAG_KEYS = {
-  internalUrlAck: 'jack:setup:internal-url-ack',
   shareOnly: 'jack:setup:share-only',
   setupHidden: 'jack:setup:hidden',
   sharingHidden: 'jack:setup:sharing-hidden',
@@ -57,36 +30,35 @@ const FLAG_KEYS = {
 
 type Flag = keyof typeof FLAG_KEYS
 
+// The address the user confirmed on the card. Older builds stored '1' for "Yes, on
+// the jack network", which confirmed the default address.
+const CONFIRMED_URL_KEY = 'jack:setup:internal-url-ack'
+
 // Storage can be missing or throw (private windows, blocked site data); the card
 // then behaves as if nothing was ever chosen.
-function readFlag(flag: Flag): boolean {
+function readStored(key: string): string | null {
   try {
-    return localStorage.getItem(FLAG_KEYS[flag]) === '1'
+    return localStorage.getItem(key)
   }
   catch {
-    return false
+    return null
   }
 }
 
-function writeFlag(flag: Flag, on: boolean) {
+function writeStored(key: string, value: string | null) {
   try {
-    if (on)
-      localStorage.setItem(FLAG_KEYS[flag], '1')
+    if (value === null)
+      localStorage.removeItem(key)
     else
-      localStorage.removeItem(FLAG_KEYS[flag])
+      localStorage.setItem(key, value)
   }
   catch {}
 }
 
-const isDone = (state: SetupStepState) => state === 'done' || state === 'skipped'
-
-const names = (servers: Array<{ name: string }>) => servers.map(s => s.name)
-
-// Either of the *arr's tests passing means it reached jack at the internal URL. The
-// indexer test counts too: it is the only one that runs while jack still needs a
-// restart to serve its download client.
-const reachedJack = (r: DestinationRegistration) => r.clientTest === 'ok' || r.indexerTest === 'ok'
-const testFailed = (r: DestinationRegistration) => r.clientTest === 'failed' || r.indexerTest === 'failed'
+function readConfirmedUrl(): string | null {
+  const stored = readStored(CONFIRMED_URL_KEY)
+  return stored === '1' ? DEFAULT_INTERNAL_URL : stored
+}
 
 export function useSetupStatus(overview: Readonly<Ref<Overview | undefined>>) {
   const { request } = useManagement()
@@ -98,17 +70,21 @@ export function useSetupStatus(overview: Readonly<Ref<Overview | undefined>>) {
   // Only for each server's auto-register switch, which the overview doesn't carry.
   const serversReq = useAsyncData('setup:servers', () => request<{ servers: ServerItem[] }>('config/servers'))
 
-  // Read synchronously (the UI has no SSR), so an acknowledged step never flashes.
+  // The last folder check, shared with Settings. A problem it found is kept across
+  // reloads (the card says how long ago it ran).
+  const { lastReport: folderReport } = useFolderCheck()
+
+  // Read synchronously (the UI has no SSR), so a choice made on the card never flashes.
   const flags = reactive<Record<Flag, boolean>>({
-    internalUrlAck: readFlag('internalUrlAck'),
-    shareOnly: readFlag('shareOnly'),
-    setupHidden: readFlag('setupHidden'),
-    sharingHidden: readFlag('sharingHidden'),
+    shareOnly: readStored(FLAG_KEYS.shareOnly) === '1',
+    setupHidden: readStored(FLAG_KEYS.setupHidden) === '1',
+    sharingHidden: readStored(FLAG_KEYS.sharingHidden) === '1',
   })
+  const confirmedUrl = ref<string | null>(readConfirmedUrl())
 
   function setFlag(flag: Flag, on: boolean) {
     flags[flag] = on
-    writeFlag(flag, on)
+    writeStored(FLAG_KEYS[flag], on ? '1' : null)
   }
 
   // `null` is a real answer for both (no jack block, downloads off). `undefined`
@@ -120,11 +96,13 @@ export function useSetupStatus(overview: Readonly<Ref<Overview | undefined>>) {
     && jackReq.data.value !== undefined
     && downloadsReq.data.value !== undefined)
 
+  const servers = computed(() => overview.value?.servers.items ?? [])
   const downloadsOn = computed(() => downloadsReq.data.value != null)
   const completedPath = computed(() => downloadsReq.data.value?.completedPath ?? null)
-  // "I only share" counts only while downloads are off: turning them on later means
-  // the user downloads after all.
-  const shareOnly = computed(() => flags.shareOnly && downloadsReq.data.value === null)
+  // "I only share" counts while no Radarr/Sonarr receives downloads: turning on
+  // Download from friends for one means the user downloads after all. Downloads
+  // being on says nothing, since new installs start with them on.
+  const shareOnly = computed(() => flags.shareOnly && (overview.value?.servers.destinations ?? 0) === 0)
 
   // Whether jack adds itself to this server: undefined when config/servers isn't
   // loaded or doesn't list it yet.
@@ -132,83 +110,29 @@ export function useSetupStatus(overview: Readonly<Ref<Overview | undefined>>) {
     return serversReq.data.value?.servers.find(s => s.id === id)?.autoregister.enable
   }
 
-  // Destinations with what jack registered in them this boot, and the *arr's tests.
-  const registered = computed(() => (overview.value?.servers.items ?? []).flatMap(server =>
-    server.destination && server.registration ? [{ server, registration: server.registration }] : []))
-
   // jack falls back to the default when the config has no jack block.
   const internalUrl = computed(() => jackReq.data.value?.internalUrl ?? DEFAULT_INTERNAL_URL)
 
-  // A Radarr/Sonarr test is the real answer. Without one, the default address is
-  // only right on the jack Docker network, which the user can confirm.
-  const internalUrlStep = computed<InternalUrlStep>(() => {
-    const reachedBy = names(registered.value.filter(({ registration }) => reachedJack(registration)).map(({ server }) => server))
-    if (reachedBy.length)
-      return { state: 'done', reachedBy, failures: [] }
-    const failures = registered.value
-      .filter(({ registration }) => testFailed(registration))
-      .map(({ server, registration }) => ({
-        id: server.id,
-        name: server.name,
-        message: registration.message ?? `${server.name} couldn't reach jack.`,
-      }))
-    if (failures.length)
-      return { state: 'check', reachedBy, failures }
-    const state = isDefaultInternalUrl(internalUrl.value) && !flags.internalUrlAck ? 'check' : 'done'
-    return { state, reachedBy, failures }
-  })
+  // Servers that couldn't reach the address while jack added itself. On a first
+  // registration that is all a wrong address shows: the tests never run.
+  const unreachedAddress = computed(() => addressFailures(servers.value, internalUrl.value))
 
-  const downloadsStep = computed<SetupStepState>(() => {
-    if (downloadsOn.value)
-      return 'done'
-    return shareOnly.value ? 'skipped' : 'open'
-  })
+  const internalUrlStep = computed<InternalUrlStep>(() => withAddressFailures(setupInternalUrlStep({
+    internalUrl: internalUrl.value,
+    servers: servers.value,
+    autoRegisters,
+    shareOnly: shareOnly.value,
+    confirmedUrl: confirmedUrl.value,
+  }), unreachedAddress.value))
 
-  // Why jack's download client isn't in a server it registered in.
-  function clientProblem(server: OverviewServerItem, registration: DestinationRegistration): ServerNote {
-    // Registered while downloads were off, and not again since they were turned on.
-    const message = registration.reason === 'downloads-off'
-      ? `jack added nothing to ${server.name} while downloads were off. Click Register again on its card under Radarr & Sonarr.`
-      : registration.message ?? `jack couldn't add its download client to ${server.name}.`
-    return { id: server.id, name: server.name, message }
-  }
+  const downloadsStep = computed<SetupStepState>(() => setupDownloadsStep(downloadsOn.value, shareOnly.value))
 
-  const serversStep = computed<ServerStep>(() => {
-    const step = (state: SetupStepState, reason: ServerStep['reason'], servers: Array<{ name: string }> = [], problems: ServerNote[] = []): ServerStep =>
-      ({ state, reason, names: names(servers), problems })
-
-    const items = overview.value?.servers.items ?? []
-    if (items.length === 0)
-      return step('open', 'none')
-    // Downloading needs a server that receives downloads. Someone who only shares
-    // needs one that shares its library instead.
-    const relevant = items.filter(s => shareOnly.value ? s.source : s.destination)
-    if (relevant.length === 0)
-      return step('open', shareOnly.value ? 'no-source' : 'no-destination')
-    const connected = relevant.filter(s => s.initialized)
-    if (connected.length === 0) {
-      // No error yet means still handshaking, as right after jack starts. That is
-      // not something to do, so it never reopens a hidden card.
-      const connecting = relevant.filter(s => !s.initializationError)
-      if (connecting.length)
-        return step('pending', null, connecting)
-      return step('open', 'unreachable', relevant)
-    }
-    if (shareOnly.value)
-      return step('done', null, connected)
-
-    // Receiving needs jack's download client in the *arr. A server jack doesn't add
-    // itself to (auto-register off) is the user's to set up, so it counts as it is.
-    const receiving = connected.filter(s => s.registration?.downloadClient.status === 'ok' || autoRegisters(s.id) === false)
-    if (receiving.length)
-      return step('done', null, receiving)
-    const registering = connected.filter(s => !s.registration)
-    if (registering.length)
-      return step('pending', 'registering', registering)
-    if (!downloadsOn.value)
-      return step('open', 'downloads-off', connected)
-    return step('open', 'no-client', connected, connected.flatMap(s => s.registration ? [clientProblem(s, s.registration)] : []))
-  })
+  const serversStep = computed<ServerStep>(() => serverStepWithAddressFailures(setupServerStep({
+    servers: servers.value,
+    autoRegisters,
+    shareOnly: shareOnly.value,
+    downloadsOn: downloadsOn.value,
+  }), unreachedAddress.value))
 
   // Settings saved since jack started that wait for a restart of the jack container.
   const restartReasons = computed<RestartReason[]>(() => overview.value?.system?.restartPending ?? [])
@@ -218,13 +142,26 @@ export function useSetupStatus(overview: Readonly<Ref<Overview | undefined>>) {
   const setupStates = computed(() => [internalUrlStep.value.state, downloadsStep.value, serversStep.value.state])
   const requiredStates = computed(() => restartStep.value ? [...setupStates.value, restartStep.value] : setupStates.value)
   const requiredTotal = computed(() => requiredStates.value.length)
-  const requiredDone = computed(() => requiredStates.value.filter(isDone).length)
+  const requiredDone = computed(() => requiredStates.value.filter(isSetupStepDone).length)
   const requiredComplete = computed(() => requiredDone.value === requiredTotal.value)
+
+  // The folder check, once there are folders to check: a Radarr/Sonarr in the
+  // needed role, and downloads on (or only sharing). It never runs by itself; saves
+  // in Settings and the Check folders button run it. A failure is the most common
+  // Unraid mistake (Radarr/Sonarr see a folder under another path), so it keeps
+  // setup from counting as finished, also after a reload until a check passes.
+  const folderCheckReady = computed(() => isSetupStepDone(downloadsStep.value) && serversStep.value.state === 'done')
+  const folderResult = computed(() => folderCheckReady.value && folderReport.value ? folderSummary(folderReport.value) : null)
+  const folderFailed = computed(() => folderResult.value?.tone === 'error')
+
+  // Every step done and no known problem: the card says "jack is set up".
+  const setupComplete = computed(() => requiredComplete.value && !folderFailed.value)
+
   // The dashboard shows its green all-clear only for `done`.
   const requiredState = computed<SetupRequiredState>(() => {
     if (!ready.value)
       return 'unknown'
-    if (setupStates.value.some(s => s === 'open' || s === 'check'))
+    if (setupStates.value.some(s => s === 'open' || s === 'check') || folderFailed.value)
       return 'open'
     if (restartStep.value)
       return 'restart'
@@ -244,24 +181,26 @@ export function useSetupStatus(overview: Readonly<Ref<Overview | undefined>>) {
     return keysReq.data.value === undefined ? 'pending' : 'open'
   })
 
-  // Hide is only offered once every required step is done, so an open step after
-  // hiding is a regression and shows the card again until it is fixed. A pending
-  // restart is not: the banner on every page carries it.
+  // Hide is only offered once setup is complete, so something to do after hiding
+  // (an open step, a failed folder check) is a regression and shows the card again
+  // until it is fixed. A pending restart is not: the banner on every page carries it.
   const showSetupCard = computed(() => ready.value && (requiredOpen.value || !flags.setupHidden))
   const showSharingCard = computed(() =>
     ready.value
     && !flags.sharingHidden
     && friendStep.value !== 'pending'
-    && !(isDone(addressStep.value) && isDone(friendStep.value)))
+    && !(isSetupStepDone(addressStep.value) && isSetupStepDone(friendStep.value)))
 
-  // What the card's step list shows right now, so the attention panel can leave it
-  // out: the servers whose test or registration result it quotes, and whether it
-  // asks for a server that receives downloads.
+  // What the card shows right now, so the attention panel can leave it out: the
+  // servers whose test or registration result it quotes, whether it asks for a
+  // server that receives downloads, and whether it shows a problem at all (then
+  // "Nothing is failing" would be wrong).
   const showsSteps = computed(() => showSetupCard.value && !requiredComplete.value)
   const cardServerIds = computed(() => showsSteps.value
     ? [...internalUrlStep.value.failures, ...serversStep.value.problems].map(note => note.id)
     : [])
   const cardAsksForReceiver = computed(() => showsSteps.value && serversStep.value.reason === 'no-destination')
+  const cardShowsProblem = computed(() => cardServerIds.value.length > 0 || (showSetupCard.value && folderFailed.value))
 
   // True while refreshMissing() runs. It is set before any request starts, so the
   // page can hold its content back until the answers are in, instead of rendering
@@ -306,16 +245,24 @@ export function useSetupStatus(overview: Readonly<Ref<Overview | undefined>>) {
     requiredTotal,
     requiredDone,
     requiredComplete,
+    setupComplete,
     requiredState,
     requiredOpen,
+    folderCheckReady,
+    folderResult,
     addressStep,
     friendStep,
     showSetupCard,
     showSharingCard,
     cardServerIds,
     cardAsksForReceiver,
+    cardShowsProblem,
     settled,
-    ackInternalUrl: () => setFlag('internalUrlAck', true),
+    // Confirms the address as it is now; a later change asks again.
+    confirmInternalUrl: () => {
+      confirmedUrl.value = internalUrl.value
+      writeStored(CONFIRMED_URL_KEY, internalUrl.value)
+    },
     setShareOnly: (on: boolean) => setFlag('shareOnly', on),
     hideSetup: () => setFlag('setupHidden', true),
     hideSharing: () => setFlag('sharingHidden', true),

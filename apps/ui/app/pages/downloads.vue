@@ -16,20 +16,17 @@ const { connected, hasConnectedOnce } = useManagementStream<{ downloads: Activit
   error.value = undefined
 })
 
-// Only words the empty state: with no downloads block, no download can start.
+// Only words the empty state, so it names the next step that leads to a download:
+// downloads on, after the restart they may wait for, a Radarr/Sonarr that
+// receives downloads, and a friend to download from.
 const { data: downloadsConfig, status: downloadsConfigStatus, refresh: refreshDownloadsConfig } = useDownloadsConfig()
-// Downloads turned on since jack started only start working after a restart.
-const { overview } = useOverview()
-const emptyState = computed<'loading' | 'off' | 'restart' | 'none'>(() => {
-  if (downloadsConfig.value === null)
-    return 'off'
-  // Wait for the answer rather than flash "Nothing downloaded yet" on a fresh install.
-  if (downloadsConfig.value === undefined && downloadsConfigStatus.value !== 'error')
-    return 'loading'
-  if (overview.value?.system?.restartPending.includes('downloads'))
-    return 'restart'
-  return 'none'
-})
+const { overview, error: overviewError } = useOverview()
+const emptyState = computed(() => downloadsEmptyState({
+  downloadsConfig: downloadsConfig.value,
+  downloadsConfigFailed: downloadsConfigStatus.value === 'error',
+  overview: overview.value,
+  overviewFailed: overviewError.value !== undefined,
+}))
 
 // While jack is unreachable both loads fail, so a retry repeats both. The config
 // only when it is missing: a failed refetch would throw away an answer it has.
@@ -310,11 +307,38 @@ const columns: TableColumn<ActivityDownload>[] = [
             Unraid: <span class="whitespace-nowrap">{{ RESTART_STEPS }}</span>. jack-ui doesn't need a restart.
           </p>
         </div>
-        <div v-else class="flex flex-col items-center gap-3 py-6 text-center">
+        <div v-else-if="emptyState === 'no-server'" class="flex flex-col items-center gap-3 py-6 text-center">
           <UIcon name="i-ph-download-simple" class="size-8 text-dimmed" />
           <p class="max-w-md text-sm text-muted">
-            Nothing downloaded yet. Pick something in Friends' library, or search in Radarr/Sonarr,
-            where jack appears as an indexer.
+            Nothing downloaded yet. Connect the Radarr or Sonarr that should receive friends' downloads.
+          </p>
+          <UButton label="Connect Radarr or Sonarr" icon="i-ph-plus" :to="settingsLink('servers')" />
+        </div>
+        <div v-else-if="emptyState === 'no-receiver'" class="flex flex-col items-center gap-3 py-6 text-center">
+          <UIcon name="i-ph-download-simple" class="size-8 text-dimmed" />
+          <p class="max-w-md text-sm text-muted">
+            Nothing downloaded yet. To get friends' movies and episodes, turn on Download from friends for a Radarr or Sonarr.
+          </p>
+          <UButton label="Open Radarr & Sonarr" icon="i-ph-gear-six" :to="settingsLink('servers')" />
+        </div>
+        <div v-else-if="emptyState === 'no-friend'" class="flex flex-col items-center gap-3 py-6 text-center">
+          <UIcon name="i-ph-download-simple" class="size-8 text-dimmed" />
+          <p class="max-w-md text-sm text-muted">
+            Nothing downloaded yet. Add a friend to download from their library.
+          </p>
+          <UButton label="Add a friend" icon="i-ph-plus" to="/friends?action=add" />
+        </div>
+        <div v-else class="flex flex-col items-center gap-3 py-6 text-center">
+          <UIcon name="i-ph-download-simple" class="size-8 text-dimmed" />
+          <!-- The indexer is mentioned only where jack added one that works. -->
+          <p class="max-w-md text-sm text-muted">
+            <template v-if="emptyState === 'library-or-search'">
+              Nothing downloaded yet. Pick something in Friends' library, or search in Radarr/Sonarr,
+              where jack appears as an indexer.
+            </template>
+            <template v-else>
+              Nothing downloaded yet. Pick something in Friends' library.
+            </template>
           </p>
           <UButton label="Browse Friends' library" icon="i-ph-film-reel" to="/catalog" />
         </div>
@@ -349,28 +373,39 @@ const columns: TableColumn<ActivityDownload>[] = [
           />
         </div>
 
-        <!-- Desktop: the full table. -->
-        <UCard class="hidden lg:block" variant="subtle" :ui="{ body: '!p-0' }">
-          <UTable :data="paged" :columns="columns" :ui="{ td: 'align-top' }">
+        <!-- Wide screens: the full table. Its seven columns fit from xl (1280 px) on,
+             with room for a classic scrollbar: the cells use less padding, and the
+             File and From cells wrap. Narrower screens get the cards below. -->
+        <UCard class="hidden xl:block" variant="subtle" :ui="{ body: '!p-0' }">
+          <UTable :data="paged" :columns="columns" :ui="{ th: 'px-3', td: 'align-top px-3' }">
+            <!-- Table cells don't wrap, so the file cell opts back in and caps its
+                 width: a long name or note wraps instead of pushing Size, Updated
+                 and the actions off-screen. -->
             <template #filename-cell="{ row }">
-              <p class="font-medium text-default" :title="row.original.filename">
-                {{ row.original.filename }}
-              </p>
-              <p
-                v-if="stateOf(row.original).note"
-                class="text-xs break-words"
-                :class="NOTE_CLASS[stateOf(row.original).noteTone]"
-                :title="row.original.error ?? undefined"
-              >
-                {{ stateOf(row.original).note }}
-              </p>
-              <p v-else-if="row.original.expectedBytesMismatch" class="text-xs text-warning">
-                size mismatch
-              </p>
+              <div class="max-w-md min-w-48 whitespace-normal">
+                <p class="font-medium wrap-anywhere text-default" :title="row.original.filename">
+                  {{ row.original.filename }}
+                </p>
+                <p
+                  v-if="stateOf(row.original).note"
+                  class="text-xs wrap-anywhere"
+                  :class="NOTE_CLASS[stateOf(row.original).noteTone]"
+                  :title="row.original.error ?? undefined"
+                >
+                  {{ stateOf(row.original).note }}
+                </p>
+                <p v-else-if="row.original.expectedBytesMismatch" class="text-xs text-warning">
+                  size mismatch
+                </p>
+              </div>
             </template>
 
+            <!-- A friend's name wraps too, so "Christoffer (Odense)" takes two lines
+                 instead of the row's actions. -->
             <template #peerName-cell="{ row }">
-              <span class="text-muted">{{ row.original.peerName }}</span>
+              <p class="max-w-28 whitespace-normal break-words text-muted">
+                {{ row.original.peerName }}
+              </p>
             </template>
 
             <template #status-cell="{ row }">
@@ -413,8 +448,8 @@ const columns: TableColumn<ActivityDownload>[] = [
           </UTable>
         </UCard>
 
-        <!-- Mobile: a card per download — a 6-column table is unusable on a phone. -->
-        <div class="space-y-2 lg:hidden">
+        <!-- Phones to small laptops: a card per download, since the table needs more width. -->
+        <div class="space-y-2 xl:hidden">
           <UCard v-for="d in paged" :key="d.id" variant="subtle" :ui="{ body: 'p-3' }">
             <div class="space-y-2.5">
               <div class="min-w-0 space-y-1.5">

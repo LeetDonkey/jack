@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Form, FormError, FormSchema } from '@nuxt/ui'
 import type { BandwidthConfig, BandwidthConfigPatch, Weekday } from '~/types/management'
+import { kibToSave, limitError, mbFromKib } from '~/utils/bandwidth-limits'
 
 const { request, extractError } = useManagement()
 const form = useTemplateRef<Form<FormSchema>>('form')
@@ -27,17 +28,14 @@ const WEEKDAYS: { key: Weekday, label: string }[] = [
   { key: 'sun', label: 'Sun' },
 ]
 
-// The config file holds KiB/s; the form edits MB/s (MiB/s, matching the rest of
-// the UI's 1024-based units). Empty means unlimited.
-const toMb = (kib: number | null | undefined) => (kib == null ? null : Math.round((kib / 1024) * 100) / 100)
-const toKib = (mb: number | null) => (mb == null || mb <= 0 ? null : Math.max(1, Math.round(mb * 1024)))
-
 interface PeriodState {
   days: Weekday[]
   start: string
   end: string
   downloadMb: number | null
   uploadMb: number | null
+  /** The limits as loaded (KiB/s), saved unchanged while the fields still show them. Null in a new period. */
+  stored: { downloadKib: number | null, uploadKib: number | null }
 }
 
 function blankState() {
@@ -59,8 +57,8 @@ const baseline = ref(JSON.stringify(blankState()))
 function seed(config: BandwidthConfig | null | undefined) {
   Object.assign(state, blankState())
   if (config) {
-    state.downloadMb = toMb(config.downloadLimitKiBps)
-    state.uploadMb = toMb(config.uploadLimitKiBps)
+    state.downloadMb = mbFromKib(config.downloadLimitKiBps)
+    state.uploadMb = mbFromKib(config.uploadLimitKiBps)
     state.maxConcurrentUploads = config.maxConcurrentUploads ?? null
     state.maxConcurrentUploadsPerPeer = config.maxConcurrentUploadsPerPeer ?? null
     state.dailyUploadLimitGiBPerPeer = config.dailyUploadLimitGiBPerPeer ?? null
@@ -68,8 +66,9 @@ function seed(config: BandwidthConfig | null | undefined) {
       days: [...p.days],
       start: p.start,
       end: p.end,
-      downloadMb: toMb(p.downloadLimitKiBps),
-      uploadMb: toMb(p.uploadLimitKiBps),
+      downloadMb: mbFromKib(p.downloadLimitKiBps),
+      uploadMb: mbFromKib(p.uploadLimitKiBps),
+      stored: { downloadKib: p.downloadLimitKiBps ?? null, uploadKib: p.uploadLimitKiBps ?? null },
     }))
   }
   baseline.value = JSON.stringify(state)
@@ -92,7 +91,7 @@ watch(dirty, (isDirty) => {
 })
 
 function addPeriod() {
-  state.schedule.push({ days: ['mon', 'tue', 'wed', 'thu', 'fri'], start: '07:00', end: '23:00', downloadMb: null, uploadMb: null })
+  state.schedule.push({ days: ['mon', 'tue', 'wed', 'thu', 'fri'], start: '07:00', end: '23:00', downloadMb: null, uploadMb: null, stored: { downloadKib: null, uploadKib: null } })
 }
 
 const SCHEDULE_ERROR = /^schedule\./
@@ -114,11 +113,20 @@ const TIME = /^(?:[01]\d|2[0-3]):[0-5]\d$/
 
 function validate(s: State): FormError[] {
   const errors: FormError[] = []
+  // A typed 0 is refused: empty already means unlimited, and jack can't store 0.
+  const limit = (name: string, message: string | null) => {
+    if (message)
+      errors.push({ name, message })
+  }
+  limit('downloadMb', limitError(s.downloadMb, 'download'))
+  limit('uploadMb', limitError(s.uploadMb, 'upload'))
   s.schedule.forEach((period, i) => {
     if (period.days.length === 0)
       errors.push({ name: `schedule.${i}.days`, message: 'Pick at least one day.' })
     if (!TIME.test(period.start) || !TIME.test(period.end))
       errors.push({ name: `schedule.${i}.time`, message: 'Enter a start and end time.' })
+    limit(`schedule.${i}.downloadMb`, limitError(period.downloadMb, 'download', true))
+    limit(`schedule.${i}.uploadMb`, limitError(period.uploadMb, 'upload', true))
   })
   return errors
 }
@@ -141,21 +149,27 @@ async function save() {
   saving.value = true
   saveError.value = null
   saved.value = false
+  // The form saves every field, so limits the user didn't touch go out as loaded.
+  const loaded = bandwidth.value
   const patch: BandwidthConfigPatch = {
-    downloadLimitKiBps: toKib(state.downloadMb),
-    uploadLimitKiBps: toKib(state.uploadMb),
+    downloadLimitKiBps: kibToSave(state.downloadMb, loaded?.downloadLimitKiBps),
+    uploadLimitKiBps: kibToSave(state.uploadMb, loaded?.uploadLimitKiBps),
     maxConcurrentUploads: state.maxConcurrentUploads,
     maxConcurrentUploadsPerPeer: state.maxConcurrentUploadsPerPeer,
     dailyUploadLimitGiBPerPeer: state.dailyUploadLimitGiBPerPeer,
     schedule: state.schedule.length === 0
       ? null
-      : state.schedule.map(p => ({
-          days: p.days,
-          start: p.start,
-          end: p.end,
-          ...(toKib(p.downloadMb) != null ? { downloadLimitKiBps: toKib(p.downloadMb) } : {}),
-          ...(toKib(p.uploadMb) != null ? { uploadLimitKiBps: toKib(p.uploadMb) } : {}),
-        })),
+      : state.schedule.map((p) => {
+          const download = kibToSave(p.downloadMb, p.stored.downloadKib)
+          const upload = kibToSave(p.uploadMb, p.stored.uploadKib)
+          return {
+            days: p.days,
+            start: p.start,
+            end: p.end,
+            ...(download != null ? { downloadLimitKiBps: download } : {}),
+            ...(upload != null ? { uploadLimitKiBps: upload } : {}),
+          }
+        }),
   }
   try {
     await request('config/bandwidth', { method: 'PATCH', body: patch })
@@ -225,12 +239,14 @@ function revert() {
 
     <UForm v-else ref="form" :state="state" :validate="validate" class="space-y-3" @submit="save" @error="onError">
       <UCard variant="subtle" :ui="{ body: 'space-y-4' }">
+        <!-- step-snapping off keeps a typed value as typed: with a 0.5 step, 0.2
+             would become 0, and with a 10 step from 1, a typed 25 would become 21. -->
         <div class="grid gap-4 sm:grid-cols-2">
           <UFormField name="downloadMb" label="Download limit" description="Across all friends. Empty means unlimited." hint="MB/s" :ui="{ hint: 'font-mono text-xs text-dimmed' }">
-            <UInputNumber :model-value="state.downloadMb" :disabled="saving" :min="0" :step="0.5" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" @update:model-value="v => (state.downloadMb = v ?? null)" />
+            <UInputNumber :model-value="state.downloadMb" :disabled="saving" :min="0" :step="0.5" :step-snapping="false" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" @update:model-value="v => (state.downloadMb = v ?? null)" />
           </UFormField>
           <UFormField name="uploadMb" label="Upload limit" description="Across all friends. Empty means unlimited." hint="MB/s" :ui="{ hint: 'font-mono text-xs text-dimmed' }">
-            <UInputNumber :model-value="state.uploadMb" :disabled="saving" :min="0" :step="0.5" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" @update:model-value="v => (state.uploadMb = v ?? null)" />
+            <UInputNumber :model-value="state.uploadMb" :disabled="saving" :min="0" :step="0.5" :step-snapping="false" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" @update:model-value="v => (state.uploadMb = v ?? null)" />
           </UFormField>
         </div>
 
@@ -257,7 +273,7 @@ function revert() {
             hint="GB"
             :ui="{ hint: 'font-mono text-xs text-dimmed' }"
           >
-            <UInputNumber :model-value="state.dailyUploadLimitGiBPerPeer" :disabled="saving" :min="1" :step="10" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" @update:model-value="v => (state.dailyUploadLimitGiBPerPeer = v ?? null)" />
+            <UInputNumber :model-value="state.dailyUploadLimitGiBPerPeer" :disabled="saving" :min="1" :step="10" :step-snapping="false" :increment="false" :decrement="false" placeholder="Unlimited" class="w-full" @update:model-value="v => (state.dailyUploadLimitGiBPerPeer = v ?? null)" />
           </UFormField>
         </div>
       </UCard>
@@ -320,11 +336,11 @@ function revert() {
                 </div>
               </div>
             </UFormField>
-            <UFormField label="Download" hint="MB/s" :ui="{ hint: 'font-mono text-xs text-dimmed' }">
-              <UInputNumber :model-value="period.downloadMb" :disabled="saving" :min="0" :step="0.5" :increment="false" :decrement="false" placeholder="Same as above" class="w-full" @update:model-value="v => (period.downloadMb = v ?? null)" />
+            <UFormField :name="`schedule.${i}.downloadMb`" label="Download" hint="MB/s" :ui="{ hint: 'font-mono text-xs text-dimmed' }">
+              <UInputNumber :model-value="period.downloadMb" :disabled="saving" :min="0" :step="0.5" :step-snapping="false" :increment="false" :decrement="false" placeholder="Same as above" class="w-full" @update:model-value="v => (period.downloadMb = v ?? null)" />
             </UFormField>
-            <UFormField label="Upload" hint="MB/s" :ui="{ hint: 'font-mono text-xs text-dimmed' }">
-              <UInputNumber :model-value="period.uploadMb" :disabled="saving" :min="0" :step="0.5" :increment="false" :decrement="false" placeholder="Same as above" class="w-full" @update:model-value="v => (period.uploadMb = v ?? null)" />
+            <UFormField :name="`schedule.${i}.uploadMb`" label="Upload" hint="MB/s" :ui="{ hint: 'font-mono text-xs text-dimmed' }">
+              <UInputNumber :model-value="period.uploadMb" :disabled="saving" :min="0" :step="0.5" :step-snapping="false" :increment="false" :decrement="false" placeholder="Same as above" class="w-full" @update:model-value="v => (period.uploadMb = v ?? null)" />
             </UFormField>
           </div>
 

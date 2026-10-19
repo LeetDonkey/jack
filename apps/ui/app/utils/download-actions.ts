@@ -1,5 +1,5 @@
 import type { ActivityDownload, ActivityOverview } from '~/types/activity'
-import type { DownloadItem } from '~/types/management'
+import type { DestinationRegistration, DownloadItem } from '~/types/management'
 import { formatClockTime } from './format'
 
 export type DownloadAction = 'cancel' | 'retry' | 'delete'
@@ -143,4 +143,55 @@ const PHASE_ORDER: Record<string, number> = { transferring: 0, retry_wait: 1, qu
 export function sortRunningDownloads<T extends DownloadRow>(downloads: readonly T[]): T[] {
   const rank = (d: T) => PHASE_ORDER[d.phase ?? 'transferring'] ?? 0
   return [...downloads].sort((a, b) => rank(a) - rank(b))
+}
+
+/**
+ * What the empty Downloads page says: the next step that actually leads to a
+ * download. `loading` waits for the answers instead of guessing.
+ * - `off`: no downloads block. `restart`: downloads wait for a jack restart.
+ * - `no-server`: no Radarr/Sonarr at all. `no-receiver`: none has Download from
+ *   friends on, so nothing can receive a download.
+ * - `no-friend`: nobody to download from.
+ * - `library`: pick something in Friends' library. `library-or-search`: the same,
+ *   or search in Radarr/Sonarr, because jack's indexer is in one of them.
+ */
+export type DownloadsEmptyState = 'loading' | 'off' | 'restart' | 'no-server' | 'no-receiver' | 'no-friend' | 'library' | 'library-or-search'
+
+export interface DownloadsEmptyInput {
+  // config/downloads: null when downloads are off, undefined until it is loaded.
+  downloadsConfig: object | null | undefined
+  downloadsConfigFailed: boolean
+  overview: {
+    peers: { total: number }
+    servers: {
+      total: number
+      destinations: number
+      items: ReadonlyArray<{ destination: boolean, registration: DestinationRegistration | null }>
+    }
+    system?: { restartPending: readonly string[] }
+  } | undefined
+  overviewFailed: boolean
+}
+
+export function downloadsEmptyState(input: DownloadsEmptyInput): DownloadsEmptyState {
+  if (input.downloadsConfig === null)
+    return 'off'
+  if ((input.downloadsConfig === undefined && !input.downloadsConfigFailed) || (input.overview === undefined && !input.overviewFailed))
+    return 'loading'
+  const overview = input.overview
+  // Without the overview, only the step that never claims too much.
+  if (!overview)
+    return 'library'
+  if (overview.system?.restartPending.includes('downloads'))
+    return 'restart'
+  if (overview.servers.total === 0)
+    return 'no-server'
+  if (overview.servers.destinations === 0)
+    return 'no-receiver'
+  if (overview.peers.total === 0)
+    return 'no-friend'
+  // jack is an indexer in Radarr/Sonarr only where it added one and the *arr's test of it didn't fail.
+  const indexer = overview.servers.items.some(s =>
+    s.destination && s.registration?.indexer.status === 'ok' && s.registration.indexerTest !== 'failed')
+  return indexer ? 'library-or-search' : 'library'
 }

@@ -5,7 +5,7 @@ import type { Friend, FriendsLimits } from '~/types/management'
 const props = defineProps<{
   friend: Friend
   limits: FriendsLimits
-  // When each key was created (GET /api-keys), to tell "Never used" from "Not seen since".
+  // When each key was created (GET /api-keys), to tell "Never used" from "Not connected since".
   keyCreatedAt?: Record<number, string>
   // Names of the keys that belong to no friend, for the "Link" suggestion on a peer.
   looseKeyNames?: Record<number, string | null>
@@ -27,33 +27,26 @@ const emit = defineEmits<{
   edit: []
   remove: []
   link: [keyIds: number[], peerId: string]
+  // Revoke one of several keys (after "Keep both" on a new link).
+  revokeKey: [keyId: number]
 }>()
 
 const TONE_TEXT = { success: 'text-success', error: 'text-error', warning: 'text-warning', neutral: 'text-dimmed' } as const
 
 const name = computed(() => props.friend.name)
 const peer = computed(() => props.friend.peer)
-const badge = computed(() => friendBadge(props.friend, props.now))
+const badge = computed(() => friendBadge(props.friend, props.now, props.keyCreatedAt))
 const status = computed(() => (peer.value ? friendStatusWords(peer.value, props.now.getTime()) : null))
 const problem = computed(() => (peer.value ? peerProblem(name.value, peer.value) : null))
 const build = computed(() => (peer.value ? buildSummary(peer.value.version, peer.value.build, props.now) : null))
 const limitsText = computed(() => limitsSummary(props.limits))
 
-// Name a key only when the card doesn't already say which one it is.
-const showKeyNames = computed(() => props.friend.keys.length > 1 || props.friend.keys.some(key => !sameName(key.name, name.value)))
-const keyLabel = (key: { id: number, name: string | null }) => key.name?.trim() ? `Key '${key.name.trim()}'` : `Key #${key.id}`
+// What tells the keys apart; null when the card already says which one it is.
+const keyLabels = computed(() => friendKeyLabels(name.value, props.friend.keys, props.keyCreatedAt, props.now))
 
 // What this friend needs next, with the button that does it.
-const prompt = computed(() => {
-  const friend = props.friend
-  if (!friend.peer)
-    return { text: `You don't download from ${name.value} yet.`, label: `Paste ${name.value}'s link`, icon: 'i-ph-clipboard-text', action: 'add' as const, hint: null }
-  if (!friend.keys.length)
-    return { text: `${name.value} can't download from you yet.`, label: `Send ${name.value} a link`, icon: 'i-ph-link', action: 'invite' as const, hint: null }
-  if (friend.state === 'waiting')
-    return { text: `Waiting for ${name.value} to add you.`, label: 'Send a new link', icon: 'i-ph-link', action: 'newLink' as const, hint: 'They add you by pasting the link you sent. Lost it?' }
-  return null
-})
+const prompt = computed(() => friendPrompt(props.friend, props.now, props.keyCreatedAt))
+const promptSecondary = computed(() => prompt.value?.action === 'newLink' || prompt.value?.action === 'checkAddress')
 
 function runPrompt() {
   const action = prompt.value?.action
@@ -118,11 +111,21 @@ const menu = computed<DropdownMenuItem[][]>(() => {
         <span v-if="prompt.hint" class="text-muted">{{ prompt.hint }}</span>
       </p>
       <UButton
+        v-if="prompt.action === 'checkAddress'"
         :label="prompt.label"
         :icon="prompt.icon"
         size="sm"
-        :color="prompt.action === 'newLink' ? 'neutral' : 'primary'"
-        :variant="prompt.action === 'newLink' ? 'outline' : 'soft'"
+        color="neutral"
+        variant="outline"
+        :to="settingsLink('public-address')"
+      />
+      <UButton
+        v-else
+        :label="prompt.label"
+        :icon="prompt.icon"
+        size="sm"
+        :color="promptSecondary ? 'neutral' : 'primary'"
+        :variant="promptSecondary ? 'outline' : 'soft'"
         @click="runPrompt"
       />
     </div>
@@ -174,15 +177,28 @@ const menu = computed<DropdownMenuItem[][]>(() => {
         <UIcon name="i-ph-arrow-up" class="size-3.5 shrink-0" />
         {{ name }} downloads from you
       </p>
-      <div v-for="key in friend.keys" :key="key.id" class="space-y-0.5">
-        <p class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm text-default">
-          <span v-if="showKeyNames" class="text-xs text-muted">{{ keyLabel(key) }}:</span>
-          {{ keyUsage(key, keyCreatedAt?.[key.id], now) }}
-          <UBadge v-if="key.activeUploads > 0" color="success" variant="subtle" size="sm" :label="`${key.activeUploads} downloading now`" />
-        </p>
-        <p class="text-xs text-muted tabular-nums">
-          Uploaded: {{ trafficSummary(key.uploaded) }}
-        </p>
+      <div v-for="key in friend.keys" :key="key.id" class="flex items-start justify-between gap-2">
+        <div class="min-w-0 space-y-0.5">
+          <p class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm text-default">
+            <span v-if="keyLabels[key.id]" class="text-xs text-muted">Key {{ keyLabels[key.id] }}:</span>
+            {{ keyUsage(key, keyCreatedAt?.[key.id], now) }}
+            <UBadge v-if="key.activeUploads > 0" color="success" variant="subtle" size="sm" :label="`${key.activeUploads} downloading now`" />
+          </p>
+          <p class="text-xs text-muted tabular-nums">
+            Uploaded: {{ trafficSummary(key.uploaded) }}
+          </p>
+        </div>
+        <!-- With one key, Remove friend covers it. -->
+        <UButton
+          v-if="friend.keys.length > 1"
+          label="Revoke"
+          size="xs"
+          color="neutral"
+          variant="ghost"
+          class="shrink-0"
+          :aria-label="`Revoke key ${keyLabels[key.id] ?? `#${key.id}`}`"
+          @click="emit('revokeKey', key.id)"
+        />
       </div>
       <ULink :to="settingsLink('bandwidth')" class="inline-block text-xs text-muted underline">
         Limits per friend: {{ limitsText }}

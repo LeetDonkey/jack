@@ -1,20 +1,22 @@
 <script setup lang="ts">
-import type { SetupStatus, SetupStepState } from '~/composables/useSetupStatus'
-import { folderSummary } from '~/utils/folder-check'
+import type { SetupStatus } from '~/composables/useSetupStatus'
+import type { SetupStepState } from '~/utils/setup-steps'
 
 // The dashboard's first-run guide: the required steps in order, then an optional
 // card for sharing with friends. All state comes from useSetupStatus (the page owns
-// it, because the attention panel needs the same answer).
-const props = defineProps<{ status: SetupStatus }>()
+// it, because the attention panel needs the same answer). `now` is the page's
+// ticking clock, so "Checked 5 min ago" moves on while the page stays open.
+const props = defineProps<{ status: SetupStatus, now: number }>()
 
 const MARKERS: Record<Exclude<SetupStepState, 'open'>, { icon: string, class: string, label: string }> = {
   done: { icon: 'i-ph-check-circle-fill', class: 'text-success', label: 'Done' },
   skipped: { icon: 'i-ph-minus-circle', class: 'text-dimmed', label: 'Skipped' },
   check: { icon: 'i-ph-warning-circle-fill', class: 'text-warning', label: 'Check this' },
   pending: { icon: 'i-ph-circle-notch', class: 'animate-spin text-muted', label: 'Checking' },
+  untested: { icon: 'i-ph-circle-dashed', class: 'text-muted', label: 'Not tested yet' },
 }
 
-const isDone = (state: SetupStepState) => state === 'done' || state === 'skipped'
+const isDone = isSetupStepDone
 
 // With a server connected but none in the needed role, "Connect" would read as done.
 const SERVER_STEP_TITLES = {
@@ -48,12 +50,12 @@ const sharingSteps = computed(() => [
 
 const restartLabels = computed(() => restartReasonLabels(props.status.restartReasons).join(', '))
 
-// The folder check, once there are folders to check: a Radarr/Sonarr connected and
-// downloads on (or only sharing). It never runs by itself here; saves in Settings
-// and the Check folders button run it, and every place shows the same report.
-const { report: folderReport, running: folderRunning, error: folderError, run: runFolderCheck } = useFolderCheck()
-const folderCheckReady = computed(() => isDone(props.status.downloadsStep) && props.status.serversStep.state === 'done')
-const folderResult = computed(() => (folderReport.value ? folderSummary(folderReport.value) : null))
+// The folder check, once useSetupStatus says there are folders to check. It never
+// runs by itself here; saves in Settings and the Check folders button run it. A
+// problem it found is kept across reloads.
+const { lastReport: folderReport, running: folderRunning, error: folderError, run: runFolderCheck } = useFolderCheck()
+// A kept report can be old, so a problem says when it was found.
+const folderCheckedAgo = computed(() => folderReport.value ? formatTimeAgo(folderReport.value.checkedAt, props.now) : '')
 const FOLDER_TONE = {
   ok: { icon: 'i-ph-check-circle', class: 'text-success' },
   warning: { icon: 'i-ph-warning-circle', class: 'text-warning' },
@@ -67,6 +69,15 @@ const folderFix = computed(() => props.status.downloadsStep === 'done'
 // Server names inside a sentence: "Radarr and Sonarr".
 const nameList = new Intl.ListFormat('en', { style: 'long', type: 'conjunction' })
 const listNames = (names: readonly string[]) => nameList.format(names)
+
+// The setup card's title: done, done but for a failed folder check, or the count.
+const setupTitle = computed(() => {
+  if (props.status.setupComplete)
+    return 'jack is set up'
+  if (props.status.requiredComplete)
+    return 'Finish setting up jack'
+  return `Finish setting up jack (${props.status.requiredDone} of ${props.status.requiredTotal})`
+})
 
 // jack-ui usually runs on the same server as jack, so when this page was opened by
 // IPv4 address, that address is the likely answer. Otherwise show a placeholder.
@@ -82,20 +93,15 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
     <UCard v-if="status.showSetupCard" variant="subtle" :ui="{ body: '!p-0' }">
       <div class="flex items-center gap-3 px-4 py-3.5">
         <UIcon
-          :name="status.requiredComplete ? 'i-ph-check-circle' : 'i-ph-list-checks'"
+          :name="status.setupComplete ? 'i-ph-check-circle' : 'i-ph-list-checks'"
           class="size-5 shrink-0"
-          :class="status.requiredComplete ? 'text-success' : 'text-primary'"
+          :class="status.setupComplete ? 'text-success' : 'text-primary'"
         />
         <h2 class="text-sm font-semibold text-highlighted">
-          <template v-if="status.requiredComplete">
-            jack is set up
-          </template>
-          <template v-else>
-            Finish setting up jack ({{ status.requiredDone }} of {{ status.requiredTotal }})
-          </template>
+          {{ setupTitle }}
         </h2>
         <UButton
-          v-if="status.requiredComplete"
+          v-if="status.setupComplete"
           label="Hide"
           color="neutral"
           variant="ghost"
@@ -108,10 +114,16 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
       <!-- Everything done: someone who only shares still gets the way back to downloading. -->
       <div v-if="status.requiredComplete && status.shareOnly" class="border-t border-default px-4 py-3.5">
         <p class="text-sm text-muted">
-          You only share. Turn on downloads when you want friends' movies and episodes in Radarr/Sonarr.
+          <template v-if="status.downloadsOn">
+            You only share. To get friends' movies and episodes into Radarr/Sonarr, turn on Download from friends for a Radarr or Sonarr.
+          </template>
+          <template v-else>
+            You only share. Turn on downloads when you want friends' movies and episodes in Radarr/Sonarr.
+          </template>
         </p>
         <div class="pt-2">
-          <UButton :to="settingsLink('downloads')" label="Turn on downloads" size="sm" color="neutral" variant="outline" />
+          <UButton v-if="status.downloadsOn" :to="settingsLink('servers')" label="Edit Radarr & Sonarr" size="sm" color="neutral" variant="outline" />
+          <UButton v-else :to="settingsLink('downloads')" label="Turn on downloads" size="sm" color="neutral" variant="outline" />
         </div>
       </div>
 
@@ -133,9 +145,10 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
               <UBadge v-if="step.state === 'check'" color="warning" variant="subtle" size="sm" label="Check this" />
             </p>
 
-            <!-- 1. Internal URL. A Radarr/Sonarr test of jack decides it when there is one. -->
+            <!-- 1. Internal URL. Done only when a Radarr/Sonarr test of jack passed, or,
+                 where jack can't test it, when the user confirmed the address. -->
             <template v-if="step.id === 'internal-url'">
-              <template v-if="status.internalUrlStep.failures.length">
+              <template v-if="status.internalUrlStep.reason === 'failed'">
                 <p v-for="failure in status.internalUrlStep.failures" :key="failure.id" class="text-sm break-words text-default">
                   {{ failure.message }}
                 </p>
@@ -144,22 +157,51 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
                   <UButton :to="settingsLink('servers')" label="Edit Radarr & Sonarr" size="sm" color="neutral" variant="outline" />
                 </div>
               </template>
-              <template v-else-if="step.state === 'check'">
+              <template v-else-if="status.internalUrlStep.reason === 'default'">
                 <p class="text-sm text-muted">
                   Is Radarr/Sonarr on the jack Docker network? If not, use
                   <span class="font-mono text-xs text-toned">{{ suggestedUrl }}</span>.
                 </p>
                 <div class="flex flex-wrap gap-2 pt-1">
                   <UButton :to="settingsLink('internal-url')" label="Change the address" size="sm" variant="soft" />
-                  <UButton label="Yes, on the jack network" size="sm" color="neutral" variant="outline" @click="status.ackInternalUrl()" />
+                  <UButton label="Yes, on the jack network" size="sm" color="neutral" variant="outline" @click="status.confirmInternalUrl()" />
                 </div>
               </template>
-              <p v-else-if="status.internalUrlStep.reachedBy.length" class="text-sm text-muted">
+              <!-- Auto-register is off for every server that receives downloads. -->
+              <template v-else-if="status.internalUrlStep.reason === 'untestable'">
+                <p class="text-sm text-muted">
+                  jack doesn't add itself to {{ listNames(status.internalUrlStep.manual) }}, so it can't test this address.
+                  {{ listNames(status.internalUrlStep.manual) }} must reach jack at
+                  <span class="font-mono text-xs break-all text-toned">{{ status.internalUrl }}</span>.
+                </p>
+                <div class="flex flex-wrap gap-2 pt-1">
+                  <UButton :to="settingsLink('internal-url')" label="Change the address" size="sm" variant="soft" />
+                  <UButton label="Yes, this address works" size="sm" color="neutral" variant="outline" @click="status.confirmInternalUrl()" />
+                </div>
+              </template>
+              <p v-else-if="status.internalUrlStep.reason === 'reached'" class="text-sm text-muted">
                 {{ listNames(status.internalUrlStep.reachedBy) }} reached jack at
                 <span class="font-mono text-xs break-all text-toned">{{ status.internalUrl }}</span>.
               </p>
+              <p v-else-if="status.internalUrlStep.reason === 'confirmed'" class="text-sm text-muted">
+                You confirmed that Radarr/Sonarr reach jack at
+                <span class="font-mono text-xs break-all text-toned">{{ status.internalUrl }}</span>.
+              </p>
+              <p v-else-if="status.internalUrlStep.reason === 'share-only'" class="text-sm text-muted">
+                Skipped, because you only share.
+                <UButton label="Undo" size="sm" variant="link" class="p-0 align-baseline" @click="status.setShareOnly(false)" />
+              </p>
+              <!-- Not tested yet: the test runs once jack has added itself to a
+                   Radarr/Sonarr. When jack tried and failed, step 3 says why. -->
               <p v-else class="text-sm text-muted">
-                Radarr/Sonarr reach jack at <span class="font-mono text-xs break-all text-toned">{{ status.internalUrl }}</span>.
+                jack gives Radarr/Sonarr the address
+                <span class="font-mono text-xs break-all text-toned">{{ status.internalUrl }}</span>.
+                <template v-if="status.serversStep.reason === 'not-added'">
+                  Nothing has tested it, because jack isn't in {{ listNames(status.serversStep.names) }} yet (step 3).
+                </template>
+                <template v-else>
+                  It's tested when jack adds itself to a Radarr or Sonarr.
+                </template>
               </p>
             </template>
 
@@ -174,16 +216,16 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
                   <UButton label="I only share" size="sm" color="neutral" variant="link" @click="status.setShareOnly(true)" />
                 </div>
               </template>
+              <!-- Undo sits on step 1, which is skipped too. -->
               <p v-else-if="step.state === 'skipped'" class="text-sm text-muted">
                 Skipped, because you only share.
-                <UButton label="Undo" size="sm" variant="link" class="p-0 align-baseline" @click="status.setShareOnly(false)" />
               </p>
               <p v-else-if="status.completedPath" class="text-sm text-muted">
                 Finished downloads go to <span class="font-mono text-xs break-all text-toned">{{ status.completedPath }}</span>.
               </p>
             </template>
 
-            <!-- 3. Radarr / Sonarr. Receiving needs jack's download client in one of them. -->
+            <!-- 3. Radarr / Sonarr. Receiving needs jack's download client and indexer in one of them. -->
             <template v-else-if="step.id === 'servers'">
               <p v-if="step.state === 'done'" class="text-sm text-muted">
                 Connected: {{ status.serversStep.names.join(', ') }}.
@@ -205,7 +247,7 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
               <p v-else-if="status.serversStep.reason === 'downloads-off'" class="text-sm text-muted">
                 jack adds itself to {{ listNames(status.serversStep.names) }} once downloads are on.
               </p>
-              <template v-else-if="status.serversStep.reason === 'no-client'">
+              <template v-else-if="status.serversStep.reason === 'not-added'">
                 <p v-for="problem in status.serversStep.problems" :key="problem.id" class="text-sm break-words text-default">
                   {{ problem.message }}
                 </p>
@@ -223,8 +265,17 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
                 <p v-else class="text-sm text-muted">
                   jack can't reach {{ listNames(status.serversStep.names) }}. Check the address and API key.
                 </p>
-                <div class="pt-1">
+                <div class="flex flex-wrap items-center gap-2 pt-1">
                   <UButton :to="settingsLink('servers')" label="Edit Radarr & Sonarr" size="sm" variant="soft" />
+                  <!-- Sharing only is a valid setup: it then needs a server that shares instead. -->
+                  <UButton
+                    v-if="status.serversStep.reason === 'no-destination'"
+                    label="I only share"
+                    size="sm"
+                    color="neutral"
+                    variant="link"
+                    @click="status.setShareOnly(true)"
+                  />
                 </div>
               </template>
             </template>
@@ -244,16 +295,20 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
       </ol>
 
       <!-- Folders: the most common Unraid mistake is a path Radarr/Sonarr see differently. -->
-      <div v-if="folderCheckReady" class="space-y-1.5 border-t border-default px-4 py-3.5">
-        <template v-if="folderResult">
-          <p class="flex items-start gap-2 text-sm" :class="FOLDER_TONE[folderResult.tone].class">
-            <UIcon :name="FOLDER_TONE[folderResult.tone].icon" class="mt-0.5 size-4 shrink-0" />
-            <span class="min-w-0 break-words">{{ folderResult.text }}</span>
+      <div v-if="status.folderCheckReady" class="space-y-1.5 border-t border-default px-4 py-3.5">
+        <template v-if="status.folderResult">
+          <p class="flex items-start gap-2 text-sm" :class="FOLDER_TONE[status.folderResult.tone].class">
+            <UIcon :name="FOLDER_TONE[status.folderResult.tone].icon" class="mt-0.5 size-4 shrink-0" />
+            <span class="min-w-0 break-words">{{ status.folderResult.text }}</span>
           </p>
-          <div v-if="folderResult.tone !== 'ok'" class="flex flex-wrap items-center gap-2 pt-1 pl-6">
+          <div v-if="status.folderResult.tone !== 'ok'" class="flex flex-wrap items-center gap-2 pt-1 pl-6">
             <UButton :to="folderFix.to" :label="folderFix.label" size="sm" variant="soft" />
             <UButton label="Check again" size="sm" color="neutral" variant="link" :loading="folderRunning" @click="runFolderCheck" />
+            <span v-if="folderCheckedAgo && !folderRunning" class="text-xs text-dimmed">Checked {{ folderCheckedAgo }}.</span>
           </div>
+          <p v-if="folderError" class="pl-6 text-sm break-words text-error">
+            {{ folderError }}
+          </p>
         </template>
         <template v-else>
           <p class="text-sm text-muted">

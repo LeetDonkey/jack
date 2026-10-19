@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import type { GroupedRow } from '~/components/LogRow.vue'
 import type { LogRecord } from '~/types/management'
-import { extractHttp, groupKey, levelName } from '~/utils/logFormat'
+import { extractHttp, groupKey, levelName, logDayBreaks, logDayKey, logRuns, logSegmentBreaks } from '~/utils/logFormat'
+import { LogTail } from '~/utils/logTail'
 
 type Row = LogRecord & { _id: number }
 
-const { request, extractError } = useManagement()
+const { request } = useManagement()
 
 // 'all' means no server-side level floor; the rest map to the pino level names.
 const LEVELS = ['all', 'trace', 'debug', 'info', 'warn', 'error', 'fatal'] as const
@@ -16,32 +17,24 @@ const levelItems = LEVELS.map(value => ({ label: value === 'all' ? 'All levels' 
 // How many lines to backfill on load, and the in-memory cap for the live view.
 const BACKFILL_LINES = 500
 const MAX_ROWS = 2000
+// A backfill after a pause or reconnect asks for this many when BACKFILL_LINES
+// don't reach back to the lines shown. It leaves room for the latest lines shown
+// before, so a hole it can't fill has lines on both sides and a note in it.
+const CATCH_UP_LINES = MAX_ROWS - BACKFILL_LINES
 
 const rows = ref<Row[]>([])
+// Rows with lines missing just above them: a backfill that couldn't reach back
+// to the lines shown before it.
+const gaps = ref(new Set<number>())
 const pending = ref(false)
-const error = ref('')
+const error = ref<unknown>()
 const live = ref(true)
-const connected = ref(false)
-// Whether the current stream has opened at least once: before that the badge says
-// "Connecting…", after a drop "Reconnecting…".
-const connectedOnce = ref(false)
-
-const badge = computed(() => {
-  if (!live.value)
-    return { label: 'Paused', color: 'neutral' as const }
-  if (connected.value)
-    return { label: 'Live', color: 'success' as const }
-  return connectedOnce.value
-    ? { label: 'Reconnecting…', color: 'warning' as const }
-    : { label: 'Connecting…', color: 'neutral' as const }
-})
 
 // View controls.
 const query = ref('')
 const collapse = ref(true)
 
 let seq = 0
-let source: EventSource | null = null
 
 function tag(record: LogRecord): Row {
   return { ...record, _id: seq++ }
@@ -51,99 +44,115 @@ function levelQuery(prefix: '?' | '&'): string {
   return level.value === 'all' ? '' : `${prefix}level=${level.value}`
 }
 
-function append(record: LogRecord) {
-  rows.value.push(tag(record))
-  if (rows.value.length > MAX_ROWS)
+function append(records: LogRecord[], scrollToEnd = false): Row[] {
+  if (records.length === 0)
+    return []
+  const added = records.map(tag)
+  rows.value.push(...added)
+  if (rows.value.length > MAX_ROWS) {
     rows.value.splice(0, rows.value.length - MAX_ROWS)
-  scheduleScroll(false)
+    const oldest = rows.value[0]!._id
+    for (const id of gaps.value) {
+      if (id < oldest)
+        gaps.value.delete(id)
+    }
+  }
+  scheduleScroll(scrollToEnd)
+  return added
 }
 
-function disconnect() {
-  source?.close()
-  source = null
-  connected.value = false
-  connectedOnce.value = false
-}
+// The stream only sends lines logged after it opened. Every open (the first, and
+// each reopen after jack restarted or the page was paused) fetches the latest
+// lines again, and `tail` keeps only those not shown yet.
+const tail = new LogTail()
+// Bumped when the level changes, so an answer for the old level is dropped.
+let generation = 0
+let syncing = false
+let syncAgain = false
+// Lines from the stream while a backfill is on its way, added after it so the
+// order holds.
+let held: LogRecord[] = []
 
-function connect() {
-  if (!import.meta.client)
+async function sync() {
+  if (syncing) {
+    // An open during a backfill: what was logged just before it may be missing.
+    syncAgain = true
     return
-  disconnect()
-  // Capture this stream so a callback queued from a superseded EventSource (a
-  // fast level change reconnects mid-dispatch) can't append a previous-filter
-  // record or flip `connected` after `source` has moved on.
-  const nextSource = new EventSource(`/api/management/logs/stream${levelQuery('?')}`)
-  source = nextSource
-  nextSource.onopen = () => {
-    if (source === nextSource) {
-      connected.value = true
-      connectedOnce.value = true
-    }
   }
-  nextSource.onmessage = (event) => {
-    if (source !== nextSource || !event.data)
-      return
-    try {
-      append(JSON.parse(event.data) as LogRecord)
-    }
-    catch {
-      // Ignore a malformed frame rather than break the stream.
-    }
-  }
-  nextSource.onerror = () => {
-    // EventSource reconnects on its own; just reflect the gap in the UI.
-    if (source === nextSource)
-      connected.value = false
-  }
-}
-
-// Guards overlapping reloads (fast level changes): each reload takes a ticket and
-// only the newest may replace `rows`, clear `pending`, or reconnect — so a slower
-// earlier backfill can't resolve late and win with stale, wrong-filter rows.
-let reloadSeq = 0
-
-async function reload() {
-  const seq = ++reloadSeq
-  // Close the old stream first so it can't append previous-filter lines during
-  // the backfill request.
-  disconnect()
+  const run = generation
+  syncing = true
   pending.value = true
-  error.value = ''
   try {
-    const res = await request<{ logs: LogRecord[] }>(`logs?lines=${BACKFILL_LINES}${levelQuery('&')}`)
-    if (seq !== reloadSeq)
-      return
-    rows.value = res.logs.map(tag)
-    scheduleScroll(true)
-  }
-  catch (err) {
-    if (seq !== reloadSeq)
-      return
-    error.value = extractError(err, 'Failed to load logs.')
+    do {
+      syncAgain = false
+      try {
+        const backfill = await tail.backfill(
+          async lines => (await request<{ logs: LogRecord[] }>(`logs?lines=${lines}${levelQuery('&')}`)).logs,
+          { lines: BACKFILL_LINES, maxLines: CATCH_UP_LINES, wanted: () => run === generation },
+        )
+        if (!backfill)
+          return
+        const added = append(backfill.records, rows.value.length === 0)
+        if (backfill.gap && added[0])
+          gaps.value.add(added[0]._id)
+        error.value = undefined
+      }
+      catch (err) {
+        if (run !== generation)
+          return
+        error.value = err
+      }
+    } while (syncAgain)
   }
   finally {
-    if (seq === reloadSeq)
+    if (run === generation) {
+      syncing = false
       pending.value = false
+      append(held.filter(record => tail.take(record)))
+      held = []
+    }
   }
-  if (live.value)
-    connect()
 }
+
+function onRecord(record: LogRecord) {
+  if (!record || typeof record !== 'object')
+    return
+  // jack answers again.
+  error.value = undefined
+  if (syncing) {
+    held.push(record)
+    if (held.length > MAX_ROWS)
+      held.shift()
+  }
+  else if (tail.take(record)) {
+    append([record])
+  }
+}
+
+const streamPath = computed(() => live.value ? `logs/stream${levelQuery('?')}` : null)
+const { connected, hasConnectedOnce } = useManagementStream<LogRecord>(streamPath, onRecord, { onOpen: sync })
+
+watch(level, () => {
+  generation++
+  syncing = false
+  syncAgain = false
+  held = []
+  tail.reset()
+  rows.value = []
+  gaps.value = new Set()
+  error.value = undefined
+  void sync()
+})
+onMounted(sync)
 
 function toggleLive() {
   live.value = !live.value
-  if (live.value)
-    connect()
-  else
-    disconnect()
 }
 
 function clear() {
   rows.value = []
+  gaps.value = new Set()
 }
-
-watch(level, reload)
-onMounted(reload)
-onBeforeUnmount(disconnect)
 
 // --- Auto-scroll: stick to the bottom unless the user has scrolled up. ---
 const scroller = useTemplateRef<HTMLElement>('scroller')
@@ -190,6 +199,20 @@ function durationOf(row: Row): number | undefined {
   return typeof row.durationMs === 'number' ? row.durationMs : undefined
 }
 
+// Each row's jack run (see logRuns), and how many holes (see `gaps`) lie before
+// it, by row id. Counted over all rows, so a filter can't hide a restart.
+const segments = computed(() => {
+  const runs = logRuns(rows.value)
+  const byId = new Map<number, { run: number, gap: number }>()
+  let gap = 0
+  rows.value.forEach((row, index) => {
+    if (gaps.value.has(row._id))
+      gap++
+    byId.set(row._id, { run: runs[index]!, gap })
+  })
+  return byId
+})
+
 const groups = computed<GroupedRow[]>(() => {
   const list = filtered.value
   if (!collapse.value)
@@ -198,7 +221,10 @@ const groups = computed<GroupedRow[]>(() => {
   const out: GroupedRow[] = []
   let prevKey: string | null = null
   for (const r of list) {
-    const key = groupKey(r)
+    // A run of repeats stops at midnight, at a restart and at a hole, so each
+    // side shows its own.
+    const segment = segments.value.get(r._id)
+    const key = `${groupKey(r)}|${logDayKey(r.time)}|${segment?.run}|${segment?.gap}`
     const dur = durationOf(r)
     const last = out.at(-1)
     if (last && key === prevKey) {
@@ -217,6 +243,22 @@ const groups = computed<GroupedRow[]>(() => {
   }
   return out
 })
+
+// The day above each row that starts one (see logDayBreaks). `now` moves on each
+// minute, so "Today" turns into "Yesterday" after midnight.
+const now = ref(Date.now())
+let nowTimer: ReturnType<typeof setInterval> | undefined
+onMounted(() => {
+  nowTimer = setInterval(() => {
+    now.value = Date.now()
+  }, 60_000)
+})
+onBeforeUnmount(() => clearInterval(nowTimer))
+const dayBreaks = computed(() => logDayBreaks(groups.value, now.value))
+// "jack started" above the first row of each run, and the missing-lines note above
+// the row after a hole. A group's id is its first row's.
+const runBreaks = computed(() => logSegmentBreaks(groups.value.map(group => segments.value.get(group._id)?.run ?? 0)))
+const gapBreaks = computed(() => logSegmentBreaks(groups.value.map(group => segments.value.get(group._id)?.gap ?? 0)))
 
 const expanded = ref<Set<number>>(new Set())
 function toggle(id: number) {
@@ -245,9 +287,7 @@ const summary = computed(() => {
       <UDashboardNavbar title="Logs">
         <template #right>
           <div class="flex items-center gap-2">
-            <UBadge :color="badge.color" variant="subtle" :icon="live ? 'i-ph-broadcast' : 'i-ph-pause'">
-              {{ badge.label }}
-            </UBadge>
+            <LiveBadge :connected="connected" :has-connected-once="hasConnectedOnce" :paused="!live" />
             <!-- Below sm only the badge stays here; the controls sit in the filter bar. -->
             <div class="hidden items-center gap-2 sm:flex">
               <USelect v-model="level" :items="levelItems" size="sm" class="w-32" aria-label="Minimum log level" />
@@ -316,7 +356,7 @@ const summary = computed(() => {
           <span class="ms-auto shrink-0 text-xs tabular-nums text-dimmed">{{ summary }}</span>
         </div>
 
-        <UAlert v-if="error" color="error" variant="soft" icon="i-ph-warning" :title="error" />
+        <LoadErrorAlert v-if="error && rows.length === 0" :error="error" :retry="sync" />
 
         <p v-else-if="pending && rows.length === 0" class="flex items-center gap-2 text-sm text-muted">
           <UIcon name="i-ph-circle-notch" class="size-4 animate-spin" />
@@ -348,14 +388,35 @@ const summary = computed(() => {
           class="min-h-0 flex-1 overflow-auto rounded-lg border border-default bg-elevated/40 font-mono text-xs"
           @scroll="onScroll"
         >
-          <LogRow
-            v-for="row in groups"
-            :key="row._id"
-            :row="row"
-            :expanded="expanded.has(row._id)"
-            class="border-b border-default/40 last:border-b-0"
-            @toggle="toggle(row._id)"
-          />
+          <template v-for="(row, index) in groups" :key="row._id">
+            <!-- Sticks to the top while its day scrolls past. -->
+            <div
+              v-if="dayBreaks[index]"
+              class="sticky top-0 z-10 border-b border-default bg-elevated px-3 py-1 font-sans font-medium text-muted"
+            >
+              {{ dayBreaks[index] }}
+            </div>
+            <div
+              v-if="gapBreaks[index]"
+              class="flex items-start gap-2 border-b border-default bg-elevated px-3 py-1 font-sans text-muted"
+            >
+              <UIcon name="i-ph-warning" class="mt-0.5 size-3.5 shrink-0 text-warning" />
+              <span>Some lines are missing here. jack logged too many while the list was paused or reconnecting, so only the latest ones follow.</span>
+            </div>
+            <div
+              v-if="runBreaks[index]"
+              class="flex items-center gap-2 border-b border-default bg-elevated px-3 py-1 font-sans font-medium text-muted"
+            >
+              <UIcon name="i-ph-power" class="size-3.5 shrink-0" />
+              jack started
+            </div>
+            <LogRow
+              :row="row"
+              :expanded="expanded.has(row._id)"
+              class="border-b border-default/40 last:border-b-0"
+              @toggle="toggle(row._id)"
+            />
+          </template>
         </div>
       </div>
     </template>

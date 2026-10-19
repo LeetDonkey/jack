@@ -1,7 +1,13 @@
 <script setup lang="ts">
+import type { Form, FormError, FormSchema } from '@nuxt/ui'
 import type { BansSnapshot, SecurityConfig, SecurityConfigPatch } from '~/types/management'
+import type { SecurityListField } from '~/utils/security-form'
+import { addressListError, splitAddressList } from '~/utils/address-list'
+import { securityFieldErrors } from '~/utils/security-form'
 
-const { request, extractError } = useManagement()
+const { request, extractError, errorInfo } = useManagement()
+const form = useTemplateRef<Form<FormSchema>>('form')
+const { onError, showFixHint } = useFormErrorFocus(form)
 
 const { data: security, pending, error: loadError, refresh } = useLazyAsyncData(
   'security-config',
@@ -63,11 +69,63 @@ watch(dirty, (isDirty) => {
     saved.value = false
 })
 
-// Empty means "use the default" (private network ranges).
-const SEPARATORS = /[\s,]+/
+// Empty sends null: Trusted proxies then falls back to every private address, and
+// the other lists add nothing to the LAN.
 function list(text: string) {
-  const items = text.split(SEPARATORS).map(s => s.trim()).filter(Boolean)
+  const items = splitAddressList(text)
   return items.length ? items : null
+}
+
+type State = ReturnType<typeof blankState>
+
+// The fields on screen: the ban settings and the extra LAN addresses only show
+// while their switch is on.
+function visibleFields(s: State): Set<string> {
+  const fields = new Set(['banEnabled', 'lanOnlyArrApis', 'publicOpenApi', 'trustedProxies'])
+  if (s.banEnabled)
+    ['maxFailures', 'windowMinutes', 'banMinutes', 'neverBan'].forEach(f => fields.add(f))
+  if (s.lanOnlyArrApis)
+    fields.add('arrApiAlsoAllowed')
+  return fields
+}
+
+const LIST_FIELDS: SecurityListField[] = ['trustedProxies', 'neverBan', 'arrApiAlsoAllowed']
+
+// jack only matches real addresses, so a name such as "Nginx Proxy Manager" would
+// be saved and then match nothing. Hidden lists are left to jack's own check.
+function validate(s: State): FormError[] {
+  const visible = visibleFields(s)
+  return LIST_FIELDS.flatMap((name) => {
+    const message = visible.has(name) ? addressListError(s[name]) : null
+    return message ? [{ name, message }] : []
+  })
+}
+
+const FIELD_LABELS: Record<string, string> = {
+  trustedProxies: 'Trusted proxies',
+  neverBan: 'Never ban',
+  arrApiAlsoAllowed: 'Also allow',
+  maxFailures: 'Failures',
+  windowMinutes: 'Within (minutes)',
+  banMinutes: 'Ban for (minutes)',
+}
+
+// A refused save: jack's errors on the fields they name, or one message above
+// Save for a field that isn't on screen.
+function showSaveError(err: unknown, patch: SecurityConfigPatch) {
+  const info = errorInfo(err)
+  const issues = info.issues.length ? info.issues : info.field && info.message ? [{ field: info.field, message: info.message }] : []
+  const sent = { trustedProxies: patch.trustedProxies, neverBan: patch.neverBan, arrApiAlsoAllowed: patch.arrApiAlsoAllowed }
+  const onScreen = securityFieldErrors(issues, sent, visibleFields(state))
+  if (onScreen.length) {
+    form.value?.setErrors(onScreen)
+    void onError()
+    return
+  }
+  const [hidden] = securityFieldErrors(issues, sent, new Set(Object.keys(FIELD_LABELS)))
+  saveError.value = hidden
+    ? `${FIELD_LABELS[hidden.name]}: ${hidden.message}`
+    : extractError(err, 'Could not save the security settings.')
 }
 
 async function save() {
@@ -91,7 +149,7 @@ async function save() {
     saved.value = true
   }
   catch (err) {
-    saveError.value = extractError(err, 'Could not save the security settings.')
+    showSaveError(err, patch)
   }
   finally {
     saving.value = false
@@ -100,6 +158,7 @@ async function save() {
 
 function revert() {
   seed(security.value ?? null)
+  form.value?.clear()
   saveError.value = null
   saved.value = false
 }
@@ -130,8 +189,9 @@ async function unban(ip: string) {
       Loading…
     </p>
 
-    <UForm v-else :state="state" class="space-y-3" @submit="save">
-      <UCard variant="subtle" :ui="{ body: 'space-y-4' }">
+    <UForm v-else ref="form" :state="state" :validate="validate" class="space-y-3" @submit="save" @error="onError">
+      <!-- The ids are link targets for the update notice (UpgradeNotice). -->
+      <UCard id="security-bans" variant="subtle" class="scroll-mt-6" :ui="{ body: 'space-y-4' }">
         <UFormField
           name="banEnabled"
           label="Ban repeated failures"
@@ -149,16 +209,21 @@ async function unban(ip: string) {
         <UFormField
           name="trustedProxies"
           label="Trusted proxies"
-          description="Addresses or CIDR ranges of the reverse proxy in front of jack (e.g. Nginx Proxy Manager). Only requests from these may name the real client in X-Forwarded-For / X-Real-IP. The list must include the address your proxy connects from, or jack refuses the Radarr/Sonarr APIs to everything coming through it. Empty means private network ranges."
+          description="The reverse proxy in front of jack, as IP addresses or ranges such as 172.18.0.0/16. Only requests from these may tell jack the visitor's real address. Empty trusts every private address, which covers a proxy on Unraid or elsewhere on your LAN. A list without your proxy's address stops bans for everything that comes through it."
         >
-          <UInput v-model="state.trustedProxies" :disabled="saving" placeholder="Private ranges" class="w-full font-mono" />
+          <UInput v-model="state.trustedProxies" :disabled="saving" placeholder="Every private address" class="w-full font-mono" />
         </UFormField>
-        <UFormField v-if="state.banEnabled" name="neverBan" label="Never ban" description="Addresses or CIDR ranges that are never counted. Empty means your LAN and loopback.">
-          <UInput v-model="state.neverBan" :disabled="saving" placeholder="Private ranges" class="w-full font-mono" />
+        <UFormField
+          v-if="state.banEnabled"
+          name="neverBan"
+          label="Never ban"
+          description="Addresses outside your LAN that are never banned, as IP addresses or ranges, e.g. 100.64.0.0/10 for Tailscale. Your LAN is always exempt."
+        >
+          <UInput v-model="state.neverBan" :disabled="saving" placeholder="Nothing else" class="w-full font-mono" />
         </UFormField>
       </UCard>
 
-      <UCard variant="subtle" :ui="{ body: 'space-y-4' }">
+      <UCard id="security-apis" variant="subtle" class="scroll-mt-6" :ui="{ body: 'space-y-4' }">
         <UFormField
           name="lanOnlyArrApis"
           label="Radarr/Sonarr APIs only on your LAN"
@@ -170,7 +235,7 @@ async function unban(ip: string) {
           v-if="state.lanOnlyArrApis"
           name="arrApiAlsoAllowed"
           label="Also allow"
-          description="Addresses or CIDR ranges allowed on top of your LAN, for a Radarr or Sonarr that reaches jack from elsewhere, e.g. over Tailscale (100.64.0.0/10) or from a VPS."
+          description="Addresses allowed on top of your LAN, for a Radarr or Sonarr that reaches jack from elsewhere: e.g. 100.64.0.0/10 for Tailscale, or your VPS's IP address."
         >
           <UInput v-model="state.arrApiAlsoAllowed" :disabled="saving" placeholder="Nothing else" class="w-full font-mono" />
         </UFormField>
@@ -187,7 +252,10 @@ async function unban(ip: string) {
       <UAlert v-else-if="saved" color="success" variant="soft" icon="i-ph-check-circle" title="Saved." description="Applies right away." />
 
       <div class="flex flex-wrap items-center justify-end gap-2 pt-1">
-        <p class="mr-auto text-xs text-muted">
+        <p v-if="showFixHint" class="mr-auto text-xs text-error">
+          Fix the highlighted fields to save.
+        </p>
+        <p v-else class="mr-auto text-xs text-muted">
           Clear a field to use jack's default.
         </p>
         <UButton v-if="dirty" label="Revert" color="neutral" variant="ghost" :disabled="saving" @click="revert" />

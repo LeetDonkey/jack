@@ -34,14 +34,27 @@ watch(() => Boolean(overview.value) && setup.settled, (shown) => {
 const { settings } = useSettings()
 const peerTextClass = (id: string) => settings.value?.peerColors.get(id)?.text ?? peerColorTextClass(id)
 
-// "seen 2 min ago" has to move on while nothing else changes, so it reads a clock
-// that ticks instead of the time of the last snapshot.
+// "seen 2 min ago" and "Checked 5 min ago" have to move on while nothing else
+// changes, so they read a clock that ticks instead of the time of the last
+// snapshot. Browsers slow timers down in background tabs, so coming back to the
+// tab sets it at once.
 const now = ref(Date.now())
 let clock: ReturnType<typeof setInterval> | undefined
+function tick() {
+  now.value = Date.now()
+}
+function tickWhenShown() {
+  if (document.visibilityState === 'visible')
+    tick()
+}
 onMounted(() => {
-  clock = setInterval(() => now.value = Date.now(), 30_000)
+  clock = setInterval(tick, 30_000)
+  document.addEventListener('visibilitychange', tickWhenShown)
 })
-onBeforeUnmount(() => clearInterval(clock))
+onBeforeUnmount(() => {
+  clearInterval(clock)
+  document.removeEventListener('visibilitychange', tickWhenShown)
+})
 
 // ── Right now ───────────────────────────────────────────────────────────────
 
@@ -167,7 +180,7 @@ const lifetime = computed(() => {
       <div v-else-if="overview && counts && (setup.settled || shownOnce)" class="space-y-8">
         <!-- What needs doing, first: setup, then problems. -->
         <div class="space-y-4">
-          <SetupChecklist :status="setup" />
+          <SetupChecklist :status="setup" :now="now" />
           <DashboardAttention
             :overview="overview"
             :setup-state="setup.requiredState"
@@ -175,6 +188,7 @@ const lifetime = computed(() => {
             :share-only="setup.shareOnly"
             :setup-server-ids="setup.cardServerIds"
             :setup-asks-for-receiver="setup.cardAsksForReceiver"
+            :setup-shows-problem="setup.cardShowsProblem"
           />
         </div>
 

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { NavigationMenuItem } from '@nuxt/ui'
 import { isNavigationFailure, NavigationFailureType } from 'vue-router'
+import { edgeFadeMask, revealScrollLeft, scrollEdges } from '~/utils/scroll-reveal'
 import { settingsRedirect } from '~/utils/settings-links'
 
 // The Settings shell: one tab per child page under pages/settings/, and the parts
@@ -75,6 +76,51 @@ function scrollToTop() {
   content.value?.closest('[data-slot="body"]')?.scrollTo({ top: 0 })
 }
 
+// On a phone the tabs don't fit and the bar scrolls sideways. The selected tab is
+// scrolled into view, since a link can open any tab (Advanced is the last one),
+// and an edge with more tabs behind it fades out, so the bar reads as scrollable.
+const TAB_FADE_PX = 24
+const tabBar = useTemplateRef<HTMLElement>('tabBar')
+const tabEdges = ref({ start: false, end: false })
+const tabBarStyle = computed(() => {
+  const mask = edgeFadeMask(tabEdges.value, `${TAB_FADE_PX}px`)
+  return mask ? { maskImage: mask } : undefined
+})
+
+function updateTabEdges() {
+  const bar = tabBar.value
+  if (bar)
+    tabEdges.value = scrollEdges(bar.scrollLeft, bar.clientWidth, bar.scrollWidth)
+}
+
+function revealActiveTab(behavior: ScrollBehavior = 'auto') {
+  const bar = tabBar.value
+  const active = bar?.querySelector<HTMLElement>('[aria-current="page"]')
+  if (bar && active) {
+    const left = revealScrollLeft(bar.getBoundingClientRect(), bar.scrollLeft, active.getBoundingClientRect(), TAB_FADE_PX)
+    if (left !== null)
+      bar.scrollTo({ left, behavior })
+  }
+  updateTabEdges()
+}
+
+// The bar's size changes with the screen, and the tabs' width once the web font
+// has loaded. The first callback comes right after observe(), on mount.
+let tabBarObserver: ResizeObserver | undefined
+onMounted(() => {
+  const bar = tabBar.value
+  if (!bar)
+    return
+  tabBarObserver = new ResizeObserver(() => revealActiveTab())
+  tabBarObserver.observe(bar)
+  if (bar.firstElementChild)
+    tabBarObserver.observe(bar.firstElementChild)
+})
+
+function smoothScroll(): ScrollBehavior {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+}
+
 onMounted(() => void scrollToHash(route.hash))
 // Every navigation within Settings, including a link to the hash already in the
 // URL: vue-router drops that one as a duplicate, so a watch on route.hash would
@@ -89,10 +135,14 @@ const stopAfterEach = useRouter().afterEach((to, from, failure) => {
     void scrollToHash(to.hash)
   else if (to.path !== from.path)
     scrollToTop()
+  // The links mark the new tab on the next render.
+  if (to.path !== from.path)
+    void nextTick(() => revealActiveTab(smoothScroll()))
 })
 onBeforeUnmount(() => {
   stopAfterEach()
   stopFollowing?.()
+  tabBarObserver?.disconnect()
 })
 </script>
 
@@ -101,10 +151,12 @@ onBeforeUnmount(() => {
     <template #header>
       <UDashboardNavbar title="Settings" />
 
-      <!-- Scrolls sideways when the tabs don't fit (the toolbar is overflow-x-auto),
-           so the labels are never cut off. -->
+      <!-- The tabs scroll sideways inside their own row when they don't fit, so the
+           fade sits inside the toolbar's padding and its bottom border stays whole. -->
       <UDashboardToolbar>
-        <UNavigationMenu :items="tabs" highlight class="-mx-1 shrink-0" :ui="{ item: 'shrink-0' }" />
+        <div ref="tabBar" class="-mx-1 flex min-w-0 flex-1 overflow-x-auto" :style="tabBarStyle" @scroll.passive="updateTabEdges">
+          <UNavigationMenu :items="tabs" highlight class="shrink-0" :ui="{ item: 'shrink-0' }" />
+        </div>
       </UDashboardToolbar>
     </template>
 

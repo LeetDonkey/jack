@@ -62,11 +62,77 @@ export function peerProblem(name: string, health: Pick<PeerHealth, 'online' | 'l
   }
 }
 
+// lastUsedTrackedSince is the key's creation unless the key is older than usage
+// tracking. A minute of slack covers the two timestamps being written apart.
+const TRACKING_SLACK_MS = 60_000
+
+// The backend's window for a key in use (KEY_ACTIVE_MS in friend-links.ts):
+// a friend counts as stale only after this long without a key use.
+const KEY_ACTIVE_MS = 24 * 60 * 60_000
+
+// True when the key is older than jack's record of key use, so "no last use"
+// doesn't mean "never used". False while the creation time isn't known.
+function olderThanTracking(key: Pick<FriendKey, 'lastUsedTrackedSince'>, createdAt: string | null | undefined): boolean {
+  const tracked = Date.parse(key.lastUsedTrackedSince)
+  const created = createdAt ? Date.parse(createdAt) : Number.NaN
+  return !Number.isNaN(created) && !Number.isNaN(tracked) && tracked - created > TRACKING_SLACK_MS
+}
+
+// The latest of these times, or null when there is none.
+function latest(times: ReadonlyArray<string | null>): string | null {
+  let best: string | null = null
+  for (const time of times) {
+    if (time && !Number.isNaN(Date.parse(time)) && (best === null || Date.parse(time) > Date.parse(best)))
+      best = time
+  }
+  return best
+}
+
+/**
+ * Why a friend's jack isn't using the keys you gave them, on a card with both
+ * halves that isn't offline:
+ * - `waiting`: no key was ever used, so they haven't added you yet.
+ * - `quiet`: their jack used a key before, but not in the last 24 hours. `since`
+ *   is the last use. For a key older than jack's record of key use it is the day
+ *   that record starts, since jack can't tell whether it was ever used.
+ * - `tooSoon`: a key is older than jack's record of key use, and that record
+ *   started less than 24 hours ago (right after an update). Their jack may well
+ *   use the key and just hasn't connected since. Like the backend's `stale`,
+ *   it becomes `quiet` after 24 hours without a use.
+ *
+ * Null for every other card.
+ */
+export type FriendSilence = { kind: 'waiting' } | { kind: 'quiet', since: string | null } | { kind: 'tooSoon' }
+
+export function friendSilence(
+  friend: Pick<Friend, 'state'> & { keys: ReadonlyArray<Pick<FriendKey, 'id' | 'lastUsedAt' | 'lastUsedTrackedSince'>> },
+  now: Date,
+  keyCreatedAt?: Record<number, string>,
+): FriendSilence | null {
+  if (friend.state === 'stale')
+    return { kind: 'quiet', since: latest(friend.keys.map(key => key.lastUsedAt)) }
+  if (friend.state !== 'waiting')
+    return null
+  const untracked = friend.keys.filter(key => olderThanTracking(key, keyCreatedAt?.[key.id]))
+  if (!untracked.length)
+    return { kind: 'waiting' }
+  const since = latest(untracked.map(key => key.lastUsedTrackedSince))
+  if (since && now.getTime() - Date.parse(since) <= KEY_ACTIVE_MS)
+    return { kind: 'tooSoon' }
+  return { kind: 'quiet', since }
+}
+
+type CardFriend = Pick<Friend, 'state' | 'name' | 'peer'> & { keys: ReadonlyArray<Pick<FriendKey, 'id' | 'lastUsedAt' | 'lastUsedTrackedSince'>> }
+
 /**
  * The badge on a friend card. Offline shows the status word; the other states
  * describe the friendship, and the card's prompt says which way is missing.
+ * A friend whose jack stopped connecting to yours is "Only one way since …":
+ * you may still download from them, and the card says so a few lines below.
+ * `keyCreatedAt` (GET /api-keys) tells a never-used key from one older than
+ * jack's record of key use.
  */
-export function friendBadge(friend: Pick<Friend, 'state' | 'name' | 'peer'>, now: Date = new Date()): { label: string, color: FriendTone } {
+export function friendBadge(friend: CardFriend, now: Date = new Date(), keyCreatedAt?: Record<number, string>): { label: string, color: FriendTone } {
   switch (friend.state) {
     case 'offline': {
       if (!friend.peer)
@@ -77,19 +143,104 @@ export function friendBadge(friend: Pick<Friend, 'state' | 'name' | 'peer'>, now
     case 'both':
       return { label: 'Connected both ways', color: 'success' }
     case 'waiting':
-      return { label: `Waiting for ${who(friend.name)}`, color: 'neutral' }
+    case 'stale': {
+      const silence = friendSilence(friend, now, keyCreatedAt)
+      if (silence?.kind === 'tooSoon')
+        return { label: `Waiting for ${possessive(friend.name)} jack`, color: 'neutral' }
+      if (silence?.kind !== 'quiet')
+        return { label: `Waiting for ${who(friend.name)}`, color: 'neutral' }
+      const day = silence.since ? shortDay(silence.since, now) : ''
+      return { label: day ? `Only one way since ${day}` : 'Only one way for over a day', color: 'warning' }
+    }
     default:
       return { label: 'Only one way', color: 'warning' }
   }
 }
 
-// lastUsedTrackedSince is the key's creation unless the key is older than usage
-// tracking. A minute of slack covers the two timestamps being written apart.
-const TRACKING_SLACK_MS = 60_000
+/** What a friend card asks you to do next, with the button that does it. */
+export interface FriendPrompt {
+  text: string
+  // Muted words after the text.
+  hint: string | null
+  label: string
+  icon: string
+  // `checkAddress` opens Settings at your public address.
+  action: 'add' | 'invite' | 'newLink' | 'checkAddress'
+}
+
+/** The prompt on a friend card, or null when the card needs nothing from you. */
+export function friendPrompt(friend: CardFriend, now: Date = new Date(), keyCreatedAt?: Record<number, string>): FriendPrompt | null {
+  const name = friend.name
+  if (!friend.peer)
+    return { text: `You don't download from ${name} yet.`, hint: null, label: `Paste ${name}'s link`, icon: 'i-ph-clipboard-text', action: 'add' }
+  if (!friend.keys.length)
+    return { text: `${name} can't download from you yet.`, hint: null, label: `Send ${name} a link`, icon: 'i-ph-link', action: 'invite' }
+  // Nothing to do while it's too soon to tell (`tooSoon`): their next connection settles it.
+  const silence = friendSilence(friend, now, keyCreatedAt)
+  if (silence?.kind === 'waiting')
+    return { text: `Waiting for ${name} to add you.`, hint: 'They add you by pasting the link you sent. Lost it?', label: 'Send a new link', icon: 'i-ph-link', action: 'newLink' }
+  if (silence?.kind === 'quiet') {
+    const day = silence.since ? shortDay(silence.since, now) : ''
+    return {
+      text: `${possessive(name, true)} jack hasn't connected to yours ${day ? `since ${day}` : 'for over a day'}.`,
+      hint: `Check that your address still works, and ask ${who(name)} what their jack shows for you.`,
+      label: 'Check your address',
+      icon: 'i-ph-plugs',
+      action: 'checkAddress',
+    }
+  }
+  return null
+}
+
+const TIME = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' })
+
+/**
+ * What tells a friend's keys apart, as the words after "key": `'Alice laptop'`
+ * for a name no other key has, otherwise the day the key was made (`made 12 Oct`),
+ * with the time when two keys share the day too, or `#7` while creation times
+ * aren't known. Null for a friend's only key when it carries their name: the card
+ * already says whose it is.
+ */
+export function friendKeyLabels(
+  friendName: string,
+  keys: ReadonlyArray<Pick<FriendKey, 'id' | 'name'>>,
+  keyCreatedAt?: Record<number, string>,
+  now: Date = new Date(),
+): Record<number, string | null> {
+  const labels: Record<number, string | null> = {}
+  const only = keys.length === 1 ? keys[0]! : null
+  if (only && sameName(only.name, friendName)) {
+    labels[only.id] = null
+    return labels
+  }
+  const nameCount = new Map<string, number>()
+  for (const key of keys) {
+    const name = key.name?.trim().toLowerCase() ?? ''
+    nameCount.set(name, (nameCount.get(name) ?? 0) + 1)
+  }
+  for (const key of keys) {
+    const name = key.name?.trim() ?? ''
+    if (name && nameCount.get(name.toLowerCase()) === 1) {
+      labels[key.id] = `'${name}'`
+      continue
+    }
+    const created = keyCreatedAt?.[key.id]
+    const day = created ? shortDay(created, now) : ''
+    labels[key.id] = day ? `made ${day}` : `#${key.id}`
+  }
+  // Keys made the same day: add the time, then the number if that's equal too.
+  const repeated = (id: number) => keys.some(other => other.id !== id && labels[other.id] === labels[id])
+  const sameDay = keys.filter(key => labels[key.id]?.startsWith('made ') && repeated(key.id))
+  for (const key of sameDay)
+    labels[key.id] = `${labels[key.id]}, ${TIME.format(new Date(keyCreatedAt![key.id]!))}`
+  for (const key of sameDay.filter(key => repeated(key.id)))
+    labels[key.id] = `${labels[key.id]} (#${key.id})`
+  return labels
+}
 
 /**
  * When a friend's jack last used a key: "Last connected 3 min ago", "Never used",
- * or "Not seen since 12 Oct" for a key older than usage tracking (or when its
+ * or "Not connected since 12 Oct" for a key older than usage tracking (or when its
  * creation time isn't known).
  */
 export function keyUsage(key: Pick<FriendKey, 'lastUsedAt' | 'lastUsedTrackedSince'>, createdAt: string | null | undefined, now: Date = new Date()): string {
@@ -100,7 +251,73 @@ export function keyUsage(key: Pick<FriendKey, 'lastUsedAt' | 'lastUsedTrackedSin
   if (!Number.isNaN(created) && !Number.isNaN(tracked) && tracked - created <= TRACKING_SLACK_MS)
     return 'Never used'
   const day = shortDay(key.lastUsedTrackedSince, now)
-  return day ? `Not seen since ${day}` : 'Never used'
+  return day ? `Not connected since ${day}` : 'Never used'
+}
+
+/** What the Revoke dialog says about one of a friend's keys. */
+export interface RevokeKeyWords {
+  // How the card names the key: `made 12 Oct`, `'Alice laptop'` or `#7`.
+  label: string
+  // "Last connected 2 min ago", from keyUsage.
+  usage: string
+  // Set when their jack uses this key, so revoking it cuts them off.
+  warning: { title: string, text: string } | null
+  // What revoking does, ending with "This can't be undone."
+  text: string
+}
+
+type RevokableKey = Pick<FriendKey, 'id' | 'name' | 'lastUsedAt' | 'lastUsedTrackedSince'>
+
+/**
+ * The words of the Revoke dialog for one of a friend's keys, or null when the
+ * friend has no such key. A friend's jack holds one key for you, so the key it
+ * used last is the one it has. Revoking that one cuts the friend off even though
+ * their other keys stay valid, so the dialog warns instead of reassuring and
+ * points at the older key (or says to wait while the friend hasn't switched to
+ * the newer one yet). A tie counts as in use.
+ */
+export function revokeKeyWords(
+  friendName: string,
+  keys: ReadonlyArray<RevokableKey>,
+  keyId: number,
+  keyCreatedAt?: Record<number, string>,
+  now: Date = new Date(),
+): RevokeKeyWords | null {
+  const key = keys.find(k => k.id === keyId)
+  if (!key)
+    return null
+  const labels = friendKeyLabels(friendName, keys, keyCreatedAt, now)
+  const labelOf = (k: RevokableKey) => labels[k.id] ?? `#${k.id}`
+  const usageOf = (k: RevokableKey) => keyUsage(k, keyCreatedAt?.[k.id], now)
+  const others = keys.filter(k => k.id !== key.id)
+  const used = key.lastUsedAt ? Date.parse(key.lastUsedAt) : Number.NaN
+  const inUse = !Number.isNaN(used) && others.every(other => !(Date.parse(other.lastUsedAt ?? '') > used))
+  const base = { label: labelOf(key), usage: usageOf(key) }
+  if (!inUse) {
+    const rest = others.length === 1 ? ' Their other key keeps working.' : others.length > 1 ? ' Their other keys keep working.' : ''
+    return { ...base, warning: null, text: `${possessive(friendName, true)} jack can't use this key once you revoke it.${rest} This can't be undone.` }
+  }
+  // Keys get increasing ids, so a lower id is an older key.
+  const older = others.filter(other => other.id < key.id)
+  let instead = ''
+  if (older.length === 1) {
+    const usage = usageOf(older[0]!)
+    instead = ` To revoke the older key instead, cancel and click Revoke next to key ${labelOf(older[0]!)} (${usage.charAt(0).toLowerCase()}${usage.slice(1)}).`
+  }
+  else if (older.length > 1) {
+    instead = ' To revoke an older key instead, cancel and click Revoke next to it.'
+  }
+  else if (others.length) {
+    instead = ` Wait until ${who(friendName)} has pasted your new link, then revoke this key.`
+  }
+  return {
+    ...base,
+    warning: {
+      title: `${possessive(friendName, true)} jack uses this key.`,
+      text: `If you revoke it, ${who(friendName)} can't download from you until they paste a new link.${instead}`,
+    },
+    text: 'This can\'t be undone.',
+  }
 }
 
 /** "1.2 GB today · 3.4 GB in 7 days · 10 GB in 30 days". */

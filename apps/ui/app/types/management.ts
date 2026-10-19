@@ -100,6 +100,19 @@ export interface SystemStatus {
   // When this jack process started. A new value means jack restarted.
   bootedAt: string
   restartPending: RestartReason[]
+  // One-time notices for this install, until dismissed (POST system/notices/:id/dismiss).
+  notices: SystemNotice[]
+}
+
+// Settings whose default changed in an update. Listed only for installs that
+// existed before the update and only while the value still comes from the
+// default (saving the setting removes it from the list).
+export type ChangedDefaultSetting = 'discovery.introduce' | 'security.banEnabled' | 'security.lanOnlyArrApis' | 'security.publicOpenApi'
+
+export interface SystemNotice {
+  id: string
+  kind: 'defaultsChanged'
+  changed: Array<{ setting: ChangedDefaultSetting, was: boolean, now: boolean }>
 }
 
 export interface DownloadItem {
@@ -455,7 +468,9 @@ export interface FriendKey {
 }
 
 // In the order the backend sorts cards: the states that need action first.
-export type FriendState = 'offline' | 'noKey' | 'noPeer' | 'waiting' | 'both'
+// `stale`: a key was used before, but none in the last 24 hours.
+// `waiting`: no key was ever used.
+export type FriendState = 'offline' | 'noKey' | 'noPeer' | 'stale' | 'waiting' | 'both'
 
 // One person: the peer you download from and the keys they download from you with.
 export interface Friend {
@@ -544,7 +559,9 @@ export interface IntroPerson {
 }
 
 export interface IntroductionsOverview {
-  me: { id: string, name: string | null, discoverable: boolean, introduce: boolean, ready: boolean, missing: string[] }
+  // introducers: friends whose jack introduced you at the last sync (they have
+  // "Introduce my friends" on); null before the first sync.
+  me: { id: string, name: string | null, discoverable: boolean, introduce: boolean, ready: boolean, missing: string[], introducers: number | null }
   people: IntroPerson[]
   threads: IntroThread[]
 }

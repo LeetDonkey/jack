@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   dashboardDownloadCounts,
   downloadActionsFor,
+  downloadsEmptyState,
   downloadState,
   isCancelledDownload,
   matchesDownloadFilter,
@@ -155,5 +156,43 @@ describe('sortRunningDownloads', () => {
   test('puts moving downloads first, then retries, then the queue', () => {
     const rows = [running({ id: 1, phase: 'queued' }), running({ id: 2, phase: 'retry_wait' }), running({ id: 3 }), running({ id: 4, phase: null })]
     expect(sortRunningDownloads(rows).map(r => r.id)).toEqual([3, 4, 2, 1])
+  })
+})
+
+describe('downloadsEmptyState', () => {
+  const indexerOk = { indexer: { status: 'ok' }, indexerTest: 'ok' } as any
+  function overview({ peers = 1, servers = [{ destination: true, registration: indexerOk }] as Array<{ destination: boolean, registration: any }>, restartPending = [] as string[] } = {}) {
+    return {
+      peers: { total: peers },
+      servers: { total: servers.length, destinations: servers.filter(s => s.destination).length, items: servers },
+      system: { restartPending },
+    }
+  }
+  const base = { downloadsConfig: { completedPath: '/data/jack' }, downloadsConfigFailed: false, overview: overview(), overviewFailed: false }
+
+  test('downloads off, or waiting for the restart', () => {
+    expect(downloadsEmptyState({ ...base, downloadsConfig: null })).toBe('off')
+    expect(downloadsEmptyState({ ...base, overview: overview({ restartPending: ['downloads'] }) })).toBe('restart')
+  })
+
+  test('waits for the config and the overview instead of guessing', () => {
+    expect(downloadsEmptyState({ ...base, downloadsConfig: undefined })).toBe('loading')
+    expect(downloadsEmptyState({ ...base, overview: undefined })).toBe('loading')
+    // A failed load doesn't keep it loading.
+    expect(downloadsEmptyState({ ...base, overview: undefined, overviewFailed: true })).toBe('library')
+    expect(downloadsEmptyState({ ...base, downloadsConfig: undefined, downloadsConfigFailed: true })).toBe('library-or-search')
+  })
+
+  test('names the missing Radarr/Sonarr before the missing friend', () => {
+    expect(downloadsEmptyState({ ...base, overview: overview({ peers: 0, servers: [] }) })).toBe('no-server')
+    expect(downloadsEmptyState({ ...base, overview: overview({ servers: [{ destination: false, registration: null }] }) })).toBe('no-receiver')
+    expect(downloadsEmptyState({ ...base, overview: overview({ peers: 0 }) })).toBe('no-friend')
+  })
+
+  test('mentions the indexer only where jack added one that works', () => {
+    expect(downloadsEmptyState(base)).toBe('library-or-search')
+    expect(downloadsEmptyState({ ...base, overview: overview({ servers: [{ destination: true, registration: null }] }) })).toBe('library')
+    expect(downloadsEmptyState({ ...base, overview: overview({ servers: [{ destination: true, registration: { indexer: { status: 'failed' }, indexerTest: 'skipped' } }] }) })).toBe('library')
+    expect(downloadsEmptyState({ ...base, overview: overview({ servers: [{ destination: true, registration: { indexer: { status: 'ok' }, indexerTest: 'failed' } }] }) })).toBe('library')
   })
 })

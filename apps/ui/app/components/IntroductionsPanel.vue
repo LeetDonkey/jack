@@ -91,6 +91,17 @@ const threads = computed(() => [...(data.value?.threads ?? [])].sort((a, b) => {
   return rank(a) - rank(b) || b.updatedAt.localeCompare(a.updatedAt)
 }))
 
+// Friends of friends see you only through a friend who introduces. Say they see
+// you only when one did at the last sync (`introducers` is null before the first).
+const visibility = computed<'hidden' | 'seen' | 'noIntroducers' | 'unknown'>(() => {
+  const me = data.value?.me
+  if (!me?.discoverable || !me.name)
+    return 'hidden'
+  if (me.introducers == null)
+    return 'unknown'
+  return me.introducers > 0 ? 'seen' : 'noIntroducers'
+})
+
 // What is missing before you can ask or accept. The name friends of friends see
 // falls back to the name friends see, so `me.name` is null exactly when both are
 // empty; any other entry is the address friends use. Both are set under Your
@@ -137,8 +148,15 @@ const setup = computed(() => {
         :actions="setup.actions"
       />
       <p class="text-xs text-muted">
-        <template v-if="data.me.discoverable && data.me.name">
+        <template v-if="visibility === 'seen'">
           Friends of your friends see you as <span class="font-medium text-default">{{ data.me.name }}</span>.
+        </template>
+        <template v-else-if="visibility === 'noIntroducers'">
+          None of your friends introduce right now, so friends of friends can't see you yet. Once one does, you show up as
+          <span class="font-medium text-default">{{ data.me.name }}</span>.
+        </template>
+        <template v-else-if="visibility === 'unknown'">
+          Friends of your friends see you as <span class="font-medium text-default">{{ data.me.name }}</span> when one of your friends introduces you.
         </template>
         <template v-else>
           You are not visible to friends of friends.

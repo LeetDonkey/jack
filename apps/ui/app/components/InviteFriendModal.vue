@@ -481,7 +481,9 @@ const title = computed(() => {
             The old key is revoked. {{ friendName }} needs the new link to download from you.
           </p>
           <p v-else-if="replaceDecision === 'kept'" class="text-sm text-muted">
-            Both keys work. You can revoke the old one later with Remove friend.
+            <!-- With a peer, both keys share the friend's card; without one, each key has its own card. -->
+            Both keys work. Once {{ friendName }} has pasted the new link,
+            {{ linkedPeerId ? 'revoke the older key with Revoke on their card.' : 'remove the old key with Remove friend on its card.' }}
           </p>
           <UAlert
             v-else

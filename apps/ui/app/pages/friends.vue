@@ -8,7 +8,8 @@ const router = useRouter()
 
 const { data, pending, error, refresh } = await useAsyncData('friends', () => request<FriendsSnapshot>('friends'))
 // When each key was created, which /friends leaves out: it tells "Never used" from
-// "Not seen since" for keys older than jack's record of key use.
+// "Not connected since" for keys older than jack's record of key use, and several
+// keys of one friend apart.
 const { data: apiKeys, refresh: refreshKeys } = useLazyAsyncData('friends:api-keys', () => request<ApiKey[]>('api-keys'))
 const keyCreatedAt = computed<Record<number, string>>(() => Object.fromEntries((apiKeys.value ?? []).map(key => [key.id, key.createdAt])))
 
@@ -231,6 +232,15 @@ const removeAddresses = computed(() => {
   return key ? unlinked.value.peers.filter(peer => peer.sameAs === key) : []
 })
 
+// One of a friend's several keys.
+const revokeOpen = ref(false)
+const revokeTarget = ref<{ friend: Friend, keyId: number } | null>(null)
+
+function openRevoke(friend: Friend, keyId: number) {
+  revokeTarget.value = { friend, keyId }
+  revokeOpen.value = true
+}
+
 // A second address for a jack that already has a card.
 const addressTarget = ref<(FriendPeer & { sameAs: string }) | null>(null)
 const lastAddress = ref<(FriendPeer & { sameAs: string }) | null>(null)
@@ -340,6 +350,7 @@ const unlinkedOpen = ref(false)
             @rename="openRename(friend)"
             @edit="openPeerEdit(friend, 'form')"
             @remove="openRemove(friend)"
+            @revoke-key="(keyId) => openRevoke(friend, keyId)"
             @link="(keyIds, peerId) => link(keyIds, peerId, friend.key)"
           />
         </section>
@@ -453,7 +464,16 @@ const unlinkedOpen = ref(false)
     v-model:open="removeOpen"
     :friend="removeTarget"
     :other-addresses="removeAddresses"
+    :key-created-at="keyCreatedAt"
     @removed="reload"
+  />
+
+  <RevokeKeyModal
+    v-model:open="revokeOpen"
+    :friend="revokeTarget?.friend ?? null"
+    :key-id="revokeTarget?.keyId ?? null"
+    :key-created-at="keyCreatedAt"
+    @revoked="reload"
   />
 
   <UModal v-model:open="renameOpen" :title="`Rename ${renameTarget?.name ?? 'friend'}`" :dismissible="!renaming">

@@ -14,11 +14,13 @@ const props = withDefaults(defineProps<{
   // The user said "I only share" on the setup card.
   shareOnly?: boolean
   // What the setup card shows right now, so it isn't said twice: the servers whose
-  // registration result it quotes, and whether it asks for a server that receives
-  // downloads.
+  // registration result it quotes, whether it asks for a server that receives
+  // downloads, and whether it shows a problem (a failed step or folder check), which
+  // rules out "Nothing is failing".
   setupServerIds?: string[]
   setupAsksForReceiver?: boolean
-}>(), { setupState: 'done', downloadsOn: null, shareOnly: false, setupServerIds: () => [], setupAsksForReceiver: false })
+  setupShowsProblem?: boolean
+}>(), { setupState: 'done', downloadsOn: null, shareOnly: false, setupServerIds: () => [], setupAsksForReceiver: false, setupShowsProblem: false })
 
 // How many example rows to list before collapsing the rest into "and N more".
 const PREVIEW = 3
@@ -96,13 +98,18 @@ interface RegistrationProblem {
   fix: ReturnType<typeof registrationFix>
 }
 
+// A part jack couldn't add because the *arr couldn't connect to jack's address:
+// the *arr's raw error doesn't name the setting, but the address is what to check.
+const ADDRESS_FIX = { section: 'internal-url', label: 'Change the address' } as const
+
 // jack's own setup inside each reachable Radarr/Sonarr: a part jack couldn't add, or
 // the *arr's test of jack failing. A server jack can't reach has its row above.
 const registrationProblems = computed(() => props.overview.servers.items.flatMap((server): RegistrationProblem[] => {
   const registration = server.registration
   if (!registration || !server.initialized || props.setupServerIds.includes(server.id))
     return []
-  const problem = { id: server.id, name: server.name, message: registration.message, fix: registrationFix(registration) }
+  const fix = registrationFix(registration) ?? (registrationAddressProblem(registration) ? ADDRESS_FIX : null)
+  const problem = { id: server.id, name: server.name, message: registration.message, fix }
   if (registration.downloadClient.status === 'failed')
     return [{ ...problem, step: 'a download client', error: registration.downloadClient.error ?? null }]
   if (registration.indexer.status === 'failed')
@@ -280,9 +287,10 @@ function plural(n: number, word: string) {
       </UCollapsible>
     </UCard>
 
-    <!-- Nothing failing, but nothing set up either: no green, no false comfort. -->
+    <!-- Nothing failing, but nothing set up either: no green, no false comfort. When
+         the setup card shows a problem, it speaks for itself. -->
     <UAlert
-      v-else-if="nothingConfigured || setupState === 'open'"
+      v-else-if="!setupShowsProblem && (nothingConfigured || setupState === 'open')"
       color="neutral"
       variant="subtle"
       icon="i-ph-info"

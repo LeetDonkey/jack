@@ -9,7 +9,9 @@ import {
   latencyClass,
   latencyFill,
   levelStyle,
+  logDateTime,
   logHelp,
+  logIsoTime,
   methodClass,
   rawJson,
   statusClass,
@@ -27,6 +29,10 @@ const toast = useToast()
 const level = computed(() => levelStyle(props.row))
 const http = computed(() => extractHttp(props.row))
 const time = computed(() => clockTime(props.row.time))
+// The row shows the time of day (the page puts the day above it); the tooltip and
+// the detail panel give the full date.
+const dateTime = computed(() => logDateTime(props.row.time))
+const isoTime = computed(() => logIsoTime(props.row.time))
 const count = computed(() => props.row._count)
 
 // The live row shows the latest occurrence's latency; the detail panel carries
@@ -73,7 +79,7 @@ async function copyRaw() {
       @click="emit('toggle')"
     >
       <!-- Timestamp: HH:MM:SS on phones, milliseconds from sm up. -->
-      <time class="w-16 shrink-0 tabular-nums text-dimmed sm:w-[6.5rem]">{{ time.slice(0, 8) }}<span class="hidden sm:inline">{{ time.slice(8) }}</span></time>
+      <time class="w-16 shrink-0 tabular-nums text-dimmed sm:w-[6.5rem]" :datetime="isoTime" :title="dateTime || undefined">{{ time.slice(0, 8) }}<span class="hidden sm:inline">{{ time.slice(8) }}</span></time>
 
       <!-- Severity: the rail carries it on phones (lit for warn and up); the word
            from sm up. The detail panel names it at every width. -->
@@ -138,7 +144,7 @@ async function copyRaw() {
       />
 
       <div class="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-dimmed">
-        <span><span class="font-medium" :class="level.text">{{ level.label }}</span><template v-if="time"> · {{ time }}</template></span>
+        <span><span class="font-medium" :class="level.text">{{ level.label }}</span><template v-if="dateTime"> · {{ dateTime }}</template></span>
         <span v-if="count > 1">{{ count }} occurrences</span>
         <span v-if="latStats">avg {{ formatMs(latStats.avg) }} · max {{ formatMs(latStats.max) }}</span>
       </div>
