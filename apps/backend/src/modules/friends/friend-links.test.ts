@@ -162,6 +162,17 @@ describe('linkFriends', () => {
       .toEqual([['peer:a', []], ['identity:id-alice', [1]], ['identity:id-alice-2', [2]]])
   })
 
+  test('an online peer jack hasn\'t asked about its identity since it started still takes the keys its name matches', () => {
+    // F19: Alice was down at boot; the health check finds her online before the next sync asks her jack.
+    const bound = key(1, 'Alice', { boundIdentityId: 'id-alice' })
+    const alice = peer('a', 'Alice')
+    expect(linkFriends([alice], [bound], NOW, { identityPending: id => id === 'a' }).friends.map(f => [f.key, f.keys.map(k => [k.id, k.link])]))
+      .toEqual([['peer:a', [[1, 'identity']]]])
+    // Once her jack answered without one, the keys stay on their own card.
+    expect(linkFriends([alice], [bound], NOW, { identityPending: () => false }).friends.map(f => f.key))
+      .toEqual(['peer:a', 'identity:id-alice'])
+  })
+
   test('a name another peer shares links nothing, also when that peer reported an identity', () => {
     const bound = key(1, 'Bob', { boundIdentityId: 'id-bob-2' })
     const cardsOf = (peers: LinkablePeer[]) => linkFriends(peers, [bound], NOW).friends.map(f => [f.key, f.keys.map(k => [k.id, k.link])])

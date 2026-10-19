@@ -20,12 +20,14 @@ export const DestinationRegistrationSchema: z.ZodType<DestinationRegistration> =
   downloadClient: RegistrationStepSchema.describe('jack\'s qBittorrent download client in the *arr'),
   reason: z.enum(['downloads-off']).optional().describe('Set when both steps were skipped because there is no downloads block'),
   clientTest: TestStatus.describe('The *arr\'s Test of jack\'s download client. `skipped` when the client wasn\'t registered or jack needs a restart to serve it'),
-  indexerTest: TestStatus.describe('The *arr\'s Test of jack\'s indexer. "No results" counts as `ok`'),
-  message: z.string().nullable().describe('Plain-language text about the first failed test, failed step or skip; null when nothing needs saying'),
+  indexerTest: TestStatus.describe('The *arr\'s Test of jack\'s indexer, run on a copy the *arr records nothing for, so an empty feed doesn\'t make it pause the indexer. "No results" counts as `ok`'),
+  message: z.string().nullable().describe('Plain-language text about the first failed test, failed step or skip, else about an *arr that skips jack\'s indexer after failures; null when nothing needs saying'),
   testErrors: z.object({
     downloadClient: z.string().nullable(),
     indexer: z.string().nullable(),
   }).describe('The *arr\'s own text for each failed test'),
+  indexerPausedUntil: z.string().nullable().describe('Until when the *arr skips jack\'s indexer after failures (ISO 8601); null when it doesn\'t, or when jack can\'t tell until when. Radarr and Sonarr only report that they skip it, so for them this stays null and `indexerPaused` says so'),
+  indexerPaused: z.boolean().nullable().describe('Whether the *arr skips jack\'s indexer after failures, as jack last saw it: after the registration, then every few minutes. null when jack couldn\'t tell, or didn\'t add the indexer'),
 })
 
 /** `registration` and `lastContactAt`, as every server entry in the config and the overview carries them. */

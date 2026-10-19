@@ -91,7 +91,8 @@ const registrations = new RegistrationService({
 })
 // Re-register after a saved server (a changed priority or a newly added *arr),
 // a new internal URL, or downloads turned on, so none of them needs a restart.
-// A saved friend re-registers where the indexer step failed.
+// A saved friend re-registers where friends can change the result (see
+// registerAfterFriendChange).
 // Wired before the management API starts, so no save goes unregistered.
 if (configService)
   registrations.followConfig(configService)
@@ -176,7 +177,7 @@ const app = getApp(envs, config, connectorManager, {
   },
   publicOpenApi: () => securityConfig().publicOpenApi,
   internalUrl: currentInternalUrl,
-  onArrContact: id => registrations.recordContact(id),
+  onArrContact: (id, api) => registrations.recordContact(id, api),
   onPeerKeyUsed: id => apiKeyMeta.touch(id),
 })
 // Public server on node:http (see startPublicServer for why).

@@ -1,11 +1,11 @@
 import type { z } from 'zod'
-import type { AppConfig } from '../../lib/config'
+import type { AppConfig, IgnoredSecurityEntry } from '../../lib/config'
 import type { ConnectorManager } from '../../lib/servers'
 import type { DownloadsRepository } from '../downloads/downloads.repository'
 import type { DestinationRegistration } from '../registration/registration.service'
 import { jsonc } from 'jsonc'
 import { atomicWriteFile } from '../../lib/atomic-write'
-import { BandwidthConfig, DiscoveryConfig, DownloadsConfig, ExternalJackConfig, JackConfig, NotificationsConfig, PeerConfig, RawBandwidthConfig, RawDiscoveryConfig, RawDownloadsConfig, RawExternalJackConfig, RawJackConfig, RawJackConfigPatch, RawNotificationsConfig, RawPeerConfig, RawSecurityConfig, RawServerConfig, RawTorznabConfig, SecurityConfig, ServerConfig, TorznabConfig } from '../../lib/config'
+import { BandwidthConfig, DiscoveryConfig, DownloadsConfig, ExternalJackConfig, ignoredSecurityEntries, JackConfig, NotificationsConfig, PeerConfig, RawBandwidthConfig, RawDiscoveryConfig, RawDownloadsConfig, RawExternalJackConfig, RawJackConfig, RawJackConfigPatch, RawNotificationsConfig, RawPeerConfig, RawSecurityConfig, RawServerConfig, RawTorznabConfig, SecurityConfig, ServerConfig, TorznabConfig, withoutIgnoredSecurityEntries } from '../../lib/config'
 import { BadRequestError } from '../../lib/errors/BadRequestError'
 import { ConflictError } from '../../lib/errors/ConflictError'
 import { NotFoundError } from '../../lib/errors/NotFoundError'
@@ -597,11 +597,19 @@ export class ConfigService {
     return SecurityConfig.parse(this.raw.security ?? {})
   }
 
-  /** Patch the security block: `null` restores a default; lists are replaced whole. Applies immediately. */
+  /** Stored list entries jack ignores because they aren't an address or range (see StoredAddressList). */
+  getIgnoredSecurityEntries(): IgnoredSecurityEntry[] {
+    return ignoredSecurityEntries(this.raw.security)
+  }
+
+  /**
+   * Patch the security block: `null` restores a default; lists are replaced whole.
+   * Stored entries jack ignores are removed from every list. Applies immediately.
+   */
   async updateSecurity(input: unknown): Promise<void> {
     const patch = RawSecurityConfig.parse(input)
     return this.enqueue(async () => {
-      const merged: Record<string, unknown> = { ...(this.raw.security ?? {}), ...patch }
+      const merged: Record<string, unknown> = { ...withoutIgnoredSecurityEntries(this.raw.security ?? {}), ...patch }
       for (const [key, value] of Object.entries(merged)) {
         if (value === null)
           delete merged[key]

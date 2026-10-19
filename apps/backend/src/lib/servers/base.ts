@@ -123,7 +123,9 @@ export abstract class ServerConnector {
 
   // `allowEmptyBody`: for endpoints that may answer a bare 200. A 2xx with an empty
   // or non-JSON body resolves to undefined instead of throwing; `schema` is ignored.
-  protected async fetch<TResponseSchema extends z.ZodType = z.ZodUnknown>(path: string, init: RequestInit & { schema?: TResponseSchema, query?: Record<string, string>, timeoutMs?: number, allowEmptyBody?: boolean } = { method: 'GET' }): Promise<z.infer<TResponseSchema>> {
+  // `expectedFailure`: a non-2xx answer the caller expects and handles (it still
+  // throws), logged at debug instead of warn.
+  protected async fetch<TResponseSchema extends z.ZodType = z.ZodUnknown>(path: string, init: RequestInit & { schema?: TResponseSchema, query?: Record<string, string>, timeoutMs?: number, allowEmptyBody?: boolean, expectedFailure?: (status: number, body: string) => boolean } = { method: 'GET' }): Promise<z.infer<TResponseSchema>> {
     const timeoutMs = init.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS
     const initWithAuth = {
       ...init,
@@ -178,7 +180,8 @@ export abstract class ServerConnector {
       if (!response.ok) {
         const body = await response.text().catch(() => 'Could not fetch body')
         setSpanAttribute(span, 'http.response.body', redactBody(body))
-        logger.warn({ connector: this.name, method, url: url.toString(), status: response.status, body: truncateBody(body) }, 'Request failed (non-2xx)')
+        const level = init.expectedFailure?.(response.status, body) ? 'debug' : 'warn'
+        logger[level]({ connector: this.name, method, url: url.toString(), status: response.status, body: truncateBody(body) }, 'Request failed (non-2xx)')
         throw new FetchError(`Failed to fetch url: ${response.statusText}`, response, { body, method: init.method, headers: initWithAuth.headers })
       }
 

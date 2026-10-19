@@ -454,7 +454,8 @@ IPv4 or IPv6 address, or a range such as `172.18.0.0/16` or `fd00::/8`. A host
 or container name never matches. ***Settings -> Sharing -> Security*** refuses
 such an entry and names it. jack still starts with one already in the file: it
 ignores the entry and logs a warning, and a list with no valid entry left
-counts as unset.
+counts as unset. ***Settings -> Sharing -> Security*** lists the ignored
+entries, and the next save of that card removes them from the file.
 
 [`notifications.ipBanned`](#notifications) (default `true`) sends a
 notification when an address is banned.
@@ -557,8 +558,10 @@ servers. jack registers itself:
 - in a server saved in the management UI;
 - in every server, after a new `jack.internalUrl` or a new `downloads` block is
   saved in the management UI;
-- in every server where adding the indexer failed last time, after a friend is
-  added or saved, also through an invite link or an introduction.
+- after a friend is added or saved, also through an invite link or an
+  introduction, in every server where adding the indexer failed, where the
+  indexer test found the feed empty, or that skips jack's indexer after
+  failures.
 
 Radarr and Sonarr test an indexer before they add it, and the test fails while
 jack's feed is empty: no friends yet, or nothing they added in the last
@@ -568,11 +571,26 @@ from the start.
 
 After each registration jack asks the *arr to test its download client and
 indexer, the same check as their ***Test*** buttons, and reports the result as
-`registration` on each server in the management API. An indexer test that
-answers `Query successful, but no results...` counts as passed: the *arr
-reached jack. The management UI shows
-it on the server's card under ***Settings -> Radarr & Sonarr***, where
-***Register again*** registers jack in that server once more.
+`registration` on each server in the management API:
+
+- **Indexer:** the *arr tests a copy of jack's indexer, which it records
+  nothing for. A failed test of the saved indexer, also one that only found no
+  results, makes Radarr and Sonarr skip the indexer for a while (see
+  [Troubleshooting](/guide/troubleshooting#radarr-or-sonarr-says-indexers-unavailable-due-to-failures)).
+  `Query successful, but no results...` counts as passed: the *arr reached
+  jack.
+- **Skipped indexer:** when the *arr already skips jack's indexer and the copy
+  found releases, jack also tests the saved indexer. That test passes, and a
+  passing test ends the pause. While the pause lasts, jack tests the copy
+  again every 30 minutes, with the key the indexer has. When the *arr answers
+  that test with an error, for example because the Jack indexer is gone, jack
+  registers again.
+- **Download client:** a failed test runs once more a few seconds later. A
+  failure is dropped once the *arr logs in to jack's download client.
+
+The management UI shows the result on the server's card under ***Settings ->
+Radarr & Sonarr***, where ***Register again*** registers jack in that server
+once more.
 
 - **`enable`**: set `false` to register jack in that *arr yourself.
 - **`priority`**: indexer priority in *arr, from 1 (preferred) to 50. *arr uses

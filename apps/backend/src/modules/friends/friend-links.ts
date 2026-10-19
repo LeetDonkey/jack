@@ -6,8 +6,9 @@
  * 1. Explicit: the key's `peerId` (set by a quick link, an introduction or by hand).
  * 2. Identity: the key's bound jack identity equals the identity the peer reports.
  * 3. Until a peer has reported its identity (it was down since jack started
- *    keeping identities): the keys of one bound identity whose names match that
- *    peer and no other peer, whatever its identity (see adoptByName).
+ *    keeping identities, or since this boot): the keys of one bound identity
+ *    whose names match that peer and no other peer, whatever its identity (see
+ *    adoptByName).
  *
  * Otherwise names never link anything; a matching name only produces a suggestion.
  */
@@ -120,7 +121,12 @@ function betterPeer(a: LinkablePeer, b: LinkablePeer): boolean {
   return seen(a) > seen(b)
 }
 
-export function linkFriends<P extends LinkablePeer, K extends LinkableKey>(peers: P[], keys: K[], now: Date): FriendLinks<P, K> {
+export interface LinkOptions {
+  /** Whether a peer's jack hasn't answered about its identity since jack started (see adoptByName). */
+  identityPending?: (peerId: string) => boolean
+}
+
+export function linkFriends<P extends LinkablePeer, K extends LinkableKey>(peers: P[], keys: K[], now: Date, options: LinkOptions = {}): FriendLinks<P, K> {
   const cards: Array<Friend<P, K>> = []
   const peerCards: Array<{ card: Friend<P, K>, peer: P }> = []
   const cardOfPeer = new Map<string, Friend<P, K>>()
@@ -190,7 +196,7 @@ export function linkFriends<P extends LinkablePeer, K extends LinkableKey>(peers
     card.keys.push({ ...key, link: null })
   }
 
-  const adopted = adoptByName(peers, peerCards, keyCards, cards)
+  const adopted = adoptByName(peers, peerCards, keyCards, cards, options.identityPending ?? (() => false))
 
   for (const { card, peer } of peerCards)
     card.suggestedKeyIds = loose.filter(key => !adopted.has(key.id) && namesMatch(peer.name, key.name)).map(key => key.id)
@@ -210,18 +216,20 @@ export function linkFriends<P extends LinkablePeer, K extends LinkableKey>(peers
  * counts for the second part, also one that reported an identity or is a second
  * peer of a jack: a name two peers share could be either of them. A peer that
  * is online and still reports no identity is left alone, since its jack would
- * have reported the one these keys are bound to. Once the peer reports its
- * identity, the identity link decides. Removes the adopted cards from `cards`
- * and returns the ids of the keys it moved.
+ * have reported the one these keys are bound to, unless jack hasn't asked it
+ * since it came back (`identityPending`). Once the peer reports its identity,
+ * the identity link decides. Removes the adopted cards from `cards` and returns
+ * the ids of the keys it moved.
  */
 function adoptByName<P extends LinkablePeer, K extends LinkableKey>(
   peers: ReadonlyArray<P>,
   peerCards: Array<{ card: Friend<P, K>, peer: P }>,
   keyCards: Map<string, Friend<P, K>>,
   cards: Array<Friend<P, K>>,
+  identityPending: (peerId: string) => boolean,
 ): Set<number> {
   const adopted = new Set<number>()
-  const unknown = peerCards.filter(({ peer }) => peer.identityId == null && peer.online !== true)
+  const unknown = peerCards.filter(({ peer }) => peer.identityId == null && (peer.online !== true || identityPending(peer.id)))
   const identityCards = [...keyCards.values()].filter(card => card.key.startsWith('identity:'))
   const matches = (peer: P, card: Friend<P, K>) => card.keys.some(key => namesMatch(peer.name, key.name))
   for (const { card, peer } of unknown) {

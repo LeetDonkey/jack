@@ -8,29 +8,22 @@ import { requiresInitialization } from '../../decorators/requires-initialization
 import { BadRequestError } from '../../errors/BadRequestError'
 import { FetchError } from '../../errors/FetchError'
 import { ServerConnector } from '../base'
-import { isOnlyNoResultsRejection, parseArrValidationFailures } from './validation'
+import { isOnlyNoResultsAnswer, isOnlyNoResultsRejection, parseArrValidationFailures } from './validation'
 
 const BASENAME_SEPARATOR_REGEX = /[/\\]/
 const TRAILING_SLASH_REGEX = /\/$/
 const NUMERIC_ENTITY_ID_REGEX = /^\d+$/
+const COLON_REGEX = /[:：]/
 
 export const DestinationServerHealthIssue = z.array(
-  z.object({
+  z.looseObject({
     id: z.number().int().optional(),
     source: z.string().nullable().optional(),
-    type: z.enum(['ok', 'notice', 'warning', 'error']).optional(),
+    // ok, notice, warning or error.
+    type: z.string().optional(),
     message: z.string().nullable().optional(),
-    wikiUrl: z
-      .object({
-        fullUri: z.string().nullable().optional(),
-        scheme: z.string().nullable().optional(),
-        host: z.string().nullable().optional(),
-        port: z.number().int().nullable().optional(),
-        path: z.string().nullable().optional(),
-        query: z.string().nullable().optional(),
-        fragment: z.string().nullable().optional(),
-      })
-      .optional(),
+    // A URL in Radarr 6 and Sonarr 4, an object with its parts in older versions.
+    wikiUrl: z.unknown().optional(),
   }),
 )
 
@@ -111,6 +104,29 @@ export function findJackIndexer(indexers: unknown, name: string, baseUrl: string
     return undefined
   const named = indexers.filter((idx: any) => idx?.implementation === 'Torznab' && idx.name === name)
   return named.find(idx => hasBaseUrl(idx, baseUrl)) ?? named[0] ?? indexers.find(idx => hasBaseUrl(idx, baseUrl))
+}
+
+// The health checks that list indexers the *arr skips after failures: within the
+// first 6 hours, and after that.
+const INDEXER_PAUSE_CHECKS = new Set(['IndexerStatusCheck', 'IndexerLongTermStatusCheck'])
+
+/**
+ * Whether the *arr's health check says it skips the enabled indexer `name`. The
+ * check is an error when every enabled indexer is paused ("All indexers are
+ * unavailable due to failures"), else a warning that ends with the paused
+ * indexers' names ("Indexers unavailable due to failures: Jack, Foo"). The text
+ * follows the *arr's UI language; the names don't.
+ */
+export function pausedInHealth(issues: Array<{ source?: string | null, type?: string, message?: string | null }>, name: string): boolean {
+  return issues.some((issue) => {
+    if (!issue.source || !INDEXER_PAUSE_CHECKS.has(issue.source))
+      return false
+    if (issue.type === 'error')
+      return true
+    const message = issue.message ?? ''
+    const colon = message.search(COLON_REGEX)
+    return colon >= 0 && message.slice(colon + 1).split(',').some(listed => listed.trim() === name)
+  })
 }
 
 /**
@@ -289,7 +305,23 @@ export abstract class ArrServerConnector extends ServerConnector {
   @requiresDestination
   @requiresInitialization
   async getHealthIssues() {
-    return this.fetch('/api/v3/health', { schema: z.array(DestinationServerHealthIssue) })
+    return this.fetch('/api/v3/health', { schema: DestinationServerHealthIssue })
+  }
+
+  /**
+   * Whether the *arr skips jack's indexer (see findJackIndexer) after failures:
+   * Radarr/Sonarr pause an indexer for longer after each failed fetch or failed
+   * test of it. Their API doesn't say until when (there is no indexer status
+   * route), only their health check names the paused indexers, a few seconds
+   * after the pause starts or ends. False when there is no enabled Jack indexer.
+   */
+  @requiresDestination
+  @requiresInitialization
+  async isIndexerPaused(name: string, baseUrl: string): Promise<boolean> {
+    const indexer = findJackIndexer(await this.arrGet<unknown>('/api/v3/indexer'), name, baseUrl)
+    if (!indexer || !(indexer.enableRss || indexer.enableAutomaticSearch || indexer.enableInteractiveSearch))
+      return false
+    return pausedInHealth(await this.getHealthIssues(), indexer.name)
   }
 
   @requiresDestination
@@ -456,6 +488,7 @@ export abstract class ArrServerConnector extends ServerConnector {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
         query: { forceSave: 'true' },
+        expectedFailure: isOnlyNoResultsAnswer,
       } as any)
     }
     catch (err) {
@@ -590,19 +623,44 @@ export abstract class ArrServerConnector extends ServerConnector {
     return this.testProvider('/api/v3/downloadclient/test', client, timeoutMs)
   }
 
-  /** Ask *arr to test jack's Torznab indexer (see findJackIndexer), like its Test button. */
+  /**
+   * Ask *arr to test jack's Torznab indexer (see findJackIndexer).
+   *
+   * Radarr/Sonarr record a test of a saved indexer, as their Test button does: a
+   * failure pauses the indexer for searches and RSS (1 minute, then longer after
+   * each failure, up to 24 hours), also when the feed is only empty ("no
+   * results"), and a pass ends a pause. With `apiKey`, *arr tests a copy instead,
+   * which it records nothing for: id 0, another name (names must be unique), and
+   * that key, since only the saved entry can fill in the masked one. Measured on
+   * Radarr 6.4 and Sonarr 4.0.
+   */
   @requiresDestination
   @requiresInitialization
-  async testIndexer(name: string, baseUrl: string, { timeoutMs }: { timeoutMs?: number } = {}): Promise<ArrProviderTest> {
-    const indexer = findJackIndexer(await this.arrGet<unknown>('/api/v3/indexer'), name, baseUrl)
+  async testIndexer(name: string, baseUrl: string, { timeoutMs, apiKey }: { timeoutMs?: number, apiKey?: string } = {}): Promise<ArrProviderTest> {
+    const indexers = await this.arrGet<unknown>('/api/v3/indexer')
+    const indexer = findJackIndexer(indexers, name, baseUrl)
     if (!indexer)
       return { status: 'missing' }
-    return this.testProvider('/api/v3/indexer/test', indexer, timeoutMs)
+    if (apiKey === undefined)
+      return this.testProvider('/api/v3/indexer/test', indexer, timeoutMs, isOnlyNoResultsAnswer)
+    const names = (Array.isArray(indexers) ? indexers : []).map((idx: any) => String(idx?.name ?? '').toLowerCase())
+    let copyName = `${indexer.name} (jack's test)`
+    for (let n = 2; names.includes(copyName.toLowerCase()); n++)
+      copyName = `${indexer.name} (jack's test ${n})`
+    const copy = {
+      ...indexer,
+      id: 0,
+      name: copyName,
+      fields: Array.isArray(indexer.fields)
+        ? indexer.fields.map((field: any) => field?.name === 'apiKey' ? { ...field, value: apiKey } : field)
+        : indexer.fields,
+    }
+    return this.testProvider('/api/v3/indexer/test', copy, timeoutMs, isOnlyNoResultsAnswer)
   }
 
   // POSTs the resource as *arr returned it: *arr fills masked secrets ("********")
   // from the saved entry with the same id.
-  private async testProvider(path: string, resource: unknown, timeoutMs?: number): Promise<ArrProviderTest> {
+  private async testProvider(path: string, resource: unknown, timeoutMs?: number, expectedFailure?: (status: number, body: string) => boolean): Promise<ArrProviderTest> {
     try {
       await this.fetch(path, {
         method: 'POST',
@@ -610,6 +668,7 @@ export abstract class ArrServerConnector extends ServerConnector {
         body: JSON.stringify(resource),
         timeoutMs,
         allowEmptyBody: true,
+        expectedFailure,
       })
       return { status: 'ok', warnings: [] }
     }

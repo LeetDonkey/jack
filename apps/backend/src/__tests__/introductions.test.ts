@@ -77,6 +77,8 @@ function connect(from: Jack, to: Jack, keyId: number, tamper?: (body: string) =>
     id: `conn-${to.name}`,
     name: to.name,
     url: `https://${to.name.toLowerCase()}.example`,
+    isInitialized: true,
+    initializationError: null,
     introProfile: () => call('GET', '/profile'),
     introDirectory: () => call('GET', '/directory'),
     introMail: body => call('POST', '/mail', body),
@@ -164,7 +166,7 @@ describe('introductions between friends of friends', () => {
       throw new Error('Unable to connect')
     }
     const lonely = makeJack('Lonely', { publicName: 'Lonely' }, null)
-    lonely.peers.push({ id: 'p', name: 'Bob', url: 'https://bob.example', introProfile: down, introDirectory: down, introMail: down })
+    lonely.peers.push({ id: 'p', name: 'Bob', url: 'https://bob.example', isInitialized: false, initializationError: null, introProfile: down, introDirectory: down, introMail: down })
     expect((await lonely.service.overview()).me.introducers).toBeNull()
   })
 
@@ -300,7 +302,7 @@ describe('introductions between friends of friends', () => {
     const unreachable = async () => {
       throw new Error('offline')
     }
-    jack.peers.push({ id: 'offline-peer', name: 'Carol', url: 'https://carol.example', introProfile: unreachable, introDirectory: unreachable, introMail: unreachable })
+    jack.peers.push({ id: 'offline-peer', name: 'Carol', url: 'https://carol.example', isInitialized: false, initializationError: 'offline', introProfile: unreachable, introDirectory: unreachable, introMail: unreachable })
 
     expect((await jack.service.overview()).threads[0]!.ended).toBe(false)
     linked.clear()
@@ -324,11 +326,13 @@ describe('introductions between friends of friends', () => {
     const carol = new IntroStore(new Database(':memory:')).identity()
     const carolProfile = { id: carol.id, publicKey: carol.publicKey, name: 'Carol', discoverable: true }
     // A jack whose only peer is Carol, on the same database each time (a restart).
+    // `connection`: whether that jack could connect to Carol.
+    const connection = { isInitialized: true, initializationError: null as string | null }
     const boot = (introProfile: IntroPeer['introProfile'], peerId = 'carol-peer') => new IntroductionsService({
       store: new IntroStore(sqlite),
       discovery: () => ({ publicName: 'Alice', introduce: true, discoverable: false }),
       external: () => ({ url: 'https://alice.example', headers: {} }),
-      peers: () => [{ id: peerId, name: 'Carol', url: 'https://carol.example', introProfile, introDirectory: async () => null, introMail: async () => ({ messages: [] }) }],
+      peers: () => [{ id: peerId, name: 'Carol', url: 'https://carol.example', ...connection, introProfile, introDirectory: async () => null, introMail: async () => ({ messages: [] }) }],
       issueKey: () => ({ id: 1, key: 'k' }),
       apiKeyName: () => null,
       addPeer: async () => {},
@@ -345,6 +349,7 @@ describe('introductions between friends of friends', () => {
     const down = async () => {
       throw new Error('Unable to connect')
     }
+    Object.assign(connection, { isInitialized: false, initializationError: 'Unable to connect' })
     const after = boot(down)
     expect(after.peerIdentity('carol-peer')).toBe(carol.id)
     expect((await after.overview()).threads[0]!.ended).toBe(false)
@@ -358,11 +363,86 @@ describe('introductions between friends of friends', () => {
     expect(after.peerIdentity('carol-new')).toBeNull()
 
     // A peer that answers without introductions has no identity any more.
+    Object.assign(connection, { isInitialized: true, initializationError: null })
     const before2 = boot(async () => carolProfile)
     await before2.sync()
     const upstream = boot(async () => null)
     await upstream.sync()
     expect(upstream.peerIdentity('carol-peer')).toBeNull()
+    expect(upstream.identityPending('carol-peer')).toBe(false)
+  })
+
+  test('a peer that is down is left alone until jack connects to it again, then the next sync asks it', async () => {
+    const carol = new IntroStore(new Database(':memory:')).identity()
+    let now = Date.parse('2026-10-19T12:00:00Z')
+    let up = false
+    const calls = { profile: 0, directory: 0, mail: 0 }
+    // Connecting at boot; a host that drops packets fails the connection with a timeout.
+    const peer: IntroPeer = {
+      id: 'carol-peer',
+      name: 'Carol',
+      url: 'https://carol.example',
+      isInitialized: false,
+      initializationError: null,
+      introProfile: async () => {
+        calls.profile++
+        await Bun.sleep(5)
+        if (!up) {
+          peer.initializationError = 'Request timed out after 30000ms'
+          throw new Error(peer.initializationError)
+        }
+        return { id: carol.id, publicKey: carol.publicKey, name: 'Carol', discoverable: true }
+      },
+      introDirectory: async () => {
+        calls.directory++
+        return null
+      },
+      introMail: async () => {
+        calls.mail++
+        return { messages: [] }
+      },
+    }
+    const service = new IntroductionsService({
+      store: new IntroStore(new Database(':memory:')),
+      discovery: () => ({ publicName: 'Alice', introduce: true, discoverable: false }),
+      external: () => ({ url: 'https://alice.example', headers: {} }),
+      peers: () => [peer],
+      issueKey: () => ({ id: 1, key: 'k' }),
+      apiKeyName: () => null,
+      addPeer: async () => {},
+      now: () => new Date(now),
+    })
+
+    // The first sync and the Friends page meanwhile share one call.
+    await Promise.all([service.sync(), service.overview()])
+    expect(calls.profile).toBe(1)
+    expect(service.peerIdentity('carol-peer')).toBeNull()
+    expect(service.identityPending('carol-peer')).toBe(true)
+
+    // Down: the Friends page, a friend's directory call and the syncs don't call it.
+    for (let i = 0; i < 4; i++) {
+      now += 35_000
+      await service.overview()
+      await service.directoryFor(undefined)
+      await service.sync()
+    }
+    expect(calls).toEqual({ profile: 1, directory: 0, mail: 0 })
+
+    // The health check found Carol online and connected: the next sync asks.
+    Object.assign(peer, { isInitialized: true, initializationError: null })
+    up = true
+    now += 60_000
+    await service.sync()
+    expect(calls.profile).toBe(2)
+    expect(service.peerIdentity('carol-peer')).toBe(carol.id)
+    expect(service.identityPending('carol-peer')).toBe(false)
+
+    // An answer counts for 10 minutes; only the sync asks again after that.
+    now += 11 * 60_000
+    await service.overview()
+    expect(calls.profile).toBe(2)
+    await service.sync()
+    expect(calls.profile).toBe(3)
   })
 })
 

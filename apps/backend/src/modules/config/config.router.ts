@@ -60,7 +60,7 @@ export function getConfigRouter(controller: ConfigController) {
   app.get('/torznab', configDoc('Get the torznab block', 'What the Torznab RSS feed offers: releases peers added within rssMaxAgeDays, newest first, at most rssMaxItems. Defaults apply when the block is absent.'), c => c.json(controller.getTorznab()))
   app.get('/notifications', configDoc('Get the notifications block', 'Webhooks and which events to send, as stored: webhook URLs keep their {env}/{file} references.'), c => c.json(controller.getNotifications()))
   app.get('/discovery', configDoc('Get the discovery block', 'Public name and whether friends of friends may find you and whether you introduce your friends to each other, with defaults applied.'), c => c.json(controller.getDiscovery()))
-  app.get('/security', configDoc('Get the security block', 'How the public port protects itself, with defaults applied: temporary bans (banEnabled, maxFailures, windowMinutes, banMinutes, trustedProxies, neverBan), the Torznab and qBittorrent APIs only for the LAN (lanOnlyArrApis, arrApiAlsoAllowed), and whether /openapi.json is served (publicOpenApi).'), c => c.json(controller.getSecurity()))
+  app.get('/security', configDoc('Get the security block', 'How the public port protects itself, with defaults applied: temporary bans (banEnabled, maxFailures, windowMinutes, banMinutes, trustedProxies, neverBan), the Torznab and qBittorrent APIs only for the LAN (lanOnlyArrApis, arrApiAlsoAllowed), and whether /openapi.json is served (publicOpenApi). `ignoredEntries` lists the stored entries of trustedProxies, neverBan and arrApiAlsoAllowed that jack ignores because they aren\'t an IP address or CIDR range, as `{ field, value }` (a value that isn\'t text is shown as JSON); the lists above leave them out, and the next PATCH removes them from the config file.'), c => c.json(controller.getSecurity()))
   app.get('/stream', describeRoute({
     tags: ['Config'],
     summary: 'Stream connector config',
@@ -153,7 +153,7 @@ export function getConfigRouter(controller: ConfigController) {
       return c.json(await controller.updateDiscovery(c.req.valid('json')))
     })
 
-    app.patch('/security', configDoc('Update the security block', 'Merges the given fields into the stored security config. `null` restores a default; lists are replaced whole. Applies immediately.'), zValidator('json', RawSecurityConfig), async (c) => {
+    app.patch('/security', configDoc('Update the security block', 'Merges the given fields into the stored security config. `null` restores a default; lists are replaced whole. Stored list entries jack ignores (`ignoredEntries` on GET) are removed, also from lists the body leaves out, and a list left empty that way is removed. Applies immediately.'), zValidator('json', RawSecurityConfig), async (c) => {
       return c.json(await controller.updateSecurity(c.req.valid('json')))
     })
   }

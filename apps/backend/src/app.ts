@@ -57,8 +57,8 @@ interface AppServices {
   publicOpenApi?: () => boolean
   /** jack.internalUrl as stored now; defaults to the boot config. */
   internalUrl?: () => string
-  /** Called with the destination id whenever its Radarr/Sonarr authenticates (Torznab or qBittorrent). */
-  onArrContact?: (destinationId: string) => void
+  /** Called with the destination id whenever its Radarr/Sonarr authenticates, and on which API. */
+  onArrContact?: (destinationId: string, api: 'torznab' | 'qbittorrent') => void
   /** Called with the api_key id whenever a friend's jack authenticates with it (/handshake, /peer/*). */
   onPeerKeyUsed?: (apiKeyId: number) => void
 }
@@ -115,7 +115,7 @@ export function getApp(envs: Envs, config: AppConfig, connManager: { servers: Co
       repository: services.downloadsRepository,
       downloadsService: services.downloadsService,
       managedKeysRepository: services.managedKeysRepository,
-      onContact: services.onArrContact,
+      onContact: id => services.onArrContact?.(id, 'qbittorrent'),
     })
     if (services.arrAccess)
       app.use('/api/v2/*', lanGuard(services.arrAccess))
@@ -126,7 +126,7 @@ export function getApp(envs: Envs, config: AppConfig, connManager: { servers: Co
   // Peer scope: other Jacks present regular api_keys. *arr scope: the operator's
   // Radarr/Sonarr present the managed key Jack registered with them.
   const peerAuth = requireApiKey(masterKey, { type: 'api_key', repository: services.apiKeysRepository, onAuthenticated: services.onPeerKeyUsed })
-  const arrAuth = requireApiKey(masterKey, { type: 'managed_key', repository: services.managedKeysRepository, onAuthenticated: services.onArrContact })
+  const arrAuth = requireApiKey(masterKey, { type: 'managed_key', repository: services.managedKeysRepository, onAuthenticated: id => services.onArrContact?.(id, 'torznab') })
 
   // Peer handshake — other Jacks probe this at init to read our identity and
   // protocol version, then check it against their minimum compatible version.

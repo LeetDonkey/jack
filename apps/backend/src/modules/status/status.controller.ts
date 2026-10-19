@@ -135,6 +135,8 @@ export class StatusController {
   }
 
   getOverview() {
+    // Rate-limited; a change arrives on the overview stream.
+    this.extras.registrations?.refresh?.()
     const peers = this.connectors.peers
     const servers = this.connectors.servers
     const records = this.downloads?.list() ?? []

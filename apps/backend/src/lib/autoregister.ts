@@ -45,6 +45,8 @@ export interface ManagedRegistrationDeps {
   category: string
   onSuccess: (kind: 'download client' | 'indexer', name: string, meta: ManagedRegistrationMeta) => void
   onFailure: (kind: 'download client' | 'indexer', name: string, err: unknown) => void
+  /** The key the *arr's Jack indexer holds now, once that step succeeded (testIndexer needs it to test a copy). */
+  onIndexerKey?: (key: string) => void
 }
 
 // Without downloads an indexer with no bound download client is the trap: *arr
@@ -126,6 +128,7 @@ export async function registerManagedForDestination(
       })
       indexer = { status: 'ok' }
       deps.onSuccess('indexer', dest.name, { downloadClientId, categories: dest.categories })
+      deps.onIndexerKey?.(key)
     }
     catch (err) {
       indexer = { status: 'failed', error: describeArrError(err) }

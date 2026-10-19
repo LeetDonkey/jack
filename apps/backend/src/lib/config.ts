@@ -480,11 +480,57 @@ const Cidr = z.string().trim().superRefine((entry, ctx) => {
 
 const warnedEntries = new Set<string>()
 
+/** The security lists whose entries must be an address or range. */
+export const SECURITY_ADDRESS_LISTS = ['trustedProxies', 'neverBan', 'arrApiAlsoAllowed'] as const
+export type SecurityAddressList = typeof SECURITY_ADDRESS_LISTS[number]
+
+/** A stored list entry jack ignores, as text: a string as stored, anything else as JSON. */
+export interface IgnoredSecurityEntry {
+  field: SecurityAddressList
+  value: string
+}
+
+function isStoredAddress(entry: unknown): entry is string {
+  return typeof entry === 'string' && isAddressOrRange(entry)
+}
+
+/** The entries of the stored security block that aren't an address or range, in list order. */
+export function ignoredSecurityEntries(security: unknown): IgnoredSecurityEntry[] {
+  const block = security && typeof security === 'object' ? security as Record<string, unknown> : {}
+  return SECURITY_ADDRESS_LISTS.flatMap((field) => {
+    const list = block[field]
+    if (!Array.isArray(list))
+      return []
+    return list.filter(entry => !isStoredAddress(entry)).map(entry => ({ field, value: typeof entry === 'string' ? entry : JSON.stringify(entry) }))
+  })
+}
+
+/**
+ * The stored security block without the entries jack ignores. A list left with
+ * no entry is removed: jack already treats it as unset, so its default applies.
+ */
+export function withoutIgnoredSecurityEntries(security: Record<string, unknown>): Record<string, unknown> {
+  const cleaned = { ...security }
+  for (const field of SECURITY_ADDRESS_LISTS) {
+    const list = cleaned[field]
+    if (!Array.isArray(list) || list.every(isStoredAddress))
+      continue
+    const kept = list.filter(isStoredAddress).map(entry => entry.trim())
+    if (kept.length === 0)
+      delete cleaned[field]
+    else
+      cleaned[field] = kept
+  }
+  return cleaned
+}
+
 /**
  * An address list as stored in config.jsonc. Entries that aren't an address or
  * range (a file written by hand, or by a jack that accepted any text) are left
  * out with a warning instead of stopping jack from starting. A list with no
- * valid entry left counts as unset, so its default applies.
+ * valid entry left counts as unset, so its default applies. GET
+ * /config/security lists them (ignoredEntries), and the next save of the
+ * security block removes them from the file.
  */
 function StoredAddressList(setting: string) {
   return z.array(z.unknown()).nullish().transform((list) => {
@@ -492,14 +538,14 @@ function StoredAddressList(setting: string) {
       return list
     const kept: string[] = []
     for (const entry of list) {
-      if (typeof entry === 'string' && isAddressOrRange(entry)) {
+      if (isStoredAddress(entry)) {
         kept.push(entry.trim())
         continue
       }
       const shown = typeof entry === 'string' ? quoteEntry(entry) : JSON.stringify(entry)
       if (!warnedEntries.has(`${setting}\0${shown}`)) {
         warnedEntries.add(`${setting}\0${shown}`)
-        logger.warn({ setting: `security.${setting}`, entry: shown }, `Ignoring ${shown} in security.${setting}: it ${NOT_AN_ADDRESS}. Fix it under Settings -> Sharing -> Security.`)
+        logger.warn({ setting: `security.${setting}`, entry: shown }, `Ignoring ${shown} in security.${setting}: it ${NOT_AN_ADDRESS}. Settings -> Sharing -> Security lists it, and saving that card removes it from the config file.`)
       }
     }
     return kept.length === 0 && list.length > 0 ? null : kept

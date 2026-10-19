@@ -14,6 +14,10 @@ export interface IntroPeer {
   id: string
   name?: string
   url: string
+  /** Whether jack is connected to the peer's jack. */
+  isInitialized: boolean
+  /** Why connecting failed; null while connecting, or connected. */
+  initializationError: string | null
   introProfile: () => Promise<IntroProfile | null>
   introDirectory: () => Promise<IntroDirectory | null>
   introMail: (body: IntroMailRequest) => Promise<{ messages: unknown[], refused?: string[] }>
@@ -55,6 +59,26 @@ const DIRECTORY_TTL_MS = 5 * 60_000
 const SYNC_INTERVAL_MS = 60_000
 const MAX_PENDING_OUTGOING = 20
 
+interface ProfileEntry {
+  /** When the call ended. */
+  at: number
+  profile: IntroProfile | null
+  /** The peer answered the call this boot (a profile, or null when it has no introductions); a failed call keeps the last answer. */
+  answered: boolean
+  /** The last call failed while jack wasn't connected to the peer: the next sync asks again once it is. */
+  untilConnected: boolean
+}
+
+/**
+ * A peer whose connection failed. Any call to it would first connect again, a
+ * full handshake that waits out the request timeout when the host doesn't answer
+ * (powered off behind a port forward, say). It is left alone until the health
+ * check finds it online and connects (see PeerHealthMonitor).
+ */
+function isDown(peer: IntroPeer): boolean {
+  return !peer.isInitialized && peer.initializationError != null
+}
+
 /**
  * Lets two jacks that share a friend find each other and connect, without
  * either learning where the other is until both have said yes.
@@ -70,7 +94,9 @@ const MAX_PENDING_OUTGOING = 20
  *   they connect directly.
  */
 export class IntroductionsService {
-  private readonly profiles = new Map<string, { at: number, profile: IntroProfile | null }>()
+  private readonly profiles = new Map<string, ProfileEntry>()
+  // The profile call running per peer: callers that come in meanwhile share it.
+  private readonly profileCalls = new Map<string, Promise<IntroProfile | null>>()
   // `answered`: the peer answered the directory call once (a directory, or 404
   // when it doesn't introduce); a failed call keeps the last answer.
   private readonly directories = new Map<string, { at: number, directory: IntroDirectory | null, answered: boolean }>()
@@ -115,6 +141,15 @@ export class IntroductionsService {
    */
   peerIdentity(peerId: string): string | null {
     return this.profiles.get(peerId)?.profile?.id ?? this.storedIdentity(peerId)
+  }
+
+  /**
+   * Whether jack hasn't heard from a peer's jack about its identity since it
+   * started: the peer was down at every sync so far, or wasn't synced yet. A
+   * health check can find the peer online before the next sync asks.
+   */
+  identityPending(peerId: string): boolean {
+    return !this.profiles.get(peerId)?.answered
   }
 
   /** A peer's url, and so its id, changed: keep what it reported under the new id. */
@@ -243,8 +278,9 @@ export class IntroductionsService {
   private async syncAll(): Promise<void> {
     this.deps.store.prune()
     const me = this.identity
-    for (const { peer, profile } of await this.peerProfiles()) {
-      if (!profile)
+    for (const { peer, profile } of await this.peerProfiles({ refresh: true })) {
+      // Mail for a peer that is down waits in the outbox.
+      if (!profile || isDown(peer))
         continue
       const outgoing = this.deps.store.mailFor(profile.id, me.id)
       try {
@@ -264,32 +300,57 @@ export class IntroductionsService {
     }
   }
 
-  private async peerProfiles(): Promise<Array<{ peer: IntroPeer, profile: IntroProfile | null }>> {
+  /**
+   * What each peer's jack reported about itself. Only the sync (`refresh`) asks
+   * again for what it has: after PROFILE_TTL_MS, or as soon as jack is connected
+   * to a peer it couldn't ask before. Every other caller, such as the Friends
+   * page or a friend's directory call, asks only a peer it has nothing from yet,
+   * so it doesn't wait for one that went down. No caller asks a peer that is down
+   * (see isDown).
+   */
+  private async peerProfiles({ refresh = false }: { refresh?: boolean } = {}): Promise<Array<{ peer: IntroPeer, profile: IntroProfile | null }>> {
     const now = this.now.getTime()
     return Promise.all(this.deps.peers().map(async (peer) => {
       const cached = this.profiles.get(peer.id)
-      if (cached && now - cached.at < PROFILE_TTL_MS)
-        return { peer, profile: cached.profile }
-      let profile: IntroProfile | null
+      const due = !cached || (refresh && (now - cached.at >= PROFILE_TTL_MS || (cached.untilConnected && peer.isInitialized)))
+      if (!due || isDown(peer))
+        return { peer, profile: cached?.profile ?? null }
+      return { peer, profile: await this.askProfile(peer) }
+    }))
+  }
+
+  private askProfile(peer: IntroPeer): Promise<IntroProfile | null> {
+    const running = this.profileCalls.get(peer.id)
+    if (running)
+      return running
+    const call = (async () => {
       try {
-        profile = await peer.introProfile()
+        const profile = await peer.introProfile()
         // An answer, so the stored identity follows it (null: no introductions there).
         this.storeIdentity(peer.id, profile?.id ?? null)
+        this.profiles.set(peer.id, { at: this.now.getTime(), profile, answered: true, untilConnected: false })
+        return profile
       }
       catch {
-        profile = cached?.profile ?? null
+        const last = this.profiles.get(peer.id)
+        this.profiles.set(peer.id, { at: this.now.getTime(), profile: last?.profile ?? null, answered: last?.answered ?? false, untilConnected: !peer.isInitialized })
+        return last?.profile ?? null
       }
-      this.profiles.set(peer.id, { at: now, profile })
-      return { peer, profile }
-    }))
+    })()
+    this.profileCalls.set(peer.id, call)
+    void call.finally(() => {
+      if (this.profileCalls.get(peer.id) === call)
+        this.profileCalls.delete(peer.id)
+    })
+    return call
   }
 
   private async peerDirectories(): Promise<Array<{ peer: IntroPeer, directory: IntroDirectory }>> {
     const now = this.now.getTime()
     const all = await Promise.all(this.deps.peers().map(async (peer) => {
       const cached = this.directories.get(peer.id)
-      if (cached && now - cached.at < DIRECTORY_TTL_MS)
-        return { peer, directory: cached.directory }
+      if ((cached && now - cached.at < DIRECTORY_TTL_MS) || isDown(peer))
+        return { peer, directory: cached?.directory ?? null }
       const entry = await peer.introDirectory().then(
         directory => ({ at: now, directory, answered: true }),
         () => ({ at: now, directory: cached?.directory ?? null, answered: cached?.answered ?? false }),

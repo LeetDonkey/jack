@@ -2,31 +2,39 @@ import type { ArrProviderTest, ArrServerConnector } from '../../lib/servers/arr/
 import type { JackSavedListener, PeerSavedListener, ServerSavedListener } from '../config/config.service'
 import type { RegistrationServiceDeps } from './registration.service'
 import { Database } from 'bun:sqlite'
-import { beforeEach, describe, expect, test } from 'bun:test'
+import { beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { drizzle } from 'drizzle-orm/bun-sqlite'
 import { runMigrations } from '../../database/connection'
 import * as schema from '../../database/schema'
 import { BadRequestError } from '../../lib/errors/BadRequestError'
 import { ConnectorInitializationError } from '../../lib/errors/ConnectorInitializationError'
 import { FetchError } from '../../lib/errors/FetchError'
+import { logger } from '../../logger'
 import { ManagedKeysRepository } from '../managed-keys/managed-keys.repository'
 import { ManagedApiKeys } from '../managed-keys/managed-keys.service'
 import { RegistrationService } from './registration.service'
 
 interface StubCalls {
   clients: Array<{ internalUrl: string }>
-  indexers: Array<{ internalUrl: string }>
+  indexers: Array<{ internalUrl: string, apiKey: string }>
+  /** The key each indexer test ran with: a copy's key, or undefined for the saved indexer. */
+  indexerTests: Array<string | undefined>
+  clientTests: number
   inits: number
 }
 
 type StubDest = ArrServerConnector & { calls: StubCalls, isInitialized: boolean }
 
+const OK: ArrProviderTest = { status: 'ok', warnings: [] }
+
 function stubDest(over: Partial<Record<string, unknown>> = {}): StubDest {
-  const calls: StubCalls = { clients: [], indexers: [], inits: 0 }
-  const ok: ArrProviderTest = { status: 'ok', warnings: [] }
+  const calls: StubCalls = { clients: [], indexers: [], indexerTests: [], clientTests: 0, inits: 0 }
+  const testIndexer = (over.testIndexer ?? (async () => OK)) as (...args: unknown[]) => Promise<ArrProviderTest>
+  const testDownloadClient = (over.testDownloadClient ?? (async () => OK)) as (...args: unknown[]) => Promise<ArrProviderTest>
   return {
     id: 'srv-a',
     name: 'Radarr',
+    type: 'radarr',
     categories: [2000],
     enabled: true,
     canDestination: true,
@@ -37,17 +45,24 @@ function stubDest(over: Partial<Record<string, unknown>> = {}): StubDest {
       calls.clients.push(config)
       return 7
     },
-    registerIndexer: async (config: { internalUrl: string }) => {
+    registerIndexer: async (config: { internalUrl: string, apiKey: string }) => {
       calls.indexers.push(config)
     },
-    testDownloadClient: async () => ok,
-    testIndexer: async () => ok,
+    isIndexerPaused: async () => false,
     disableUnboundIndexer: async () => false,
     init() {
       calls.inits++
     },
     calls,
     ...over,
+    testIndexer: (name: string, baseUrl: string, options: { apiKey?: string } = {}) => {
+      calls.indexerTests.push(options.apiKey)
+      return testIndexer(name, baseUrl, options)
+    },
+    testDownloadClient: (...args: unknown[]) => {
+      calls.clientTests++
+      return testDownloadClient(...args)
+    },
   } as unknown as StubDest
 }
 
@@ -74,6 +89,7 @@ describe('RegistrationService', () => {
       downloads: () => true,
       downloadsActive: () => true,
       now: () => now,
+      clientRetryDelayMs: 0,
       ...over,
     })
   }
@@ -94,10 +110,14 @@ describe('RegistrationService', () => {
       indexerTest: 'ok',
       message: null,
       testErrors: { downloadClient: null, indexer: null },
+      indexerPausedUntil: null,
+      indexerPaused: false,
     })
     expect(registrations.registration('srv-a')).toEqual(result)
     expect(registrations.registration('other')).toBeNull()
     expect(dest.calls.indexers[0]?.internalUrl).toBe('http://jack:5225/torznab')
+    // The indexer test ran on a copy, with the key the indexer just got.
+    expect(dest.calls.indexerTests).toEqual([dest.calls.indexers[0]!.apiKey])
     expect(notified).toBe(1)
   })
 
@@ -542,7 +562,7 @@ describe('RegistrationService', () => {
 
     const first = registrations.register(dest)
     await Bun.sleep(1)
-    const again = registrations.registerFailedIndexers()
+    const again = registrations.registerAfterFriendChange()
     release()
 
     expect((await first)?.indexer.status).toBe('failed')
@@ -551,7 +571,7 @@ describe('RegistrationService', () => {
     expect(results.map(result => result?.indexer.status)).toEqual(['ok'])
   })
 
-  test('registerFailedIndexers leaves alone a destination that is down or no longer auto-registers', async () => {
+  test('registerAfterFriendChange leaves alone a destination that is down or no longer auto-registers', async () => {
     let attempts = 0
     const dest = stubDest({
       registerIndexer: async () => {
@@ -563,10 +583,254 @@ describe('RegistrationService', () => {
     await registrations.register(dest)
 
     dest.isInitialized = false
-    expect(await registrations.registerFailedIndexers()).toEqual([])
+    expect(await registrations.registerAfterFriendChange()).toEqual([])
     dest.isInitialized = true
     Object.assign(dest, { autoRegister: { enable: false, priority: 1 } })
-    expect(await registrations.registerFailedIndexers()).toEqual([])
+    expect(await registrations.registerAfterFriendChange()).toEqual([])
     expect(attempts).toBe(1)
+  })
+
+  const NO_RESULTS = 'Query successful, but no results in the configured categories were returned from your indexer.'
+
+  test('a saved friend tests again where the feed was empty, and leaves alone an *arr that found releases', async () => {
+    let feed: ArrProviderTest = failure(NO_RESULTS)
+    const empty = stubDest({ testIndexer: async () => feed })
+    const fine = stubDest({ id: 'srv-b', name: 'Sonarr', type: 'sonarr' })
+    const registrations = service([empty, fine])
+    await registrations.registerAll()
+    expect(registrations.registration('srv-a')).toMatchObject({ indexerTest: 'ok', message: null })
+
+    feed = OK
+    const runs = await registrations.registerAfterFriendChange()
+    expect(runs.map(run => run?.indexerTest)).toEqual(['ok'])
+    expect(empty.calls.indexers).toHaveLength(2)
+    expect(fine.calls.indexers).toHaveLength(1)
+
+    // The feed has releases now: nothing to test again.
+    expect(await registrations.registerAfterFriendChange()).toEqual([])
+  })
+
+  test('an *arr that skips jack\'s indexer gets a test of the saved indexer when the feed has releases, which ends the pause', async () => {
+    let paused = true
+    const dest = stubDest({
+      isIndexerPaused: async () => paused,
+      testIndexer: async (_name: string, _url: string, options: { apiKey?: string }) => {
+        // A pass of the saved indexer ends the pause in the *arr.
+        if (options.apiKey === undefined)
+          paused = false
+        return OK
+      },
+    })
+    const result = (await service([dest]).register(dest))!
+
+    expect(dest.calls.indexerTests).toEqual([dest.calls.indexers[0]!.apiKey, undefined])
+    expect(paused).toBe(false)
+    expect(result).toMatchObject({ indexerTest: 'ok', message: null, indexerPausedUntil: null, indexerPaused: false })
+  })
+
+  test('with an empty feed it leaves the saved indexer alone, says the *arr skips it, and tests again when friends change', async () => {
+    let feed: ArrProviderTest = failure(NO_RESULTS)
+    let paused = true
+    const dest = stubDest({
+      type: 'sonarr',
+      name: 'Sonarr',
+      isIndexerPaused: async () => paused,
+      testIndexer: async (_name: string, _url: string, options: { apiKey?: string }) => {
+        if (options.apiKey === undefined)
+          paused = feed !== OK
+        return feed
+      },
+    })
+    const registrations = service([dest])
+    const result = (await registrations.register(dest))!
+
+    // Only the copy was tested: a test of the saved indexer would fail and make the pause longer.
+    expect(dest.calls.indexerTests).toEqual([dest.calls.indexers[0]!.apiKey])
+    expect(result).toMatchObject({ indexerTest: 'ok', indexerPausedUntil: null, indexerPaused: true, message: null })
+
+    feed = OK
+    const [again] = await registrations.registerAfterFriendChange()
+    expect(paused).toBe(false)
+    expect(again).toMatchObject({ indexerTest: 'ok', message: null, indexerPaused: false })
+  })
+
+  test('a failure wins over the paused indexer in the message', async () => {
+    const dest = stubDest({
+      isIndexerPaused: async () => true,
+      testDownloadClient: async () => failure('Unable to connect to qBittorrent', 'Connection refused (jack:5225)'),
+    })
+    const result = (await service([dest]).register(dest))!
+    expect(result.message).toBe('Radarr reached jack, but nothing answered on jack:5225. Check the port in Address Radarr/Sonarr use to reach jack.')
+  })
+
+  test('an *arr that can\'t say whether it skips jack\'s indexer changes nothing', async () => {
+    const dest = stubDest({
+      isIndexerPaused: async () => {
+        throw new Error('HTTP 500')
+      },
+    })
+    const result = (await service([dest]).register(dest))!
+    expect(result).toMatchObject({ indexerTest: 'ok', message: null, indexerPausedUntil: null, indexerPaused: null })
+    expect(dest.calls.indexerTests).toHaveLength(1)
+  })
+
+  test('a failed download client test runs once more, and the second answer counts', async () => {
+    const answers = [failure('Unable to connect to qBittorrent', 'The response ended prematurely. (ResponseEnded)'), OK]
+    const dest = stubDest({ testDownloadClient: async () => answers.shift() ?? OK })
+    const result = (await service([dest]).register(dest))!
+    expect(dest.calls.clientTests).toBe(2)
+    expect(result).toMatchObject({ clientTest: 'ok', message: null, testErrors: { downloadClient: null } })
+
+    const failing = stubDest({ testDownloadClient: async () => failure('Unable to connect to qBittorrent', 'Name or service not known (jack:5225)') })
+    expect((await service([failing]).register(failing))!.clientTest).toBe('failed')
+    expect(failing.calls.clientTests).toBe(2)
+
+    const slow = stubDest({
+      testDownloadClient: async () => {
+        throw new DOMException('The operation timed out.', 'TimeoutError')
+      },
+    })
+    await service([slow]).register(slow)
+    expect(slow.calls.clientTests).toBe(1)
+  })
+
+  test('a login to jack\'s download client after a failed test drops the failure; Torznab doesn\'t', async () => {
+    const dest = stubDest({ testDownloadClient: async () => failure('Unable to connect to qBittorrent', 'Name or service not known (jack:5225)') })
+    const registrations = service([dest])
+    await registrations.register(dest)
+    let notified = 0
+    registrations.subscribe(() => notified++)
+
+    // In the same millisecond as the result: not after the test.
+    registrations.recordContact('srv-a', 'qbittorrent')
+    expect(registrations.registration('srv-a')?.clientTest).toBe('failed')
+
+    now += 1000
+    registrations.recordContact('srv-a', 'torznab')
+    expect(registrations.registration('srv-a')?.clientTest).toBe('failed')
+
+    now += 1000
+    registrations.recordContact('srv-a', 'qbittorrent')
+    expect(registrations.registration('srv-a')).toMatchObject({ clientTest: 'ok', message: null, testErrors: { downloadClient: null } })
+    expect(registrations.lastContactAt('srv-a')).toBe('2026-10-18T10:00:02.000Z')
+    expect(notified).toBe(2)
+  })
+
+  test('refreshPauses notices an *arr that started skipping jack\'s indexer, and tests the feed again at most every 30 minutes without registering again', async () => {
+    let paused = false
+    let feed: ArrProviderTest = failure(NO_RESULTS)
+    let pauseChecks = 0
+    const dest = stubDest({
+      isIndexerPaused: async () => {
+        pauseChecks++
+        return paused
+      },
+      testIndexer: async (_name: string, _url: string, options: { apiKey?: string }) => {
+        if (options.apiKey === undefined && feed === OK)
+          paused = false
+        return feed
+      },
+    })
+    const registrations = service([dest])
+    await registrations.register(dest)
+    expect(pauseChecks).toBe(1)
+    const key = dest.calls.indexers[0]!.apiKey
+
+    // Within 2 minutes of the registration's check: no new question.
+    now += 60_000
+    await registrations.refreshPauses()
+    expect(pauseChecks).toBe(1)
+
+    paused = true
+    now += 60_000
+    await registrations.refreshPauses()
+    await Bun.sleep(5)
+    expect(pauseChecks).toBe(2)
+    // It tested a copy with the key the indexer has; with an empty feed the pause stays.
+    expect(dest.calls.indexerTests).toEqual([key, key])
+    expect(registrations.registration('srv-a')).toMatchObject({ indexerPaused: true, message: null })
+
+    now += 5 * 60_000
+    await registrations.refreshPauses()
+    await Bun.sleep(5)
+    expect(dest.calls.indexerTests).toHaveLength(2)
+
+    feed = OK
+    now += 30 * 60_000
+    await registrations.refreshPauses()
+    await Bun.sleep(5)
+    // The copy found releases, so the saved indexer's test ran, and its pass ended the pause.
+    expect(dest.calls.indexerTests).toEqual([key, key, key, undefined])
+    expect(paused).toBe(false)
+    expect(registrations.registration('srv-a')).toMatchObject({ indexerPaused: false, message: null })
+    // No registration ran again: same key, no new entries.
+    expect(dest.calls.indexers).toHaveLength(1)
+    expect(dest.calls.clients).toHaveLength(1)
+  })
+
+  test('a registration that finds the indexer paused tests the feed again only 30 minutes later', async () => {
+    const dest = stubDest({
+      isIndexerPaused: async () => true,
+      testIndexer: async () => failure(NO_RESULTS),
+    })
+    const registrations = service([dest])
+    expect(await registrations.register(dest)).toMatchObject({ indexerPaused: true, indexerPausedUntil: null })
+
+    for (let i = 0; i < 5; i++) {
+      now += 5 * 60_000
+      await registrations.refreshPauses()
+    }
+    await Bun.sleep(5)
+    expect(dest.calls.indexerTests).toHaveLength(1)
+
+    now += 5 * 60_000
+    await registrations.refreshPauses()
+    await Bun.sleep(5)
+    expect(dest.calls.indexerTests).toHaveLength(2)
+    expect(dest.calls.indexers).toHaveLength(1)
+  })
+
+  test('a test of the feed in a paused *arr registers again only when the test failed', async () => {
+    let answer: 'empty' | 'slow' | 'missing' = 'empty'
+    const dest = stubDest({
+      isIndexerPaused: async () => true,
+      testIndexer: async (): Promise<ArrProviderTest> => {
+        if (answer === 'slow')
+          throw new DOMException('The operation timed out.', 'TimeoutError')
+        return answer === 'missing' ? { status: 'missing' } : failure(NO_RESULTS)
+      },
+    })
+    const registrations = service([dest])
+    await registrations.register(dest)
+
+    // A test that took too long waited for friends; a registration would wait the same.
+    answer = 'slow'
+    now += 30 * 60_000
+    await registrations.refreshPauses()
+    await Bun.sleep(5)
+    expect(dest.calls.indexerTests).toHaveLength(2)
+    expect(dest.calls.indexers).toHaveLength(1)
+
+    // The Jack indexer is gone: registering again adds it, with a new key.
+    answer = 'missing'
+    now += 30 * 60_000
+    await registrations.refreshPauses()
+    await Bun.sleep(20)
+    expect(dest.calls.indexers).toHaveLength(2)
+    expect(dest.calls.indexers[1]!.apiKey).not.toBe(dest.calls.indexers[0]!.apiKey)
+  })
+
+  test('logs a failed test once with the message, which already names the *arr', async () => {
+    const warn = spyOn(logger, 'warn')
+    try {
+      const dest = stubDest({ testDownloadClient: async () => failure('Something odd') })
+      await service([dest]).register(dest)
+      const messages = warn.mock.calls.map(call => call[1])
+      expect(messages).toContain('Radarr couldn\'t use jack: Something odd')
+      expect(messages.some(message => typeof message === 'string' && message.includes('can\'t use jack: Radarr couldn\'t'))).toBe(false)
+    }
+    finally {
+      warn.mockRestore()
+    }
   })
 })

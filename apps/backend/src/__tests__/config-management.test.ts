@@ -1235,11 +1235,42 @@ describe('Management API security config', () => {
 
     const configService = await ConfigService.fromFile({ path, connectorManager: new ConnectorManager([], []) })
     const app = getManagementApp({ environment: 'test', managementKey: 'mgmt-secret', connectors: { servers: [], peers: [] }, configService })
-    expect(await (await app.request('/config/security', { headers: KEY })).json()).toMatchObject({ trustedProxies: null, neverBan: ['100.64.0.0/10'] })
+    expect(await (await app.request('/config/security', { headers: KEY })).json()).toMatchObject({
+      trustedProxies: null,
+      neverBan: ['100.64.0.0/10'],
+      ignoredEntries: [
+        { field: 'trustedProxies', value: 'Nginx' },
+        { field: 'trustedProxies', value: 'Proxy' },
+        { field: 'trustedProxies', value: 'Manager' },
+        { field: 'neverBan', value: 'tailscale' },
+      ],
+    })
 
-    // Saving another setting keeps working.
+    // Saving another setting keeps working, and drops the ignored entries from the file.
     expect((await patch(app, { banEnabled: false })).status).toBe(200)
     expect(configService.getSecurity()).toMatchObject({ banEnabled: false, neverBan: ['100.64.0.0/10'] })
+    expect(configService.getSecurity().trustedProxies ?? null).toBeNull()
+    const onDisk = jsonc.parse(await Bun.file(path).text()) as { security: Record<string, unknown> }
+    expect(onDisk.security).toEqual({ neverBan: ['100.64.0.0/10'], arrApiAlsoAllowed: [], banEnabled: false })
+    expect(await (await app.request('/config/security', { headers: KEY })).json()).toMatchObject({ ignoredEntries: [] })
+  })
+
+  test('ignoredEntries shows an entry that isn\'t text as JSON, and a list sent in the PATCH replaces the stored one', async () => {
+    const path = join(tmpdir(), `jack-config-${Math.random().toString(36).slice(2)}.jsonc`)
+    tempFiles.push(path)
+    const security = { trustedProxies: ['10.0.0.5', 42], arrApiAlsoAllowed: ['vps.example.com'] }
+    await Bun.write(path, jsonc.stringify({ version: MIGRATIONS.length, jack: { internalUrl: 'http://jack:5225' }, security, peers: [], servers: [] }))
+    const configService = await ConfigService.fromFile({ path, connectorManager: new ConnectorManager([], []) })
+    const app = getManagementApp({ environment: 'test', managementKey: 'mgmt-secret', connectors: { servers: [], peers: [] }, configService })
+
+    expect((await (await app.request('/config/security', { headers: KEY })).json() as { ignoredEntries: unknown }).ignoredEntries).toEqual([
+      { field: 'trustedProxies', value: '42' },
+      { field: 'arrApiAlsoAllowed', value: 'vps.example.com' },
+    ])
+
+    expect((await patch(app, { arrApiAlsoAllowed: ['100.64.0.0/10'] })).status).toBe(200)
+    const onDisk = jsonc.parse(await Bun.file(path).text()) as { security: Record<string, unknown> }
+    expect(onDisk.security).toEqual({ trustedProxies: ['10.0.0.5'], arrApiAlsoAllowed: ['100.64.0.0/10'] })
   })
 })
 

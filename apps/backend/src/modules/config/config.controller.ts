@@ -298,9 +298,14 @@ export class ConfigController {
     return this.mutate(s => s.updateDiscovery(input))
   }
 
-  /** Ban settings with defaults applied, or null when read-only. */
+  /**
+   * Ban settings with defaults applied, plus the stored list entries jack ignores
+   * (`ignoredEntries`), or null when read-only.
+   */
   getSecurity() {
-    return this.configService?.getSecurity() ?? null
+    if (!this.configService)
+      return null
+    return { ...this.configService.getSecurity(), ignoredEntries: this.configService.getIgnoredSecurityEntries() }
   }
 
   updateSecurity(input: unknown) {

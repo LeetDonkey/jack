@@ -234,6 +234,7 @@ export async function buildSupportBundle(deps: SupportBundleDeps) {
           indexerTest: registration.indexerTest,
           message: registration.message,
           testErrors: registration.testErrors,
+          indexerPaused: registration.indexerPaused,
         },
         lastContactAt: deps.registrations?.lastContactAt(server.id) ?? null,
       }

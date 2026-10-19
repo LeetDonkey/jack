@@ -76,9 +76,14 @@ export function isNoResultsFailure(text: string): boolean {
  * results. Warnings don't count; any other error does.
  */
 export function isOnlyNoResultsRejection(err: unknown): boolean {
-  if (!(err instanceof FetchError) || err.response.status !== 400)
+  return err instanceof FetchError && isOnlyNoResultsAnswer(err.response.status, err.extras.body)
+}
+
+/** The same for a raw answer: a 400 whose only errors say the feed had no results. */
+export function isOnlyNoResultsAnswer(status: number, body: string | undefined): boolean {
+  if (status !== 400)
     return false
-  const errors = parseArrValidationFailures(err.extras.body).filter(failure => !failure.warning)
+  const errors = parseArrValidationFailures(body).filter(failure => !failure.warning)
   return errors.length > 0 && errors.every(failure => isNoResultsFailure(formatArrValidationFailure(failure)))
 }
 

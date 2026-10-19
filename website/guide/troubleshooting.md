@@ -62,7 +62,9 @@ jack runs the same test after each registration, and the server's card in the
 management UI says what failed in plain words, for example ***Radarr can't
 resolve jack. Use your server's IP in Address Radarr/Sonarr use to reach
 jack.*** A new address saved under ***Settings -> Radarr & Sonarr*** applies
-right away: jack updates every *arr and tests again.
+right away: jack updates every *arr and tests again. A test that fails runs
+once more a few seconds later, and the card drops a failure as soon as the
+*arr logs in to jack's download client.
 
 When *arr refuses the download client itself (`Failed to register download
 client` in the log), jack leaves the indexer as it was, so it stays bound to
@@ -80,8 +82,47 @@ its indexer anyway (see
 [`servers[].autoregister`](../reference/configuration.md#servers-autoregister)),
 and Radarr and Sonarr find releases in it once a friend has some.
 
+Radarr and Sonarr count this answer to their ***Test*** button as a failure,
+and skip the indexer for a while afterwards (see
+[below](#radarr-or-sonarr-says-indexers-unavailable-due-to-failures)). While
+your feed is empty, leave that button alone: jack tests the indexer after
+every registration without that effect.
+
 If an *arr still refused the indexer, the server's card says so, and jack
 tries again when you add or save a friend.
+
+## Radarr or Sonarr says `Indexers unavailable due to failures`
+
+Radarr's or Sonarr's ***System -> Status*** shows one of:
+
+```
+All indexers are unavailable due to failures
+Indexers unavailable due to failures: Jack
+```
+
+After an indexer fails, Radarr and Sonarr skip it for a while: 1 minute after
+the first failure, and longer after each further one, up to 24 hours. While
+they skip jack's indexer, their searches and RSS syncs leave jack out, so they
+find nothing from your friends. They resume it by themselves when the time is
+up.
+
+The failures come from:
+
+- **jack was down** when the *arr synced or searched, for example during an
+  update or a restart.
+- **A test in the *arr:** its ***Test*** button on the Jack indexer, while
+  jack's feed is empty (see
+  [above](#indexer-test-says-query-successful-but-no-results)).
+
+jack checks after every registration whether the *arr skips its indexer, and
+every few minutes after that. The server's card under ***Settings -> Radarr &
+Sonarr*** then says ***Radarr is skipping jack's indexer for a while***. When
+jack's feed has releases for that *arr, jack runs a test that passes, and a
+passing test ends the pause right away. jack does that at every registration,
+after you add or save a friend, and every 30 minutes while the pause lasts.
+
+**Fix:** usually none. To end the pause now, once a friend has new releases,
+click ***Register again*** on the server's card.
 
 ## Grabs download but never import
 
