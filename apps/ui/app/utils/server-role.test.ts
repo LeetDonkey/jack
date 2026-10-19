@@ -1,6 +1,6 @@
 import type { DestinationRegistration } from '~/types/management'
 import { describe, expect, test } from 'bun:test'
-import { ARR_CONTACT_GRACE_MS, arrContact, arrName, formatTimeAgo, registersJack, registrationFix, registrationStepDetail, registrationSummary, serverRoleLabel } from './server-role'
+import { ARR_CONTACT_GRACE_MS, arrContact, arrMedia, arrName, formatPauseEnd, formatTimeAgo, indexerPause, indexerPausedUntil, indexerPauseText, registersJack, registrationFix, registrationHeadline, registrationStepDetail, registrationStepTone, registrationSummary, serverRoleLabel } from './server-role'
 
 function registration(overrides: Partial<DestinationRegistration> = {}): DestinationRegistration {
   return {
@@ -11,6 +11,8 @@ function registration(overrides: Partial<DestinationRegistration> = {}): Destina
     indexerTest: 'ok',
     message: null,
     testErrors: { downloadClient: null, indexer: null },
+    indexerPausedUntil: null,
+    indexerPaused: null,
     ...overrides,
   }
 }
@@ -92,12 +94,24 @@ describe('registrationSummary', () => {
 
 describe('registrationStepDetail', () => {
   test('describes what jack did and what the *arr\'s test said', () => {
-    expect(registrationStepDetail({ status: 'ok' }, 'ok', 'Radarr')).toBe('Added. Radarr\'s test passed.')
-    expect(registrationStepDetail({ status: 'ok' }, 'failed', 'Radarr')).toBe('Added, but Radarr\'s test failed.')
-    expect(registrationStepDetail({ status: 'ok' }, 'skipped', 'Radarr')).toBe('Added. Works after you restart the jack container.')
-    expect(registrationStepDetail({ status: 'failed', error: 'HTTP 400' }, 'skipped', 'Radarr')).toBe('jack couldn\'t add it: HTTP 400')
-    expect(registrationStepDetail({ status: 'skipped', reason: 'downloads-off' }, 'skipped', 'Radarr')).toBe('Skipped, because downloads are off.')
-    expect(registrationStepDetail({ status: 'skipped', reason: 'client-failed' }, 'skipped', 'Radarr')).toBe('Skipped, because the download client failed.')
+    expect(registrationStepDetail('downloadClient', { status: 'ok' }, 'ok', 'Radarr')).toBe('Added. Radarr\'s test passed.')
+    expect(registrationStepDetail('downloadClient', { status: 'ok' }, 'failed', 'Radarr')).toBe('Added, but Radarr\'s test failed.')
+    expect(registrationStepDetail('downloadClient', { status: 'ok' }, 'skipped', 'Radarr')).toBe('Added. Works after you restart the jack container.')
+    expect(registrationStepDetail('downloadClient', { status: 'failed', error: 'HTTP 400' }, 'skipped', 'Radarr')).toBe('jack couldn\'t add it: HTTP 400')
+    expect(registrationStepDetail('downloadClient', { status: 'skipped', reason: 'downloads-off' }, 'skipped', 'Radarr')).toBe('Skipped, because downloads are off.')
+    expect(registrationStepDetail('indexer', { status: 'skipped', reason: 'client-failed' }, 'skipped', 'Radarr')).toBe('Skipped, because the download client failed.')
+  })
+
+  test('an untested indexer doesn\'t wait for a restart', () => {
+    expect(registrationStepDetail('indexer', { status: 'ok' }, 'skipped', 'Radarr')).toBe('Added. Radarr hasn\'t tested it yet.')
+  })
+
+  test('never says the test passed while the indexer is paused', () => {
+    expect(registrationStepDetail('indexer', { status: 'ok' }, 'ok', 'Radarr', 'until 17:36')).toBe('Added, but Radarr is skipping it until 17:36.')
+    expect(registrationStepDetail('indexer', { status: 'ok' }, 'failed', 'Radarr', 'until 17:36')).toBe('Added, but Radarr\'s test failed. Radarr is skipping it until 17:36.')
+    expect(registrationStepDetail('indexer', { status: 'ok' }, 'ok', 'Radarr', 'for a while')).toBe('Added, but Radarr is skipping it for a while.')
+    // The pause is the indexer's alone.
+    expect(registrationStepDetail('downloadClient', { status: 'ok' }, 'ok', 'Radarr', 'until 17:36')).toBe('Added. Radarr\'s test passed.')
   })
 })
 
@@ -140,5 +154,185 @@ describe('formatTimeAgo', () => {
 
   test('treats a time ahead of the clock as just now', () => {
     expect(formatTimeAgo('2026-10-18T10:01:00.000Z', AT)).toBe('just now')
+  })
+})
+
+describe('arrMedia', () => {
+  test('names what friends share with each kind', () => {
+    expect(arrMedia('radarr')).toBe('movies')
+    expect(arrMedia('sonarr')).toBe('episodes')
+  })
+})
+
+// Local times, so the clock words don't depend on the time zone the tests run in.
+const NOW = new Date(2026, 9, 19, 14, 0).getTime()
+const LATER_TODAY = new Date(2026, 9, 19, 17, 36).toISOString()
+const TOMORROW = new Date(2026, 9, 20, 3, 10).toISOString()
+const RADARR = { name: 'Radarr', type: 'radarr' }
+
+describe('indexerPausedUntil', () => {
+  test('is the end of a pause still ahead', () => {
+    expect(indexerPausedUntil(registration({ indexerPausedUntil: LATER_TODAY }), NOW)).toBe(LATER_TODAY)
+  })
+
+  test('is null without a pause, after it ended, or for a time jack can\'t read', () => {
+    expect(indexerPausedUntil(null, NOW)).toBeNull()
+    expect(indexerPausedUntil(registration(), NOW)).toBeNull()
+    expect(indexerPausedUntil(registration({ indexerPausedUntil: LATER_TODAY }), Date.parse(LATER_TODAY))).toBeNull()
+    expect(indexerPausedUntil(registration({ indexerPausedUntil: 'soon' }), NOW)).toBeNull()
+  })
+})
+
+// Radarr and Sonarr only say that they skip the indexer, not until when.
+describe('indexerPause', () => {
+  test('has the end when the *arr gives one', () => {
+    expect(indexerPause(registration({ indexerPausedUntil: LATER_TODAY }), NOW)).toEqual({ until: LATER_TODAY })
+  })
+
+  test('is a pause without an end when the *arr only says it pauses', () => {
+    expect(indexerPause(registration({ indexerPaused: true }), NOW)).toEqual({ until: null })
+  })
+
+  test('is null when nothing says the indexer is paused', () => {
+    expect(indexerPause(null, NOW)).toBeNull()
+    expect(indexerPause(registration({ indexerPaused: false }), NOW)).toBeNull()
+    expect(indexerPause(registration({ indexerPaused: null }), NOW)).toBeNull()
+    expect(indexerPause(registration({ indexerPausedUntil: LATER_TODAY }), Date.parse(LATER_TODAY))).toBeNull()
+  })
+})
+
+describe('formatPauseEnd', () => {
+  test('gives the clock time today, and the day too otherwise', () => {
+    expect(formatPauseEnd(LATER_TODAY, NOW)).toBe('17:36')
+    expect(formatPauseEnd(TOMORROW, NOW)).toBe('03:10 on 20 Oct')
+  })
+})
+
+describe('indexerPauseText', () => {
+  test('says what is skipped until when, and that nothing needs doing', () => {
+    expect(indexerPauseText(RADARR, registration({ indexerPausedUntil: LATER_TODAY }), NOW)).toEqual({
+      title: 'Radarr is skipping jack\'s indexer until 17:36, so it won\'t find friends\' movies before then.',
+      detail: 'Radarr pauses an indexer after errors and resumes it by itself at that time. You don\'t need to do anything.',
+    })
+    expect(indexerPauseText({ name: 'Sonarr 4K', type: 'sonarr' }, registration({ indexerPausedUntil: TOMORROW }), NOW)?.title)
+      .toBe('Sonarr 4K is skipping jack\'s indexer until 03:10 on 20 Oct, so it won\'t find friends\' episodes before then.')
+  })
+
+  // Register again only helps when the *arr's test finds friends' releases of the
+  // last 7 days, and a test that finds none makes the pause longer.
+  test('never sends the user to Register again', () => {
+    const texts = [
+      registration({ indexerPausedUntil: LATER_TODAY }),
+      registration({ indexerPausedUntil: LATER_TODAY, clientTest: 'failed', message: 'Radarr can\'t resolve jack.' }),
+    ].map(r => indexerPauseText(RADARR, r, NOW))
+    for (const text of texts)
+      expect(`${text?.title} ${text?.detail}`).not.toContain('Register again')
+  })
+
+  test('says nothing needs doing only when the pause is all that is wrong', () => {
+    const notAlone = [
+      registration({ indexerPausedUntil: LATER_TODAY, message: 'Restart the jack container to finish.' }),
+      registration({ indexerPausedUntil: LATER_TODAY, clientTest: 'failed' }),
+      registration({ indexerPausedUntil: LATER_TODAY, indexerTest: 'failed' }),
+      registration({ indexerPausedUntil: LATER_TODAY, clientTest: 'skipped' }),
+    ]
+    for (const r of notAlone)
+      expect(indexerPauseText(RADARR, r, NOW)?.detail).toBe('Radarr pauses an indexer after errors and resumes it by itself at that time.')
+  })
+
+  test('says the pause without an end when the *arr doesn\'t give one', () => {
+    expect(indexerPauseText({ name: 'Sonarr', type: 'sonarr' }, registration({ indexerPaused: true }), NOW)).toEqual({
+      title: 'Sonarr is skipping jack\'s indexer for a while after earlier errors, so it won\'t find friends\' episodes until then.',
+      detail: 'Sonarr resumes it by itself after a while, and jack resumes it once a friend adds new episodes. You don\'t need to do anything.',
+    })
+    expect(indexerPauseText(RADARR, registration({ indexerPaused: true, clientTest: 'failed' }), NOW)?.detail)
+      .toBe('Radarr resumes it by itself after a while, and jack resumes it once a friend adds new movies.')
+  })
+
+  test('is null while the indexer isn\'t paused', () => {
+    expect(indexerPauseText(RADARR, null, NOW)).toBeNull()
+    expect(indexerPauseText(RADARR, registration(), NOW)).toBeNull()
+    expect(indexerPauseText(RADARR, registration({ indexerPausedUntil: LATER_TODAY }), Date.parse(LATER_TODAY))).toBeNull()
+  })
+})
+
+describe('a paused indexer', () => {
+  const paused = registration({ indexerPausedUntil: LATER_TODAY })
+
+  test('is a warning on the card, not a tick', () => {
+    expect(registrationSummary(paused, NOW)).toEqual({
+      parts: [{ text: 'indexer paused', tone: 'warning' }, { text: 'download client ✓', tone: 'ok' }],
+      tone: 'warning',
+    })
+    expect(registrationStepTone('indexer', paused.indexer, 'ok', true)).toBe('warning')
+    expect(registrationStepTone('downloadClient', paused.downloadClient, 'ok', true)).toBe('ok')
+  })
+
+  test('is ticked again once the pause is over', () => {
+    expect(registrationSummary(paused, Date.parse(LATER_TODAY)).tone).toBe('ok')
+  })
+
+  test('is a warning too when the *arr doesn\'t say until when', () => {
+    expect(registrationSummary(registration({ indexerPaused: true }), NOW)).toEqual({
+      parts: [{ text: 'indexer paused', tone: 'warning' }, { text: 'download client ✓', tone: 'ok' }],
+      tone: 'warning',
+    })
+    expect(registrationHeadline(registration({ indexerPaused: true }), RADARR, NOW).title)
+      .toBe('Radarr is skipping jack\'s indexer for a while after earlier errors, so it won\'t find friends\' movies until then.')
+  })
+
+  test('stays failed when its test failed', () => {
+    const summary = registrationSummary(registration({ indexerTest: 'failed', indexerPausedUntil: LATER_TODAY }), NOW)
+    expect(summary.parts[0]).toEqual({ text: 'indexer failed', tone: 'error' })
+    expect(summary.tone).toBe('error')
+  })
+
+  test('heads the result instead of "jack is set up"', () => {
+    expect(registrationHeadline(paused, RADARR, NOW)).toEqual({
+      tone: 'warning',
+      title: 'Radarr is skipping jack\'s indexer until 17:36, so it won\'t find friends\' movies before then.',
+      description: 'Radarr pauses an indexer after errors and resumes it by itself at that time. You don\'t need to do anything.',
+    })
+  })
+
+  // The toast after Register again words it the same way: right after the user
+  // pressed it, it must not ask for it again.
+  test('after Register again, gives the new end of the pause and no further advice', () => {
+    const longer = registration({ indexerPausedUntil: new Date(2026, 9, 19, 20, 49).toISOString() })
+    const { title, description } = registrationHeadline(longer, RADARR, NOW)
+    expect(title).toBe('Radarr is skipping jack\'s indexer until 20:49, so it won\'t find friends\' movies before then.')
+    expect(description).not.toContain('Register again')
+  })
+
+  test('follows the backend\'s message when there is one, without saying nothing needs doing', () => {
+    const headline = registrationHeadline(registration({ clientTest: 'failed', message: 'Radarr can\'t resolve jack.', indexerPausedUntil: LATER_TODAY }), RADARR, NOW)
+    expect(headline.tone).toBe('error')
+    expect(headline.title).toBe('Radarr can\'t resolve jack.')
+    expect(headline.description).toBe('Radarr is skipping jack\'s indexer until 17:36, so it won\'t find friends\' movies before then. Radarr pauses an indexer after errors and resumes it by itself at that time.')
+  })
+})
+
+describe('registrationHeadline', () => {
+  test('says both tests passed only when both ran', () => {
+    expect(registrationHeadline(registration(), RADARR, NOW)).toEqual({
+      tone: 'ok',
+      title: 'jack is set up in Radarr.',
+      description: 'Radarr tested jack\'s indexer and download client, and both work.',
+    })
+    expect(registrationHeadline(registration({ indexerTest: 'skipped' }), RADARR, NOW)).toEqual({ tone: 'ok', title: 'jack is set up in Radarr.', description: undefined })
+  })
+
+  test('falls back to a plain failure line', () => {
+    expect(registrationHeadline(registration({ clientTest: 'failed' }), RADARR, NOW)).toEqual({
+      tone: 'error',
+      title: 'jack couldn\'t finish setting itself up in Radarr.',
+      description: undefined,
+    })
+  })
+})
+
+describe('an indexer added but not tested', () => {
+  test('reads as added, not as waiting for a restart', () => {
+    expect(registrationSummary(registration({ indexerTest: 'skipped' }), NOW).parts[0]).toEqual({ text: 'indexer added', tone: 'ok' })
   })
 })

@@ -135,6 +135,20 @@ export function setupDownloadsStep(downloadsOn: boolean, shareOnly: boolean): Se
   return shareOnly ? 'skipped' : 'open'
 }
 
+/**
+ * The one step that offers "I only share": the first open step it answers, so the
+ * card never shows the same choice twice. Steps 2 (downloads off) and 3 (nothing
+ * receives downloads) both ask for something only a downloader needs. None while a
+ * Radarr/Sonarr receives downloads: "I only share" counts only without one.
+ */
+export function shareOnlyOfferStep(downloadsStep: SetupStepState, serverStep: Pick<ServerStep, 'reason'>, destinations: number): 'downloads' | 'servers' | null {
+  if (destinations > 0)
+    return null
+  if (downloadsStep === 'open')
+    return 'downloads'
+  return serverStep.reason === 'no-destination' ? 'servers' : null
+}
+
 // What jack couldn't add to a server it registered in.
 function notAddedProblem(server: OverviewServerItem, registration: DestinationRegistration): ServerNote {
   // Registered while downloads were off, and not again since they were turned on.

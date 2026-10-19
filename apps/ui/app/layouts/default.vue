@@ -96,12 +96,13 @@ async function onLogout() {
       </template>
     </UDashboardSidebar>
 
-    <!-- The page column: the restart banner and the update notice on top, then the
-         page's UDashboardPanel. The panel's own min-h-svh is reset, or the panel
-         would be the banners' height taller than the screen and its last lines
-         unreachable. -->
+    <!-- The page column: the restart banner, the "jack isn't answering" notice
+         and the update notice on top, then the page's UDashboardPanel. The
+         panel's own min-h-svh is reset, or the panel would be the banners'
+         height taller than the screen and its last lines unreachable. -->
     <div class="flex min-w-0 flex-1 flex-col">
       <RestartBanner />
+      <JackDownNotice />
       <UpgradeNotice />
       <div class="flex min-h-0 flex-1 *:min-h-0">
         <slot />

@@ -2,7 +2,7 @@ import type { ApiKey, DownloadsConfig, JackConfig, Overview, RestartReason, Serv
 import type { InternalUrlStep, ServerStep, SetupStepState } from '~/utils/setup-steps'
 import { folderSummary } from '~/utils/folder-check'
 import { addressFailures, serverStepWithAddressFailures, withAddressFailures } from '~/utils/setup-address'
-import { isSetupStepDone, setupDownloadsStep, setupInternalUrlStep, setupServerStep } from '~/utils/setup-steps'
+import { isSetupStepDone, setupDownloadsStep, setupInternalUrlStep, setupServerStep, shareOnlyOfferStep } from '~/utils/setup-steps'
 
 /**
  * State of the dashboard's setup checklist, decided only from data jack serves
@@ -134,6 +134,9 @@ export function useSetupStatus(overview: Readonly<Ref<Overview | undefined>>) {
     downloadsOn: downloadsOn.value,
   }), unreachedAddress.value))
 
+  // Where the card offers "I only share", if anywhere.
+  const shareOnlyOffer = computed(() => shareOnlyOfferStep(downloadsStep.value, serversStep.value, overview.value?.servers.destinations ?? 0))
+
   // Settings saved since jack started that wait for a restart of the jack container.
   const restartReasons = computed<RestartReason[]>(() => overview.value?.system?.restartPending ?? [])
   // Shown only while something waits for the restart, so it is never done.
@@ -240,6 +243,7 @@ export function useSetupStatus(overview: Readonly<Ref<Overview | undefined>>) {
     internalUrlStep,
     downloadsStep,
     serversStep,
+    shareOnlyOffer,
     restartReasons,
     restartStep,
     requiredTotal,

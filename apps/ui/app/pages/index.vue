@@ -1,8 +1,13 @@
 <script setup lang="ts">
 import type { ActivityDownload, ActivityOverview, ActivityTransfer, ActivityTransfersSnapshot, OverviewPeer } from '~/types/activity'
 
-// The shared overview: the layout keeps its stream open on every page.
-const { overview: sharedOverview, error, refresh, connected, hasConnectedOnce, whenLoaded } = useOverview()
+// The shared overview: the layout keeps its stream open on every page. While
+// `jackDown` (the layout's "jack isn't answering"), the dashboard stops presenting
+// its last snapshot as current: no all-clear, and the live sections say they show
+// what jack last sent. It is the same app-wide state as that notice's, counted
+// from the layout's mount on, so opening the dashboard during an outage or after
+// a hidden tab neither restarts the count nor misses it.
+const { overview: sharedOverview, error, refresh, connected, hasConnectedOnce, jackDown, whenLoaded } = useOverview()
 // With the fields the management API added for this page (types/activity.ts).
 const overview = computed(() => sharedOverview.value as ActivityOverview | undefined)
 
@@ -189,14 +194,18 @@ const lifetime = computed(() => {
             :setup-server-ids="setup.cardServerIds"
             :setup-asks-for-receiver="setup.cardAsksForReceiver"
             :setup-shows-problem="setup.cardShowsProblem"
+            :now="now"
+            :stale="jackDown"
           />
         </div>
 
-        <!-- What is moving now, both ways. -->
-        <section>
+        <!-- What is moving now, both ways. While jack isn't answering, it says it
+             shows what jack last sent, and loses its colors. Text keeps its
+             contrast, so the last values stay readable. -->
+        <section class="transition-[filter]" :class="{ grayscale: jackDown }">
           <div class="mb-3 flex items-center justify-between gap-2">
             <h2 class="text-xs font-semibold uppercase tracking-wider text-muted">
-              Right now
+              {{ jackDown ? 'Last known' : 'Right now' }}
             </h2>
             <UButton to="/downloads" label="All downloads" trailing-icon="i-ph-arrow-right" variant="link" size="sm" class="px-0" />
           </div>
@@ -280,10 +289,11 @@ const lifetime = computed(() => {
           </UCard>
         </section>
 
-        <!-- Standing inventory: who and what this jack works with. -->
-        <section>
+        <!-- Standing inventory: who and what this jack works with. Its online and
+             connected states are live, so it is marked with the section above. -->
+        <section class="transition-[filter]" :class="{ grayscale: jackDown }">
           <h2 class="mb-3 text-xs font-semibold uppercase tracking-wider text-muted">
-            Friends & Radarr/Sonarr
+            Friends & Radarr/Sonarr<span v-if="jackDown" class="font-normal normal-case tracking-normal"> · last known</span>
           </h2>
           <div class="grid gap-4 md:grid-cols-2">
             <!-- Friends -->

@@ -389,23 +389,25 @@ const summary = computed(() => {
           @scroll="onScroll"
         >
           <template v-for="(row, index) in groups" :key="row._id">
-            <!-- Sticks to the top while its day scrolls past. -->
+            <!-- Sticks to the top while its day scrolls past. The separators use
+                 text-toned in light mode, where text-muted on bg-elevated is only
+                 4.35:1. -->
             <div
               v-if="dayBreaks[index]"
-              class="sticky top-0 z-10 border-b border-default bg-elevated px-3 py-1 font-sans font-medium text-muted"
+              class="sticky top-0 z-10 border-b border-default bg-elevated px-3 py-1 font-sans font-medium text-toned dark:text-muted"
             >
               {{ dayBreaks[index] }}
             </div>
             <div
               v-if="gapBreaks[index]"
-              class="flex items-start gap-2 border-b border-default bg-elevated px-3 py-1 font-sans text-muted"
+              class="flex items-start gap-2 border-b border-default bg-elevated px-3 py-1 font-sans text-toned dark:text-muted"
             >
               <UIcon name="i-ph-warning" class="mt-0.5 size-3.5 shrink-0 text-warning" />
               <span>Some lines are missing here. jack logged too many while the list was paused or reconnecting, so only the latest ones follow.</span>
             </div>
             <div
               v-if="runBreaks[index]"
-              class="flex items-center gap-2 border-b border-default bg-elevated px-3 py-1 font-sans font-medium text-muted"
+              class="flex items-center gap-2 border-b border-default bg-elevated px-3 py-1 font-sans font-medium text-toned dark:text-muted"
             >
               <UIcon name="i-ph-power" class="size-3.5 shrink-0" />
               jack started

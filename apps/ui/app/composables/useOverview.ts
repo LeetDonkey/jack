@@ -1,4 +1,6 @@
 import type { Overview } from '~/types/management'
+import type { JackDownTracker } from '~/utils/jack-down'
+import { createJackDownTracker } from '~/utils/jack-down'
 
 // Components using useOverview that are mounted right now. The first one subscribes
 // to /overview/stream and the last one to unmount ends it, so the layout and every
@@ -7,6 +9,8 @@ let consumers = 0
 let unsubscribe: (() => void) | undefined
 // The first consumer's listener, so the last one to unmount can remove it.
 let visibilityListener: (() => void) | undefined
+// Sets `jackDown` for the whole app, from the first mount to the last unmount.
+let downTracker: JackDownTracker | undefined
 // Bumped by every stream snapshot. A GET that started before one must not
 // overwrite it with what may be older data.
 let streamRevision = 0
@@ -20,6 +24,13 @@ let inflight: Promise<void> | undefined
  * The layout keeps it open on every page, so pages read `overview.value?.system`
  * and `overview.value?.servers` without a stream of their own.
  *
+ * `hasConnectedOnce` is the current stream's, for the "Reconnecting…" badge; a
+ * tab shown again opens a new stream, which starts at false. `jackDown` is the
+ * one "jack isn't answering" state: true once the stream, which connected since
+ * sign-in, has been closed for JACK_DOWN_AFTER_MS of visible time, and false again
+ * as soon as it reopens (createJackDownTracker). The layout's notice and the pages
+ * read it, so they change together.
+ *
  * `refresh()` fetches GET /overview and never rejects; a failure lands in `error`.
  * `whenLoaded()` settles once the first load is done, for pages that hold their
  * first render until the data is in.
@@ -31,6 +42,7 @@ export function useOverview() {
   const error = useState<unknown>('overview:error', () => undefined)
   const connected = useState('overview:connected', () => false)
   const hasConnectedOnce = useState('overview:has-connected-once', () => false)
+  const jackDown = useState('overview:jack-down', () => false)
 
   function refresh(): Promise<void> {
     const seq = ++fetchSeq
@@ -76,6 +88,7 @@ export function useOverview() {
       onConnection: (isConnected, once) => {
         connected.value = isConnected
         hasConnectedOnce.value = once
+        downTracker?.update(isConnected, !document.hidden)
       },
     }, async () => {
       await request('ping')
@@ -91,6 +104,7 @@ export function useOverview() {
       unsubscribe?.()
       unsubscribe = undefined
       connected.value = false
+      downTracker?.update(false, false)
     }
     else if (!unsubscribe) {
       subscribe()
@@ -104,6 +118,9 @@ export function useOverview() {
     counted = true
     if (consumers++ > 0)
       return
+    downTracker = createJackDownTracker((down) => {
+      jackDown.value = down
+    })
     visibilityListener = onVisibilityChange
     document.addEventListener('visibilitychange', visibilityListener)
     if (!document.hidden)
@@ -121,8 +138,11 @@ export function useOverview() {
     visibilityListener = undefined
     unsubscribe?.()
     unsubscribe = undefined
+    downTracker?.reset()
+    downTracker = undefined
     connected.value = false
     hasConnectedOnce.value = false
+    jackDown.value = false
     // Nothing keeps the snapshot live any more (signed out), so drop it rather than
     // show it stale on the next mount. A GET still on its way is dropped too.
     fetchSeq++
@@ -132,5 +152,5 @@ export function useOverview() {
     error.value = undefined
   })
 
-  return { overview, connected, hasConnectedOnce, pending, error, refresh, whenLoaded }
+  return { overview, connected, hasConnectedOnce, jackDown, pending, error, refresh, whenLoaded }
 }

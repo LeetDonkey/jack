@@ -12,6 +12,8 @@ function registration(overrides: Partial<DestinationRegistration> = {}): Destina
     indexerTest: 'ok',
     message: null,
     testErrors: { downloadClient: null, indexer: null },
+    indexerPausedUntil: null,
+    indexerPaused: null,
     ...overrides,
   }
 }

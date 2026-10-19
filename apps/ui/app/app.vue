@@ -1,17 +1,13 @@
 <script setup lang="ts">
-import type { AuthState } from '~/composables/useAuth'
+const { state, refresh } = useAuth()
 
-const state = useAuthState()
-
-// Resolve the auth state once on load (SSR + client). The BFF probes the
-// management API and tells us which of the three states we're in.
-const { data } = await useAsyncData('ping', () =>
-  $fetch<{ status: AuthState['status'], mode: AuthState['mode'], message?: string, reason?: AuthState['reason'], url?: string }>('/api/ping'))
-
-if (data.value) {
-  const { status, mode, message, reason, url } = data.value
-  state.value = { status, mode, message, reason, url }
-}
+// Resolve the auth state once on load. The BFF probes the management API and
+// tells us which state we're in. refresh() never throws: a jack-ui server that
+// doesn't answer becomes an error, and AuthScreen keeps checking from there.
+await useAsyncData('ping', async () => {
+  await refresh()
+  return true
+})
 </script>
 
 <template>

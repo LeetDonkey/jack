@@ -7,9 +7,14 @@ import type { DestinationRegistration } from '~/types/management'
 const props = defineProps<{
   // The server's name, which the backend's messages use too.
   name: string
+  // radarr or sonarr, for "friends' movies" or "episodes".
+  type: string
   registration: DestinationRegistration | null
   // The save answered before the *arr finished testing; the card shows the result.
   pending?: boolean
+  // The ticking clock of the section, so a pause that ends while the dialog is
+  // open stops showing.
+  now: number
 }>()
 const emit = defineEmits<{ done: [] }>()
 
@@ -23,24 +28,26 @@ const alert = computed(() => {
   const registration = props.registration
   if (!registration)
     return null
-  const { tone } = registrationSummary(registration)
-  if (tone === 'ok')
-    return { ...TONES.ok, title: `jack is set up in ${props.name}.`, description: `${props.name} tested jack's indexer and download client, and both work.` }
-  return { ...TONES[tone], title: registration.message ?? `jack couldn't finish setting itself up in ${props.name}.`, description: undefined }
+  const { tone, title, description } = registrationHeadline(registration, { name: props.name, type: props.type }, props.now)
+  return { ...TONES[tone], title, description }
 })
 
 const rows = computed(() => {
   const registration = props.registration
   if (!registration)
     return []
+  const pause = indexerPause(registration, props.now)
+  let pausedFor: string | null = null
+  if (pause)
+    pausedFor = pause.until ? `until ${formatPauseEnd(pause.until, props.now)}` : 'for a while'
   const steps = [
-    { label: 'Indexer', step: registration.indexer, test: registration.indexerTest, testError: registration.testErrors.indexer },
-    { label: 'Download client', step: registration.downloadClient, test: registration.clientTest, testError: registration.testErrors.downloadClient },
-  ]
-  return steps.map(({ label, step, test, testError }) => ({
+    { kind: 'indexer', label: 'Indexer', step: registration.indexer, test: registration.indexerTest, testError: registration.testErrors.indexer },
+    { kind: 'downloadClient', label: 'Download client', step: registration.downloadClient, test: registration.clientTest, testError: registration.testErrors.downloadClient },
+  ] as const
+  return steps.map(({ kind, label, step, test, testError }) => ({
     label,
-    detail: registrationStepDetail(step, test, props.name),
-    tone: TONES[registrationStepTone(step, test)],
+    detail: registrationStepDetail(kind, step, test, props.name, pausedFor),
+    tone: TONES[registrationStepTone(kind, step, test, pause !== null)],
     // The *arr's own words, under the plain-language summary above.
     raw: test === 'failed' ? testError : null,
   }))

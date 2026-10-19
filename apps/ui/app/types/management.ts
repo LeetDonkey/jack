@@ -61,6 +61,13 @@ export interface DestinationRegistration {
   // Plain-language text about the first failed test, failed step or skip.
   message: string | null
   testErrors: { downloadClient: string | null, indexer: string | null }
+  // The *arr skips jack's indexer after failures until this time; null when it
+  // doesn't, or when it doesn't say until when (Radarr and Sonarr don't).
+  indexerPausedUntil: string | null
+  // Whether the *arr skips jack's indexer after failures, as jack last saw it
+  // (after each registration, then every few minutes). Null when jack couldn't
+  // tell, or didn't add the indexer.
+  indexerPaused: boolean | null
 }
 
 // Every server entry in /config/servers and /overview carries these.
@@ -580,6 +587,13 @@ export interface SecurityConfig {
 }
 
 export type SecurityConfigPatch = { [K in keyof SecurityConfig]?: SecurityConfig[K] | null }
+
+// GET config/security: the effective config plus stored address entries that
+// jack ignores because they aren't an IP address or CIDR range. The next save
+// of the security block drops them from config.jsonc.
+export interface SecurityConfigResponse extends SecurityConfig {
+  ignoredEntries: Array<{ field: 'trustedProxies' | 'neverBan' | 'arrApiAlsoAllowed', value: string }>
+}
 
 // GET /security/bans
 export interface BanEntry {

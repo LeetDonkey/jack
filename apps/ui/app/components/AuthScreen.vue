@@ -46,6 +46,31 @@ async function retry() {
   }
 }
 
+// Every screen but the key form checks again on a timer and swaps to the app
+// once jack answers (authScreenChecksAgain says why).
+const retriesByItself = computed(() => authScreenChecksAgain(state.value))
+
+let retryTimer: ReturnType<typeof setTimeout> | undefined
+let unmounted = false
+function scheduleRetry() {
+  clearTimeout(retryTimer)
+  retryTimer = undefined
+  if (unmounted || !retriesByItself.value)
+    return
+  retryTimer = setTimeout(async () => {
+    retryTimer = undefined
+    if (!retrying.value)
+      await refresh()
+    scheduleRetry()
+  }, AUTH_CHECK_EVERY_MS)
+}
+watch(retriesByItself, scheduleRetry)
+onMounted(scheduleRetry)
+onBeforeUnmount(() => {
+  unmounted = true
+  clearTimeout(retryTimer)
+})
+
 function actions(color: 'warning' | 'error'): ButtonProps[] {
   return [
     { label: 'Retry', color, variant: 'soft', loading: retrying.value, onClick: retry },
@@ -133,7 +158,13 @@ const unreachable = computed<{ lead: string, suffix?: string, checks: string[] }
           <p>
             {{ unreachable.lead }}<span v-if="state.url"> at <code class="rounded bg-elevated px-1 py-0.5 text-xs">{{ state.url }}</code></span>{{ unreachable.suffix }}.
           </p>
-          <ul class="mt-2 list-disc space-y-1 pl-4">
+          <p class="mt-2">
+            jack may be starting or restarting. This page checks again every 5 seconds and opens once jack answers.
+          </p>
+          <p class="mt-3 font-medium">
+            If it stays like this:
+          </p>
+          <ul class="mt-1 list-disc space-y-1 pl-4">
             <li v-for="check in unreachable.checks" :key="check">
               {{ check }}
             </li>
@@ -148,9 +179,17 @@ const unreachable = computed<{ lead: string, suffix?: string, checks: string[] }
         variant="soft"
         icon="i-ph-key"
         title="jack rejected jack-ui's key"
-        description="The Management key in the jack-ui template doesn't match the one in the jack template. Copy the value from the jack template into the jack-ui template and click Apply."
         :actions="actions('error')"
-      />
+      >
+        <template #description>
+          <p>
+            The Management key in the jack-ui template doesn't match the one in the jack template. Copy the value from the jack template into the jack-ui template and click Apply.
+          </p>
+          <p class="mt-2">
+            This page checks again every 5 seconds and opens once the keys match.
+          </p>
+        </template>
+      </UAlert>
 
       <!-- Unexpected error -->
       <UAlert
@@ -159,9 +198,15 @@ const unreachable = computed<{ lead: string, suffix?: string, checks: string[] }
         variant="soft"
         icon="i-ph-x-circle"
         title="Something went wrong"
-        :description="state.message ?? 'jack-ui got an unexpected answer from jack.'"
         :actions="actions('error')"
-      />
+      >
+        <template #description>
+          <p>{{ state.message ?? 'jack-ui got an unexpected answer from jack.' }}</p>
+          <p class="mt-2">
+            This page checks again every 5 seconds.
+          </p>
+        </template>
+      </UAlert>
 
       <!-- Needs key: cookie-mode login prompt -->
       <UCard v-else>

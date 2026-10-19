@@ -23,7 +23,7 @@ const formError = ref<string | null>(null)
 const formDirty = ref(false)
 // What the last save set up in the server, shown in the dialog in place of the
 // form until Done.
-const saved = ref<{ name: string, registration: DestinationRegistration | null, pending: boolean } | null>(null)
+const saved = ref<{ name: string, type: string, registration: DestinationRegistration | null, pending: boolean } | null>(null)
 // An outside click or Escape must not throw away edits or hide a save in progress.
 const formDismissible = computed(() => saved.value !== null || !(formDirty.value || submitting.value))
 const formTitle = computed(() => {
@@ -105,7 +105,7 @@ async function submit(input: ServerInput) {
       : await request<ServerSaveResponse>('config/servers', { method: 'POST', body: input })
     // A server jack doesn't add itself to has nothing to report.
     if (res.registration || res.registrationPending)
-      saved.value = { name: input.name, registration: res.registration, pending: res.registrationPending }
+      saved.value = { name: input.name, type: input.type, registration: res.registration, pending: res.registrationPending }
     else
       showForm.value = false
     await reload()
@@ -149,13 +149,12 @@ async function registerAgain(server: ServerItem) {
     if (res.registration) {
       applyServerRegistration(server.id, res.registration)
       // Worded as the result dialog after a save words the same outcome.
-      const { tone } = registrationSummary(res.registration)
+      const { tone, title, description } = registrationHeadline(res.registration, server)
       toast.add({
         color: tone === 'ok' ? 'success' : tone,
         icon: tone === 'ok' ? 'i-ph-check-circle' : 'i-ph-warning',
-        title: tone === 'ok'
-          ? `jack is set up in ${server.name}.`
-          : res.registration.message ?? `jack couldn't finish setting itself up in ${server.name}.`,
+        title,
+        description,
       })
     }
     else if (res.registrationPending) {
@@ -209,10 +208,12 @@ const TONE_CLASS: Record<RegistrationTone, string> = { ok: 'text-success', warni
 // used it since.
 function registrationView(server: ServerItem) {
   const registration = server.registration
-  const summary = registration ? registrationSummary(registration) : null
+  const summary = registration ? registrationSummary(registration, now.value) : null
   return {
     testing: isTesting(server),
     parts: summary?.parts ?? null,
+    // Radarr/Sonarr skip jack's indexer for now, after failures.
+    pause: indexerPauseText(server, registration, now.value),
     message: registration?.message ?? null,
     messageClass: summary && summary.tone !== 'ok' ? TONE_CLASS[summary.tone] : 'text-muted',
     fix: registration ? registrationFix(registration) : null,
@@ -375,6 +376,10 @@ const destinations = computed(() => servers.value.filter(s => s.destination).len
                 </ULink>
               </p>
 
+              <p v-if="view.pause && !view.testing" class="text-warning">
+                {{ view.pause.title }} {{ view.pause.detail }}
+              </p>
+
               <p v-if="view.contact.state === 'reached'" class="text-muted" :title="formatDate(view.contact.at)">
                 {{ server.name }} last reached jack {{ formatTimeAgo(view.contact.at, now) }}.
               </p>
@@ -408,6 +413,8 @@ const destinations = computed(() => servers.value.filter(s => s.destination).len
       <ServerRegistrationResult
         v-if="saved"
         :name="saved.name"
+        :type="saved.type"
+        :now="now"
         :registration="saved.registration"
         :pending="saved.pending"
         @done="showForm = false"

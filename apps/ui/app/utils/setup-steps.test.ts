@@ -1,6 +1,6 @@
 import type { DestinationRegistration, OverviewServerItem } from '~/types/management'
 import { describe, expect, test } from 'bun:test'
-import { sameInternalUrl, setupDownloadsStep, setupInternalUrlStep, setupServerStep } from './setup-steps'
+import { sameInternalUrl, setupDownloadsStep, setupInternalUrlStep, setupServerStep, shareOnlyOfferStep } from './setup-steps'
 
 function registration(overrides: Partial<DestinationRegistration> = {}): DestinationRegistration {
   return {
@@ -11,6 +11,8 @@ function registration(overrides: Partial<DestinationRegistration> = {}): Destina
     indexerTest: 'ok',
     message: null,
     testErrors: { downloadClient: null, indexer: null },
+    indexerPausedUntil: null,
+    indexerPaused: null,
     ...overrides,
   }
 }
@@ -157,5 +159,23 @@ describe('setupServerStep', () => {
     expect(setupServerStep({ ...base, shareOnly: true, servers: [sharer] })).toMatchObject({ state: 'done', names: ['Radarr'] })
     expect(setupServerStep({ ...base, shareOnly: true, servers: [server({ source: false, destination: false, registration: null })] }))
       .toMatchObject({ state: 'open', reason: 'no-source' })
+  })
+})
+
+describe('shareOnlyOfferStep', () => {
+  test('offers "I only share" once, on the first open step it answers', () => {
+    // Downloads off and nothing receives downloads: step 2 only, not step 3 too.
+    expect(shareOnlyOfferStep('open', { reason: 'no-destination' }, 0)).toBe('downloads')
+    expect(shareOnlyOfferStep('open', { reason: 'none' }, 0)).toBe('downloads')
+    expect(shareOnlyOfferStep('done', { reason: 'no-destination' }, 0)).toBe('servers')
+  })
+
+  test('offers nothing when no step asks for downloading', () => {
+    expect(shareOnlyOfferStep('done', { reason: null }, 0)).toBeNull()
+    expect(shareOnlyOfferStep('skipped', { reason: 'no-source' }, 0)).toBeNull()
+  })
+
+  test('offers nothing while a Radarr/Sonarr receives downloads, where it would do nothing', () => {
+    expect(shareOnlyOfferStep('open', { reason: 'downloads-off' }, 1)).toBeNull()
   })
 })

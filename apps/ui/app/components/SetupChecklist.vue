@@ -213,7 +213,7 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
                 </p>
                 <div class="flex flex-wrap items-center gap-2 pt-1">
                   <UButton :to="settingsLink('downloads')" label="Turn on downloads" size="sm" variant="soft" />
-                  <UButton label="I only share" size="sm" color="neutral" variant="link" @click="status.setShareOnly(true)" />
+                  <UButton v-if="status.shareOnlyOffer === 'downloads'" label="I only share" size="sm" color="neutral" variant="link" @click="status.setShareOnly(true)" />
                 </div>
               </template>
               <!-- Undo sits on step 1, which is skipped too. -->
@@ -267,9 +267,10 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
                 </p>
                 <div class="flex flex-wrap items-center gap-2 pt-1">
                   <UButton :to="settingsLink('servers')" label="Edit Radarr & Sonarr" size="sm" variant="soft" />
-                  <!-- Sharing only is a valid setup: it then needs a server that shares instead. -->
+                  <!-- Sharing only is a valid setup: it then needs a server that shares
+                       instead. Offered here only while step 2 doesn't offer it. -->
                   <UButton
-                    v-if="status.serversStep.reason === 'no-destination'"
+                    v-if="status.shareOnlyOffer === 'servers'"
                     label="I only share"
                     size="sm"
                     color="neutral"

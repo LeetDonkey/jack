@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import type { Form, FormError, FormSchema } from '@nuxt/ui'
-import type { BansSnapshot, SecurityConfig, SecurityConfigPatch } from '~/types/management'
+import type { BansSnapshot, SecurityConfig, SecurityConfigPatch, SecurityConfigResponse } from '~/types/management'
 import type { SecurityListField } from '~/utils/security-form'
 import { addressListError, splitAddressList } from '~/utils/address-list'
-import { securityFieldErrors } from '~/utils/security-form'
+import { ignoredOnField, securityCanSave, securityFieldErrors } from '~/utils/security-form'
 
 const { request, extractError, errorInfo } = useManagement()
 const form = useTemplateRef<Form<FormSchema>>('form')
@@ -11,7 +11,7 @@ const { onError, showFixHint } = useFormErrorFocus(form)
 
 const { data: security, pending, error: loadError, refresh } = useLazyAsyncData(
   'security-config',
-  () => request<SecurityConfig | null>('config/security'),
+  () => request<SecurityConfigResponse | null>('config/security'),
 )
 const { data: bans, refresh: refreshBans } = useLazyAsyncData('security-bans', () => request<BansSnapshot>('security/bans'))
 
@@ -38,6 +38,11 @@ function blankState() {
 }
 
 const state = reactive(blankState())
+// Stored entries jack ignores, per field. Any save of the security settings drops
+// all of them from config.jsonc, so each field's note says so, and Save stays
+// available while there are any (securityCanSave).
+const LIST_FIELDS: SecurityListField[] = ['trustedProxies', 'neverBan', 'arrApiAlsoAllowed']
+const ignored = computed(() => Object.fromEntries(LIST_FIELDS.map(field => [field, ignoredOnField(security.value?.ignoredEntries, field)])) as Record<SecurityListField, string[]>)
 const baseline = ref(JSON.stringify(blankState()))
 const orDefault = (value: number, fallback: number) => (value === fallback ? null : value)
 
@@ -59,7 +64,10 @@ function seed(config: SecurityConfig | null | undefined) {
 
 watch(() => security.value, seed, { immediate: true })
 
+// Only the user's own changes count as unsaved; the ignored entries only make a
+// save worth doing.
 const dirty = computed(() => JSON.stringify(state) !== baseline.value)
+const canSave = computed(() => securityCanSave(dirty.value, security.value?.ignoredEntries))
 useUnsavedGuard().track('Security', dirty)
 const saving = ref(false)
 const saveError = ref<string | null>(null)
@@ -88,8 +96,6 @@ function visibleFields(s: State): Set<string> {
     fields.add('arrApiAlsoAllowed')
   return fields
 }
-
-const LIST_FIELDS: SecurityListField[] = ['trustedProxies', 'neverBan', 'arrApiAlsoAllowed']
 
 // jack only matches real addresses, so a name such as "Nginx Proxy Manager" would
 // be saved and then match nothing. Hidden lists are left to jack's own check.
@@ -212,7 +218,9 @@ async function unban(ip: string) {
           description="The reverse proxy in front of jack, as IP addresses or ranges such as 172.18.0.0/16. Only requests from these may tell jack the visitor's real address. Empty trusts every private address, which covers a proxy on Unraid or elsewhere on your LAN. A list without your proxy's address stops bans for everything that comes through it."
         >
           <UInput v-model="state.trustedProxies" :disabled="saving" placeholder="Every private address" class="w-full font-mono" />
+          <SecurityIgnoredEntries :values="ignored.trustedProxies" class="mt-1.5" />
         </UFormField>
+        <!-- A hidden list still says what jack ignores in it. -->
         <UFormField
           v-if="state.banEnabled"
           name="neverBan"
@@ -220,7 +228,13 @@ async function unban(ip: string) {
           description="Addresses outside your LAN that are never banned, as IP addresses or ranges, e.g. 100.64.0.0/10 for Tailscale. Your LAN is always exempt."
         >
           <UInput v-model="state.neverBan" :disabled="saving" placeholder="Nothing else" class="w-full font-mono" />
+          <SecurityIgnoredEntries :values="ignored.neverBan" class="mt-1.5" />
         </UFormField>
+        <SecurityIgnoredEntries
+          v-else
+          label="Never ban (shown while Ban repeated failures is on)"
+          :values="ignored.neverBan"
+        />
       </UCard>
 
       <UCard id="security-apis" variant="subtle" class="scroll-mt-6" :ui="{ body: 'space-y-4' }">
@@ -238,7 +252,13 @@ async function unban(ip: string) {
           description="Addresses allowed on top of your LAN, for a Radarr or Sonarr that reaches jack from elsewhere: e.g. 100.64.0.0/10 for Tailscale, or your VPS's IP address."
         >
           <UInput v-model="state.arrApiAlsoAllowed" :disabled="saving" placeholder="Nothing else" class="w-full font-mono" />
+          <SecurityIgnoredEntries :values="ignored.arrApiAlsoAllowed" class="mt-1.5" />
         </UFormField>
+        <SecurityIgnoredEntries
+          v-else
+          label="Also allow (shown while Radarr/Sonarr APIs only on your LAN is on)"
+          :values="ignored.arrApiAlsoAllowed"
+        />
         <UFormField
           name="publicOpenApi"
           label="Publish the API description"
@@ -259,7 +279,7 @@ async function unban(ip: string) {
           Clear a field to use jack's default.
         </p>
         <UButton v-if="dirty" label="Revert" color="neutral" variant="ghost" :disabled="saving" @click="revert" />
-        <UButton type="submit" :disabled="!dirty" :loading="saving" :label="saving ? 'Saving…' : 'Save changes'" />
+        <UButton type="submit" :disabled="!canSave" :loading="saving" :label="saving ? 'Saving…' : 'Save changes'" />
       </div>
     </UForm>
 

@@ -20,7 +20,12 @@ const props = withDefaults(defineProps<{
   setupServerIds?: string[]
   setupAsksForReceiver?: boolean
   setupShowsProblem?: boolean
-}>(), { setupState: 'done', downloadsOn: null, shareOnly: false, setupServerIds: () => [], setupAsksForReceiver: false, setupShowsProblem: false })
+  // The page's ticking clock, so a paused indexer drops off when its pause ends.
+  now?: number
+  // The overview stopped updating (jack isn't answering). The layout says so; this
+  // panel then makes no claim that nothing is failing.
+  stale?: boolean
+}>(), { setupState: 'done', downloadsOn: null, shareOnly: false, setupServerIds: () => [], setupAsksForReceiver: false, setupShowsProblem: false, now: () => Date.now(), stale: false })
 
 // How many example rows to list before collapsing the rest into "and N more".
 const PREVIEW = 3
@@ -119,6 +124,16 @@ const registrationProblems = computed(() => props.overview.servers.items.flatMap
   return []
 }))
 
+// Radarr/Sonarr skip jack's indexer for now after failures, so friends' releases
+// don't show up in them until the pause ends. A server with a problem row above
+// has its fix there.
+const pausedIndexers = computed(() => props.overview.servers.items.flatMap((server) => {
+  const pause = server.initialized ? indexerPauseText(server, server.registration, props.now) : null
+  if (!pause || props.setupServerIds.includes(server.id) || registrationProblems.value.some(p => p.id === server.id))
+    return []
+  return [{ id: server.id, ...pause }]
+}))
+
 // Each unreachable connector and each server jack isn't set up in is its own
 // fixable thing; download problems collapse to one line each. The count drives the
 // badge.
@@ -126,6 +141,7 @@ const issueCount = computed(() =>
   downFriends.value.length
   + unreachableServers.value.length
   + registrationProblems.value.length
+  + pausedIndexers.value.length
   + (queuedCount.value ? 1 : 0)
   + (failedCount.value ? 1 : 0)
   + (mismatchCount.value ? 1 : 0)
@@ -201,6 +217,20 @@ function plural(n: number, word: string) {
                    with Register again on the server's card. -->
               <UButton v-if="problem.fix" :to="settingsLink(problem.fix.section)" :label="problem.fix.label" trailing-icon="i-ph-arrow-right" variant="link" size="sm" class="ml-7 shrink-0 px-0 sm:ml-0 sm:px-2.5" />
               <UButton v-else :to="settingsLink('servers')" label="Edit Radarr & Sonarr" trailing-icon="i-ph-arrow-right" variant="link" size="sm" class="ml-7 shrink-0 px-0 sm:ml-0 sm:px-2.5" />
+            </div>
+
+            <!-- Radarr/Sonarr skip jack's indexer for now. It resumes by itself, and
+                 Register again can make the pause longer, so there is no link. -->
+            <div v-for="pause in pausedIndexers" :key="`paused-${pause.id}`" class="flex gap-3 px-4 py-3">
+              <UIcon name="i-ph-pause-circle" class="mt-0.5 size-4 shrink-0 text-warning" />
+              <div class="min-w-0 flex-1">
+                <p class="text-sm break-words text-default">
+                  {{ pause.title }}
+                </p>
+                <p class="mt-1 text-xs text-muted">
+                  {{ pause.detail }}
+                </p>
+              </div>
             </div>
 
             <!-- Downloads on, but nothing receives them -->
@@ -286,6 +316,16 @@ function plural(n: number, word: string) {
         </template>
       </UCollapsible>
     </UCard>
+
+    <!-- The overview is out of date (jack isn't answering): no claim either way. The
+         layout's notice says what is going on. -->
+    <UAlert
+      v-else-if="stale"
+      color="neutral"
+      variant="subtle"
+      icon="i-ph-clock-counter-clockwise"
+      title="Can't tell whether anything is failing until jack answers again."
+    />
 
     <!-- Nothing failing, but nothing set up either: no green, no false comfort. When
          the setup card shows a problem, it speaks for itself. -->

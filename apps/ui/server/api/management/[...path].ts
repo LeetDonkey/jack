@@ -1,4 +1,5 @@
 import { onClientGone, relayBody } from '../../utils/relay'
+import { fetchUpstream, jackAnswers } from '../../utils/upstream'
 
 // BFF proxy: every UI data call goes through here. It injects the management key
 // (from env or the sealed cookie), enforces same-origin on mutations, and mirrors
@@ -36,8 +37,15 @@ export default defineEventHandler(async (event) => {
   // without reaching jack.
   const upstreamAbort = new AbortController()
   const stopWatching = onClientGone(event.node.req, event.node.res, () => upstreamAbort.abort())
+  const pingUrl = upstreamUrl(event, '/ping')
   try {
-    res = await fetch(target, { method, headers, body, signal: upstreamAbort.signal })
+    // A stopped jack's old address hangs instead of refusing, so fetchUpstream
+    // gives up once jack stops answering before the headers (see there).
+    res = await fetchUpstream(target, { method, headers, body }, {
+      signal: upstreamAbort.signal,
+      stream: getRequestHeader(event, 'accept')?.includes('text/event-stream') ?? false,
+      isAlive: () => jackAnswers(pingUrl, key),
+    })
   }
   catch {
     stopWatching()
