@@ -26,9 +26,9 @@ const LOOKUP_TIMEOUT_MS = 2_000
 // Bun's fetch reports a name that doesn't resolve the same way as a refused
 // connection (code ConnectionRefused, checked against Bun 1.3.14), so those
 // two are told apart by resolving the host again.
-const CONNECT_CODES = new Set(['ConnectionRefused', 'ECONNREFUSED', 'FailedToOpenSocket', 'EHOSTUNREACH', 'ENETUNREACH', 'EHOSTDOWN'])
-const DNS_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN', 'EAI_NONAME', 'EAI_FAIL', 'DNSException'])
-const CUT_CODES = new Set(['ECONNRESET', 'ConnectionClosed', 'EPIPE', 'UND_ERR_SOCKET'])
+export const CONNECT_CODES = new Set(['ConnectionRefused', 'ECONNREFUSED', 'FailedToOpenSocket', 'EHOSTUNREACH', 'ENETUNREACH', 'EHOSTDOWN'])
+export const DNS_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN', 'EAI_NONAME', 'EAI_FAIL', 'DNSException'])
+export const CUT_CODES = new Set(['ECONNRESET', 'ConnectionClosed', 'EPIPE', 'UND_ERR_SOCKET'])
 const TLS_CODE = /CERT|SSL|TLS/i
 const TLS_MESSAGE = /certificate|\bssl\b|\btls\b/i
 const IPV6_BRACKETS = /^\[|\]$/g

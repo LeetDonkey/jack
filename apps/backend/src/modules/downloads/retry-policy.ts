@@ -3,22 +3,20 @@ import { IdleTimeoutError } from '../../lib/errors/IdleTimeoutError'
 import { IncompleteDownloadError } from '../../lib/errors/IncompleteDownloadError'
 import { PeerFileMissingError } from '../../lib/errors/PeerFileMissingError'
 import { PieceMismatchError } from '../../lib/errors/PieceMismatchError'
+import { CONNECT_CODES, CUT_CODES, DNS_CODES } from '../../lib/net/peer-errors'
 
 // Socket-level failures. Bun rejects a body read whose connection drops
 // mid-stream with a plain Error carrying `code: 'ECONNRESET'` ("The socket
 // connection was closed unexpectedly"), not a TypeError. Bun's own fetch codes
-// (ConnectionClosed, ConnectionRefused) are listed alongside the errno names.
+// are listed alongside the errno names: for a host name that doesn't resolve,
+// such as a friend's stopped container, Bun 1.3 answers ConnectionRefused or
+// FailedToOpenSocket. The friend status check sorts the same codes.
 const TRANSIENT_NETWORK_CODES = new Set([
-  'ECONNRESET',
-  'ECONNREFUSED',
+  ...CONNECT_CODES,
+  ...DNS_CODES,
+  ...CUT_CODES,
   'ECONNABORTED',
-  'EPIPE',
   'ETIMEDOUT',
-  'EHOSTUNREACH',
-  'ENETUNREACH',
-  'EAI_AGAIN',
-  'ConnectionClosed',
-  'ConnectionRefused',
 ])
 
 /**

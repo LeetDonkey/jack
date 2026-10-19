@@ -2,6 +2,8 @@
 // fails. *arr's own text names .NET exceptions ("Name or service not known
 // (jack:5225)"), so the common causes are mapped to what to change in jack.
 
+export { isNoResultsFailure } from '../../lib/servers/arr/validation'
+
 const SETTING = 'Address Radarr/Sonarr use to reach jack'
 
 const NAME_RESOLUTION = /name or service not known|no such host|name does not resolve|could not resolve|temporary failure in name resolution|nodename nor servname|resource temporarily unavailable|no address associated/i
@@ -11,7 +13,6 @@ const TIMEOUT = /timed out|timeout|task was canceled|operation was canceled/i
 const TLS = /\bssl\b|\btls\b|certificate/i
 const AUTH = /authentication failure|unauthori[sz]ed|forbidden|invalid api ?key|\b401\b|\b403\b/i
 const NOT_FOUND = /\b404\b|not ?found/i
-const NO_RESULTS = /no results/i
 
 function describeAddress(internalUrl: string): { host: string, hostPort: string } {
   try {
@@ -21,14 +22,6 @@ function describeAddress(internalUrl: string): { host: string, hostPort: string 
   catch {
     return { host: internalUrl, hostPort: internalUrl }
   }
-}
-
-/**
- * Torznab tests fail with "no results" when no friend has a recent release. *arr
- * reached jack and got an answer, so for jack that counts as a pass.
- */
-export function isNoResultsFailure(text: string): boolean {
-  return NO_RESULTS.test(text)
 }
 
 /** What to tell the user when `arrName`'s test of jack failed with `text`. */

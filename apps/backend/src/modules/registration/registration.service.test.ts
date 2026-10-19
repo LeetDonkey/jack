@@ -1,5 +1,5 @@
 import type { ArrProviderTest, ArrServerConnector } from '../../lib/servers/arr/base'
-import type { JackSavedListener, ServerSavedListener } from '../config/config.service'
+import type { JackSavedListener, PeerSavedListener, ServerSavedListener } from '../config/config.service'
 import type { RegistrationServiceDeps } from './registration.service'
 import { Database } from 'bun:sqlite'
 import { beforeEach, describe, expect, test } from 'bun:test'
@@ -8,6 +8,7 @@ import { runMigrations } from '../../database/connection'
 import * as schema from '../../database/schema'
 import { BadRequestError } from '../../lib/errors/BadRequestError'
 import { ConnectorInitializationError } from '../../lib/errors/ConnectorInitializationError'
+import { FetchError } from '../../lib/errors/FetchError'
 import { ManagedKeysRepository } from '../managed-keys/managed-keys.repository'
 import { ManagedApiKeys } from '../managed-keys/managed-keys.service'
 import { RegistrationService } from './registration.service'
@@ -450,6 +451,7 @@ describe('RegistrationService', () => {
         listeners.downloads = l as (previous: unknown) => void
         return () => {}
       },
+      onPeerSaved: () => () => {},
     })
 
     expect((await listeners.server!('srv-a'))?.downloadClient.status).toBe('ok')
@@ -465,5 +467,106 @@ describe('RegistrationService', () => {
     listeners.downloads!(null)
     await Bun.sleep(5)
     expect(dest.calls.clients).toHaveLength(3)
+  })
+
+  test('an indexer the *arr refuses for an empty feed says so in plain words', async () => {
+    const body = JSON.stringify([{ errorMessage: 'Query successful, but no results in the configured categories were returned from your indexer.', severity: 'error', isWarning: false }])
+    const dest = stubDest({
+      registerIndexer: async () => {
+        throw new FetchError('Failed to fetch url: Bad Request', new Response(body, { status: 400 }), { body })
+      },
+    })
+    const result = (await service([dest]).register(dest))!
+    expect(result.indexer).toEqual({ status: 'failed', error: 'Query successful, but no results in the configured categories were returned from your indexer.' })
+    expect(result.message).toBe('Radarr won\'t add jack\'s indexer until your friends have something to share. jack tries again when you add or save a friend.')
+  })
+
+  test('a saved friend registers again where the indexer step failed, and only there', async () => {
+    let refuse = true
+    let attempts = 0
+    const failing = stubDest({
+      registerIndexer: async () => {
+        attempts++
+        if (refuse)
+          throw new Error('no results')
+      },
+    })
+    const fine = stubDest({ id: 'srv-b', name: 'Sonarr' })
+    const registrations = service([failing, fine])
+    let peerSaved!: PeerSavedListener
+    registrations.followConfig({
+      onServerSaved: () => () => {},
+      onJackSaved: () => () => {},
+      onDownloadsSaved: () => () => {},
+      onPeerSaved: (l) => {
+        peerSaved = l
+        return () => {}
+      },
+    })
+    await registrations.registerAll()
+    expect(registrations.registration('srv-a')?.indexer.status).toBe('failed')
+    let notified = 0
+    registrations.subscribe(() => notified++)
+
+    refuse = false
+    peerSaved('peer-1', null)
+    await Bun.sleep(10)
+
+    expect(attempts).toBe(2)
+    expect(fine.calls.indexers).toHaveLength(1)
+    expect(registrations.registration('srv-a')).toMatchObject({ indexer: { status: 'ok' }, indexerTest: 'ok', message: null })
+    expect(notified).toBe(1)
+
+    // Nothing failed now, so the next friend changes nothing.
+    peerSaved('peer-2', null)
+    await Bun.sleep(10)
+    expect(attempts).toBe(2)
+  })
+
+  test('a friend saved while a registration runs counts with that registration\'s result', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let attempts = 0
+    const dest = stubDest({
+      registerIndexer: async () => {
+        attempts++
+        if (attempts === 1) {
+          await gate
+          throw new Error('no results')
+        }
+      },
+    })
+    const registrations = service([dest])
+
+    const first = registrations.register(dest)
+    await Bun.sleep(1)
+    const again = registrations.registerFailedIndexers()
+    release()
+
+    expect((await first)?.indexer.status).toBe('failed')
+    const results = await again
+    expect(attempts).toBe(2)
+    expect(results.map(result => result?.indexer.status)).toEqual(['ok'])
+  })
+
+  test('registerFailedIndexers leaves alone a destination that is down or no longer auto-registers', async () => {
+    let attempts = 0
+    const dest = stubDest({
+      registerIndexer: async () => {
+        attempts++
+        throw new Error('no results')
+      },
+    })
+    const registrations = service([dest])
+    await registrations.register(dest)
+
+    dest.isInitialized = false
+    expect(await registrations.registerFailedIndexers()).toEqual([])
+    dest.isInitialized = true
+    Object.assign(dest, { autoRegister: { enable: false, priority: 1 } })
+    expect(await registrations.registerFailedIndexers()).toEqual([])
+    expect(attempts).toBe(1)
   })
 })

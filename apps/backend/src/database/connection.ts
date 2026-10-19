@@ -12,6 +12,8 @@ export interface DatabaseHandle {
   db: AppDatabase
   sqlite: Database
   path: string
+  /** The database already had migrations applied when this boot opened it: an install from an earlier boot, not a new one. */
+  preexisting: boolean
   close: () => void
 }
 
@@ -31,6 +33,14 @@ export function runMigrations(db: AppDatabase) {
   migrate(db, { migrationsFolder: MIGRATIONS_FOLDER })
 }
 
+/** Whether drizzle applied any migration to this database before (checked before runMigrations). */
+export function hasAppliedMigrations(sqlite: Database): boolean {
+  const table = sqlite.query('select 1 from sqlite_master where type = \'table\' and name = \'__drizzle_migrations\'').get()
+  if (!table)
+    return false
+  return (sqlite.query<{ n: number }, []>('select count(*) as n from __drizzle_migrations').get()?.n ?? 0) > 0
+}
+
 export async function openDatabase({ appConfigPath }: { appConfigPath: string }): Promise<DatabaseHandle> {
   const path = getDatabasePath(appConfigPath)
   await mkdir(dirname(path), { recursive: true })
@@ -40,12 +50,14 @@ export async function openDatabase({ appConfigPath }: { appConfigPath: string })
   sqlite.exec('pragma foreign_keys = ON')
 
   const db = drizzle({ client: sqlite, schema })
+  const preexisting = hasAppliedMigrations(sqlite)
   runMigrations(db)
 
   return {
     db,
     sqlite,
     path,
+    preexisting,
     close: () => sqlite.close(),
   }
 }

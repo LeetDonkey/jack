@@ -8,6 +8,7 @@ import z from 'zod'
 import { logger } from '../logger'
 import { atomicWriteFile } from './atomic-write'
 import { isWritableDirectory } from './fs-checks'
+import { isAddressOrRange } from './net/ip'
 
 const TRAILING_LINE_ENDINGS = /[\r\n]+$/
 
@@ -463,7 +464,47 @@ export const RawDiscoveryConfig = z.object({
 
 export type RawDiscoveryConfig = z.infer<typeof RawDiscoveryConfig>
 
-const Cidr = z.string().trim().min(2).max(50)
+// What a refused entry looks like in a message: quoted, and short.
+function quoteEntry(entry: string): string {
+  const text = entry.trim()
+  return `"${text.length > 40 ? `${text.slice(0, 40)}...` : text}"`
+}
+
+const NOT_AN_ADDRESS = 'isn\'t an IP address or range'
+
+// An address list entry in a PATCH body: refused unless it is an address or range.
+const Cidr = z.string().trim().superRefine((entry, ctx) => {
+  if (!isAddressOrRange(entry))
+    ctx.addIssue({ code: 'custom', message: `${quoteEntry(entry)} ${NOT_AN_ADDRESS}. Use an address like 192.168.1.10 or a range like 172.18.0.0/16.`, input: entry })
+})
+
+const warnedEntries = new Set<string>()
+
+/**
+ * An address list as stored in config.jsonc. Entries that aren't an address or
+ * range (a file written by hand, or by a jack that accepted any text) are left
+ * out with a warning instead of stopping jack from starting. A list with no
+ * valid entry left counts as unset, so its default applies.
+ */
+function StoredAddressList(setting: string) {
+  return z.array(z.unknown()).nullish().transform((list) => {
+    if (!list)
+      return list
+    const kept: string[] = []
+    for (const entry of list) {
+      if (typeof entry === 'string' && isAddressOrRange(entry)) {
+        kept.push(entry.trim())
+        continue
+      }
+      const shown = typeof entry === 'string' ? quoteEntry(entry) : JSON.stringify(entry)
+      if (!warnedEntries.has(`${setting}\0${shown}`)) {
+        warnedEntries.add(`${setting}\0${shown}`)
+        logger.warn({ setting: `security.${setting}`, entry: shown }, `Ignoring ${shown} in security.${setting}: it ${NOT_AN_ADDRESS}. Fix it under Settings -> Sharing -> Security.`)
+      }
+    }
+    return kept.length === 0 && list.length > 0 ? null : kept
+  })
+}
 
 // The public port's defences, all on by default: temporary bans for addresses
 // that keep failing authentication (like fail2ban), the Radarr/Sonarr APIs only
@@ -474,15 +515,17 @@ export const SecurityConfig = z.object({
   maxFailures: z.number().int().min(1).max(1000).default(10),
   windowMinutes: z.number().int().min(1).max(1440).default(10),
   banMinutes: z.number().int().min(1).max(525_600).default(60),
-  // Proxies whose X-Real-IP / X-Forwarded-For are believed (the reverse proxy in front of jack).
-  trustedProxies: z.array(Cidr).nullish(),
-  // Addresses that are never banned (by default the LAN and loopback, so your *arr apps can't lock themselves out).
-  neverBan: z.array(Cidr).nullish(),
+  // Proxies whose X-Real-IP / X-Forwarded-For are believed (the reverse proxy in
+  // front of jack). When set, it replaces the default: every private address.
+  trustedProxies: StoredAddressList('trustedProxies'),
+  // Addresses that are never banned on top of the LAN and loopback, which never
+  // are (so your *arr apps can't lock themselves out).
+  neverBan: StoredAddressList('neverBan'),
   // Answer /torznab and /api/v2 (used only by your own Radarr/Sonarr) only from
   // the LAN, loopback and arrApiAlsoAllowed, also through the reverse proxy.
   lanOnlyArrApis: z.boolean().default(true),
   // Addresses allowed on top of the LAN, e.g. a Radarr on Tailscale or a VPS.
-  arrApiAlsoAllowed: z.array(Cidr).nullish(),
+  arrApiAlsoAllowed: StoredAddressList('arrApiAlsoAllowed'),
   // Serve the public port's API description at /openapi.json.
   publicOpenApi: z.boolean().default(false),
 })

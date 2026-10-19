@@ -1,12 +1,14 @@
 import process from 'node:process'
 import { getApp } from './app'
 import { openDatabase } from './database/connection'
+import { JackMeta } from './database/jack-meta'
 import { shutdownTelemetry } from './instrumentation'
 import { DownloadsConfig, getAppConfig, SecurityConfig, TorznabConfig } from './lib/config'
 import { getAppEnvs } from './lib/envs'
 import { startPublicServer } from './lib/public-server'
 import { ConnectorManager } from './lib/servers'
 import { generateId } from './lib/servers/base'
+import { endOpenStreams } from './lib/sse'
 import { PROTOCOL_VERSION } from './lib/version'
 import { logger } from './logger'
 import { getManagementApp } from './management-app'
@@ -28,6 +30,7 @@ import { PieceHasher } from './modules/peer/piece-hasher'
 import { RegistrationService } from './modules/registration/registration.service'
 import { BanList } from './modules/security/ban-list'
 import { pendingRestart } from './modules/status/restart-pending'
+import { SystemNotices } from './modules/status/system-notices'
 import { localDay, TrafficLedger } from './modules/transfers/traffic-ledger'
 import { followDownloadsPause } from './modules/transfers/transfer-pauses'
 import { TransfersService } from './modules/transfers/transfers.service'
@@ -58,6 +61,11 @@ const configService = envs.MANAGEMENT_KEY
   ? new ConfigService({ path: envs.APP_CONFIG_PATH, raw: rawConfig, connectorManager, downloadsRepository })
   : undefined
 
+// One-time notices, such as the defaults that changed under an install from
+// before the update. Opened (or not) at the first boot that has this code.
+const notices = new SystemNotices(new JackMeta(database.sqlite), () => configService?.getRaw() ?? rawConfig)
+notices.init(database.preexisting)
+
 // Live-editable settings are read from the file when the management API can
 // rewrite it, so edits apply without a restart; otherwise from the boot config.
 function currentMaxConcurrentDownloads(): number | null {
@@ -83,6 +91,7 @@ const registrations = new RegistrationService({
 })
 // Re-register after a saved server (a changed priority or a newly added *arr),
 // a new internal URL, or downloads turned on, so none of them needs a restart.
+// A saved friend re-registers where the indexer step failed.
 // Wired before the management API starts, so no save goes unregistered.
 if (configService)
   registrations.followConfig(configService)
@@ -265,7 +274,9 @@ function startManagementServer() {
     system: () => ({
       bootedAt,
       restartPending: configService ? pendingRestart(bootRaw, configService.getRaw()) : [],
+      notices: notices.list(),
     }),
+    notices,
     completedPath: () => configService ? configService.getRawDownloads()?.completedPath ?? null : config.downloads?.completedPath ?? null,
   })
   const instance = Bun.serve({ port: envs.MANAGEMENT_PORT, fetch: managementApp.fetch, idleTimeout: 60 })
@@ -278,10 +289,10 @@ const managementServer = startManagementServer()
 
 // Auto-register as a Torznab indexer + qBittorrent download client in each
 // destination that opts in via its `autoregister` config. We register even when
-// there are no peers / an empty catalog (forceSave on the *arr side), so the
-// Jack indexer and client are always present and bound — they start returning
-// results as soon as peers come online. Without downloads nothing is registered
-// (see registerManagedForDestination).
+// there are no peers / an empty catalog (see registerIndexer), so the Jack
+// indexer and client are always present and bound. They start returning results
+// as soon as peers come online. Without downloads nothing is registered (see
+// registerManagedForDestination).
 if (!config.downloads)
   logger.warn('Downloads are off, so jack did not add its indexer or download client to Radarr/Sonarr. Turn on Downloads in Settings, then restart the jack container.')
 
@@ -314,24 +325,21 @@ else {
     logger.warn({ downloads: failed, databasePath: database.path }, 'Marked stale downloads failed (no downloads config to resume them)')
 }
 
-process.on('SIGINT', async () => {
-  logger.info('SIGINT received, exiting')
-  importWatcher?.stop()
-  registrations.stop()
-  peerHealth.stop()
-  notifications.stop()
-  introductions?.stop()
-  // Before database.close(): stopping flushes the traffic counts.
-  transfersService.stop()
-  database.close()
-  server.close()
-  managementServer?.stop()
-  await shutdownTelemetry()
-  process.exit(0)
-})
+// Long enough for the streams ended below to finish their responses, short of
+// Docker's 10 seconds before it kills the container.
+const SHUTDOWN_GRACE_MS = 2_000
 
-process.on('SIGTERM', async () => {
-  logger.info('SIGTERM received, exiting')
+let shuttingDown = false
+
+async function shutdown(signal: string) {
+  if (shuttingDown)
+    return
+  shuttingDown = true
+  logger.info(`${signal} received, exiting`)
+  // End open SSE streams as finished responses, so the UI reconnects to the next
+  // jack instead of waiting on a cut connection, and give them a moment to finish.
+  endOpenStreams()
+  await Promise.race([managementServer?.stop(), Bun.sleep(SHUTDOWN_GRACE_MS)])
   importWatcher?.stop()
   registrations.stop()
   peerHealth.stop()
@@ -341,7 +349,9 @@ process.on('SIGTERM', async () => {
   transfersService.stop()
   database.close()
   server.close()
-  managementServer?.stop()
   await shutdownTelemetry()
   process.exit(0)
-})
+}
+
+process.on('SIGINT', () => void shutdown('SIGINT'))
+process.on('SIGTERM', () => void shutdown('SIGTERM'))

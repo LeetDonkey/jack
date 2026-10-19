@@ -26,6 +26,15 @@ describe('isTransientDownloadError', () => {
       expect(isTransientDownloadError(Object.assign(new Error('fetch failed'), { code }))).toBe(true)
   })
 
+  test('a friend whose host name doesn\'t resolve is transient, however Bun reports it', () => {
+    // Bun 1.3.14 alternates between ConnectionRefused and FailedToOpenSocket for
+    // a stopped container's name on a Docker network.
+    const failedToOpen = Object.assign(new Error('Was there a typo in the url or port?'), { code: 'FailedToOpenSocket' })
+    expect(isTransientDownloadError(failedToOpen)).toBe(true)
+    for (const code of ['ENOTFOUND', 'EAI_AGAIN', 'EAI_NONAME', 'DNSException', 'EHOSTDOWN'])
+      expect(isTransientDownloadError(Object.assign(new Error('lookup failed'), { code }))).toBe(true)
+  })
+
   test('filesystem error codes are not transient', () => {
     const error = Object.assign(new Error('no space left on device'), { code: 'ENOSPC' })
     expect(isTransientDownloadError(error)).toBe(false)

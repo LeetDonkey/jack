@@ -23,7 +23,7 @@ describe('management support routes', () => {
   })
 
   test('GET /support-bundle answers a redacted bundle without the management key', async () => {
-    const res = await makeApp({ system: () => ({ bootedAt: '2026-10-18T09:00:00.000Z', restartPending: ['downloads'] }) })
+    const res = await makeApp({ system: () => ({ bootedAt: '2026-10-18T09:00:00.000Z', restartPending: ['downloads'], notices: [] }) })
       .request('/support-bundle', { headers: KEY })
     expect(res.status).toBe(200)
     const text = await res.text()

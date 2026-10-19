@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test'
 import { Hono } from 'hono'
 import { SecurityConfig as SecuritySchema } from '../lib/config'
 import { UnauthorizedError } from '../lib/errors/UnauthorizedError'
-import { clientIp, inRanges, PRIVATE_RANGES } from '../lib/net/ip'
+import { clientIp, inRanges, isAddressOrRange, PRIVATE_RANGES } from '../lib/net/ip'
 import { banGuard } from '../modules/security/ban-guard'
 import { BanList } from '../modules/security/ban-list'
 
@@ -19,6 +19,13 @@ describe('client address', () => {
     expect(inRanges('2a02:1406::1', PRIVATE_RANGES)).toBe(false)
     expect(inRanges('8.8.8.8', ['8.8.8.8'])).toBe(true)
     expect(inRanges('not-an-ip', PRIVATE_RANGES)).toBe(false)
+  })
+
+  test('tells addresses and ranges from other text', () => {
+    for (const ok of ['192.168.1.10', '172.18.0.0/16', '0.0.0.0/0', '::1', '[::1]', 'fd00::/8', '2001:db8::/128', '::ffff:10.0.0.1'])
+      expect([ok, isAddressOrRange(ok)]).toEqual([ok, true])
+    for (const bad of ['', 'Nginx', 'npm', '192.168.1.300', '10.0.0.0/33', '10.0.0.0/', '10.0.0.0/-1', '10.0.0.0/8/8', 'fd00::/129', 'fe80::1%eth0', '10.0.0.0/1e1'])
+      expect([bad, isAddressOrRange(bad)]).toEqual([bad, false])
   })
 
   test('believes forwarding headers only from a trusted proxy', () => {
@@ -82,6 +89,17 @@ describe('BanList', () => {
     for (let i = 0; i < 10; i++)
       off.recordFailure('203.0.113.9', 'x')
     expect(off.activeBan('203.0.113.9')).toBeNull()
+  })
+
+  test('neverBan adds to the LAN instead of replacing it', () => {
+    const { bans } = banList({ neverBan: ['100.64.0.0/10'] })
+    for (let i = 0; i < 10; i++) {
+      bans.recordFailure('192.168.0.20', 'x')
+      bans.recordFailure('127.0.0.1', 'x')
+      bans.recordFailure('100.101.102.103', 'x')
+    }
+    expect(bans.list()).toEqual([])
+    expect(bans.exempt('203.0.113.9')).toBe(false)
   })
 })
 

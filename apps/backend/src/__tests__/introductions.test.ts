@@ -146,6 +146,28 @@ describe('introductions between friends of friends', () => {
     expect((await fresh.service.overview()).people.map(p => p.name)).toEqual(['Carol'])
   })
 
+  test('me.introducers counts the friends\' jacks that introduce you, from their last answer', async () => {
+    const alice = makeJack('Alice', { publicName: 'Alice', discoverable: true }, 'https://alice.example')
+    const bob = makeJack('Bob', { publicName: 'Bob' }, null)
+    const erin = makeJack('Erin', { publicName: 'Erin', introduce: false }, null)
+    // No friends: nobody introduces you.
+    expect((await alice.service.overview()).me.introducers).toBe(0)
+
+    connect(alice, bob, 1)
+    connect(alice, erin, 2)
+    // Bob a second time under another address: still one jack.
+    alice.peers.push({ ...alice.peers[0]!, id: 'conn-Bob-old' })
+    expect((await alice.service.overview()).me).toMatchObject({ discoverable: true, introducers: 1 })
+
+    // Friends that never answered: unknown, not zero.
+    const down = async () => {
+      throw new Error('Unable to connect')
+    }
+    const lonely = makeJack('Lonely', { publicName: 'Lonely' }, null)
+    lonely.peers.push({ id: 'p', name: 'Bob', url: 'https://bob.example', introProfile: down, introDirectory: down, introMail: down })
+    expect((await lonely.service.overview()).me.introducers).toBeNull()
+  })
+
   test('mail through a friend who stops introducing waits instead of getting lost', async () => {
     const alice = makeJack('Alice', { publicName: 'Alice' }, 'https://alice.example')
     const bob = makeJack('Bob', { publicName: 'Bob' }, 'https://bob.example')

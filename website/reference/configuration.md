@@ -212,11 +212,11 @@ Upper bound for the download retry backoff. The default is 30 minutes.
 **Format:** milliseconds, ≥ 0\
 **Default:** `86400000`
 
-How long jack keeps retrying a download that fails with a network error, a
-timeout, HTTP 429 or a 5xx from the peer, counted from the last time the
-download received data. Within the window the attempt limit doesn't apply, so a
-peer that is offline for a few hours doesn't fail the queue. The default is 24
-hours; `0` leaves only
+How long jack keeps retrying a download that fails with a network error
+(including a peer address that doesn't resolve), a timeout, HTTP 429 or a 5xx
+from the peer, counted from the last time the download received data. Within
+the window the attempt limit doesn't apply, so a peer that is offline for a few
+hours doesn't fail the queue. The default is 24 hours; `0` leaves only
 [`downloads.maxDownloadAttempts`](#downloads-maxdownloadattempts).
 
 A download waiting between attempts doesn't hold one of the
@@ -419,13 +419,16 @@ addresses are listed with a button to lift each ban. Applies right away.
   `Retry-After` on every route, `/ping` included, until the ban ends. Bans are
   stored, so a restart doesn't lift them.
 - **`trustedProxies`** (default: private network ranges): addresses or CIDR
-  ranges of the reverse proxy in front of jack. Only a request from one of these
-  may name the real client, in `X-Forwarded-For` (its rightmost entry that
-  isn't a trusted proxy) or else `X-Real-IP`; any other request is judged by
-  its own address, so a client can't dodge a ban or get someone else banned by
-  sending those headers.
-- **`neverBan`** (default: private network ranges and loopback): addresses that
-  are never counted, so your Radarr/Sonarr on the LAN can't lock themselves out.
+  ranges of the reverse proxy in front of jack, such as `172.18.0.0/16` for
+  the Docker network Nginx Proxy Manager runs on. A list replaces the default.
+  Only a request from one of these may name the real client, in
+  `X-Forwarded-For` (its rightmost entry that isn't a trusted proxy) or else
+  `X-Real-IP`; any other request is judged by its own address, so a client
+  can't dodge a ban or get someone else banned by sending those headers.
+- **`neverBan`** (default: none): addresses or CIDR ranges that are never
+  counted, such as a Tailscale range (`100.64.0.0/10`). Private network ranges
+  and loopback are never counted whatever the list holds, so your Radarr/Sonarr
+  on the LAN can't lock themselves out.
 - **`lanOnlyArrApis`** (default `true`): answer the Torznab (`/torznab`) and
   qBittorrent (`/api/v2`) APIs, which only your own Radarr/Sonarr use, only to
   private network ranges, loopback and `arrApiAlsoAllowed`. Any other address
@@ -445,6 +448,13 @@ addresses are listed with a button to lift each ban. Applies right away.
   over Tailscale (`100.64.0.0/10`) or from a VPS.
 - **`publicOpenApi`** (default `false`): answer `/openapi.json` on the public
   port. The same description is in this documentation.
+
+Every entry in `trustedProxies`, `neverBan` and `arrApiAlsoAllowed` must be an
+IPv4 or IPv6 address, or a range such as `172.18.0.0/16` or `fd00::/8`. A host
+or container name never matches. ***Settings -> Sharing -> Security*** refuses
+such an entry and names it. jack still starts with one already in the file: it
+ignores the entry and logs a warning, and a list with no valid entry left
+counts as unset.
 
 [`notifications.ipBanned`](#notifications) (default `true`) sends a
 notification when an address is banned.
@@ -546,11 +556,21 @@ servers. jack registers itself:
 - in a server that was down at startup, once it is reachable;
 - in a server saved in the management UI;
 - in every server, after a new `jack.internalUrl` or a new `downloads` block is
-  saved in the management UI.
+  saved in the management UI;
+- in every server where adding the indexer failed last time, after a friend is
+  added or saved, also through an invite link or an introduction.
+
+Radarr and Sonarr test an indexer before they add it, and the test fails while
+jack's feed is empty: no friends yet, or nothing they added in the last
+[`torznab.rssMaxAgeDays`](#torznab-rssmaxagedays). jack then adds the indexer
+switched off and switches it on, which skips the test, so the indexer is there
+from the start.
 
 After each registration jack asks the *arr to test its download client and
 indexer, the same check as their ***Test*** buttons, and reports the result as
-`registration` on each server in the management API. The management UI shows
+`registration` on each server in the management API. An indexer test that
+answers `Query successful, but no results...` counts as passed: the *arr
+reached jack. The management UI shows
 it on the server's card under ***Settings -> Radarr & Sonarr***, where
 ***Register again*** registers jack in that server once more.
 

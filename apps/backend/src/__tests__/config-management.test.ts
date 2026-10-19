@@ -12,7 +12,7 @@ import { setupServer } from 'msw/node'
 import { getApp } from '../app'
 import { runMigrations } from '../database/connection'
 import * as schema from '../database/schema'
-import { AppConfig, MIGRATIONS } from '../lib/config'
+import { AppConfig, getAppConfig, MIGRATIONS } from '../lib/config'
 import { ConnectorManager } from '../lib/servers'
 import { generateId } from '../lib/servers/base'
 import { PeerConnector } from '../lib/servers/peer'
@@ -1183,6 +1183,63 @@ describe('Management API bandwidth config', () => {
     const { app } = await makeMutableApp()
     const res = await patch(app, { schedule: [{ days: ['someday'], start: '7', end: '23:00' }] })
     expect(res.status).toBe(400)
+  })
+})
+
+describe('Management API security config', () => {
+  const patch = (app: ReturnType<typeof mgmtApp>, body: unknown) => app.request('/config/security', {
+    method: 'PATCH',
+    headers: { ...KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+
+  test('PATCH stores addresses and ranges of both families', async () => {
+    const { app, path } = await makeMutableApp()
+    const lists = { trustedProxies: ['172.18.0.0/16', ' 10.0.0.5 '], neverBan: ['100.64.0.0/10', 'fd7a:115c:a1e0::/48'], arrApiAlsoAllowed: ['2001:db8::1', '[::1]'] }
+    expect((await patch(app, lists)).status).toBe(200)
+    const onDisk = jsonc.parse(await Bun.file(path).text()) as { security: Record<string, unknown> }
+    expect(onDisk.security).toEqual({ ...lists, trustedProxies: ['172.18.0.0/16', '10.0.0.5'] })
+  })
+
+  test('PATCH refuses an entry that isn\'t an address or range, naming it on its field', async () => {
+    const { app, path } = await makeMutableApp()
+    for (const [field, list, bad] of [
+      ['trustedProxies', ['172.18.0.0/16', 'Nginx'], 'Nginx'],
+      ['neverBan', ['10.0.0.0/33'], '10.0.0.0/33'],
+      ['arrApiAlsoAllowed', ['fd00::/129'], 'fd00::/129'],
+      ['neverBan', ['npm'], 'npm'],
+      ['trustedProxies', ['192.168.1.300'], '192.168.1.300'],
+      ['trustedProxies', ['10.0.0.0/8/8'], '10.0.0.0/8/8'],
+      ['neverBan', ['fe80::1%eth0'], 'fe80::1%eth0'],
+    ] as const) {
+      const res = await patch(app, { [field]: list })
+      expect(res.status).toBe(400)
+      const { error } = await res.json() as { error: { code: string, field: string, message: string } }
+      expect(error.code).toBe('VALIDATION_ERROR')
+      expect(error.field).toBe(`${field}.${list.indexOf(bad as never)}`)
+      expect(error.message).toContain(`"${bad}" isn't an IP address or range`)
+    }
+    const onDisk = jsonc.parse(await Bun.file(path).text()) as { security?: unknown }
+    expect(onDisk.security).toBeUndefined()
+  })
+
+  test('a stored list with entries that aren\'t addresses still loads, without them', async () => {
+    const path = join(tmpdir(), `jack-config-${Math.random().toString(36).slice(2)}.jsonc`)
+    tempFiles.push(path)
+    const security = { trustedProxies: ['Nginx', 'Proxy', 'Manager'], neverBan: ['100.64.0.0/10', 'tailscale'], arrApiAlsoAllowed: [] }
+    await Bun.write(path, jsonc.stringify({ version: MIGRATIONS.length, jack: { internalUrl: 'http://jack:5225' }, security, peers: [], servers: [] }))
+
+    const { appConfig } = await getAppConfig({ APP_CONFIG_PATH: path })
+    // A list with nothing usable left falls back to its default (every private proxy).
+    expect(appConfig.security).toMatchObject({ trustedProxies: null, neverBan: ['100.64.0.0/10'], arrApiAlsoAllowed: [] })
+
+    const configService = await ConfigService.fromFile({ path, connectorManager: new ConnectorManager([], []) })
+    const app = getManagementApp({ environment: 'test', managementKey: 'mgmt-secret', connectors: { servers: [], peers: [] }, configService })
+    expect(await (await app.request('/config/security', { headers: KEY })).json()).toMatchObject({ trustedProxies: null, neverBan: ['100.64.0.0/10'] })
+
+    // Saving another setting keeps working.
+    expect((await patch(app, { banEnabled: false })).status).toBe(200)
+    expect(configService.getSecurity()).toMatchObject({ banEnabled: false, neverBan: ['100.64.0.0/10'] })
   })
 })
 

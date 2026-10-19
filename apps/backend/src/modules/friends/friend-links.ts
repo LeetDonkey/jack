@@ -5,12 +5,15 @@
  *
  * 1. Explicit: the key's `peerId` (set by a quick link, an introduction or by hand).
  * 2. Identity: the key's bound jack identity equals the identity the peer reports.
+ * 3. Until a peer has reported its identity (it was down since jack started
+ *    keeping identities): the keys of one bound identity whose names match that
+ *    peer and no other peer, whatever its identity (see adoptByName).
  *
- * Names never link anything; a matching name only produces a suggestion.
+ * Otherwise names never link anything; a matching name only produces a suggestion.
  */
 
 /** Ordered so the states that need the user's action come first. */
-export const FRIEND_STATES = ['offline', 'noKey', 'noPeer', 'waiting', 'both'] as const
+export const FRIEND_STATES = ['offline', 'noKey', 'noPeer', 'stale', 'waiting', 'both'] as const
 export type FriendState = typeof FRIEND_STATES[number]
 
 /** A key counts as in use while a friend's jack used it within this window. */
@@ -66,7 +69,8 @@ export interface FriendLinks<P extends LinkablePeer, K extends LinkableKey> {
  * - `noKey`: a peer, but no key: they can't download from you.
  * - `noPeer`: keys, but no peer: you don't download from them.
  * - `both`: a peer that isn't offline and a key used in the last 24 hours.
- * - `waiting`: a peer and keys, none used in the last 24 hours (or never).
+ * - `stale`: a peer and keys; a key was used before, but none in the last 24 hours.
+ * - `waiting`: a peer and keys, none ever used.
  *
  * A peer that wasn't checked yet (`online: null`) doesn't count as offline.
  */
@@ -77,8 +81,11 @@ export function friendState(peer: Pick<LinkablePeer, 'online'> | null, keys: Rea
     return 'offline'
   if (keys.length === 0)
     return 'noKey'
-  const active = keys.some(k => k.lastUsedAt != null && now.getTime() - Date.parse(k.lastUsedAt) <= KEY_ACTIVE_MS)
-  return active ? 'both' : 'waiting'
+  const used = keys.filter(k => k.lastUsedAt != null)
+  if (used.length === 0)
+    return 'waiting'
+  const active = used.some(k => now.getTime() - Date.parse(k.lastUsedAt!) <= KEY_ACTIVE_MS)
+  return active ? 'both' : 'stale'
 }
 
 function normalize(name: string | null): string {
@@ -183,11 +190,48 @@ export function linkFriends<P extends LinkablePeer, K extends LinkableKey>(peers
     card.keys.push({ ...key, link: null })
   }
 
+  const adopted = adoptByName(peers, peerCards, keyCards, cards)
+
   for (const { card, peer } of peerCards)
-    card.suggestedKeyIds = loose.filter(key => namesMatch(peer.name, key.name)).map(key => key.id)
+    card.suggestedKeyIds = loose.filter(key => !adopted.has(key.id) && namesMatch(peer.name, key.name)).map(key => key.id)
+
   for (const card of cards)
     card.state = friendState(card.peer, card.keys, now)
 
   cards.sort((a, b) => FRIEND_STATES.indexOf(a.state) - FRIEND_STATES.indexOf(b.state) || a.name.localeCompare(b.name))
   return { friends: cards, unlinked: { peers: unlinkedPeers, keys: unlinkedKeys } }
+}
+
+/**
+ * A peer whose jack hasn't reported its identity yet (it was down since jack
+ * started keeping identities, after an update say) takes the keys of one
+ * identity card when the names match and nothing else does on either side:
+ * that peer matches only this card, and this card only that peer. Every peer
+ * counts for the second part, also one that reported an identity or is a second
+ * peer of a jack: a name two peers share could be either of them. A peer that
+ * is online and still reports no identity is left alone, since its jack would
+ * have reported the one these keys are bound to. Once the peer reports its
+ * identity, the identity link decides. Removes the adopted cards from `cards`
+ * and returns the ids of the keys it moved.
+ */
+function adoptByName<P extends LinkablePeer, K extends LinkableKey>(
+  peers: ReadonlyArray<P>,
+  peerCards: Array<{ card: Friend<P, K>, peer: P }>,
+  keyCards: Map<string, Friend<P, K>>,
+  cards: Array<Friend<P, K>>,
+): Set<number> {
+  const adopted = new Set<number>()
+  const unknown = peerCards.filter(({ peer }) => peer.identityId == null && peer.online !== true)
+  const identityCards = [...keyCards.values()].filter(card => card.key.startsWith('identity:'))
+  const matches = (peer: P, card: Friend<P, K>) => card.keys.some(key => namesMatch(peer.name, key.name))
+  for (const { card, peer } of unknown) {
+    const [only, ...others] = identityCards.filter(keyCard => matches(peer, keyCard))
+    if (!only || others.length > 0 || peers.some(other => other !== peer && matches(other, only)))
+      continue
+    card.keys.push(...only.keys.map(key => ({ ...key, link: 'identity' as const })))
+    cards.splice(cards.indexOf(only), 1)
+    for (const key of only.keys)
+      adopted.add(key.id)
+  }
+  return adopted
 }

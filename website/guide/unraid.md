@@ -401,9 +401,15 @@ have in common turns on ***Introduce my friends to each other***.
     attempts. They can lift the ban under ***Settings -> Sharing ->
     Security***.
   - ***Needs a newer jack***: they need to update jack.
-- **A card stays on "Waiting for Alice"**: their jack hasn't used the key you
-  sent in the last 24 hours. If they never pasted your link, click ***Send a
-  new link*** on the card and send them that one.
+- **A card stays on "Waiting for Alice"**: their jack has never used the key
+  you sent. If they never pasted your link, click ***Send a new link*** on the
+  card and send them that one.
+- **A card says "Only one way since 12 Oct"**: their jack last used your key
+  on 12 Oct, more than 24 hours ago, and the card says ***Alice's jack hasn't
+  connected to yours since 12 Oct.*** Click ***Check your address*** on the
+  card to check that your public address still works, and ask them what their
+  jack shows for you. If it says ***Is blocking you***, lift the ban under
+  ***Settings -> Sharing -> Security***.
 - **The address check fails**: ***Check*** under ***Address friends use***
   says what went wrong, such as a certificate or proxy error. If friends can
   reach you anyway, your router probably doesn't route your own domain back to

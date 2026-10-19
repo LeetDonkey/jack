@@ -334,12 +334,12 @@ describe('Management status endpoints', () => {
       managementKey: 'mgmt-secret',
       connectors: manager,
       registrations,
-      system: () => ({ bootedAt: '2026-10-18T09:00:00.000Z', restartPending: ['downloads'] }),
+      system: () => ({ bootedAt: '2026-10-18T09:00:00.000Z', restartPending: ['downloads'], notices: [] }),
     })
 
     const body = await (await app.request('/overview', { headers: KEY })).json() as any
     expect(body.servers.items[0]).toMatchObject({ id: radarr.id, registration: null, lastContactAt: '2026-10-18T10:00:00.000Z' })
-    expect(body.system).toEqual({ bootedAt: '2026-10-18T09:00:00.000Z', restartPending: ['downloads'] })
+    expect(body.system).toEqual({ bootedAt: '2026-10-18T09:00:00.000Z', restartPending: ['downloads'], notices: [] })
   })
 
   test('GET /overview/stream pushes a new snapshot when a save makes a restart pending', async () => {
@@ -354,7 +354,7 @@ describe('Management status endpoints', () => {
       managementKey: 'mgmt-secret',
       connectors: manager,
       configService,
-      system: () => ({ bootedAt: '2026-10-18T09:00:00.000Z', restartPending: pendingRestart(bootRaw, configService.getRaw()) }),
+      system: () => ({ bootedAt: '2026-10-18T09:00:00.000Z', restartPending: pendingRestart(bootRaw, configService.getRaw()), notices: [] }),
     })
     const ac = new AbortController()
     const res = await app.request('/overview/stream', { headers: KEY, signal: ac.signal })

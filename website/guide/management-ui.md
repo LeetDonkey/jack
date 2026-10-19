@@ -81,6 +81,12 @@ names them, for example ***jack needs a restart to apply: Downloads***, until
 you restart the jack container. jack-ui then shows ***jack restarted. New
 settings are active.*** jack-ui itself never needs a restart.
 
+When an update changes the default of a setting you never set yourself, a note
+at the top of every page lists it under ***jack's update changed some
+settings***, with a ***Change*** link to its switch. Saving the setting takes
+it off the list. ***Dismiss*** hides the note for good. A new install never
+shows it.
+
 Don't want it? Delete the `jack-ui` service and the backend's
 `JACK_MANAGEMENT_KEY` line to run jack headless.
 
@@ -179,12 +185,17 @@ The badge says where you stand:
 - ***Connected both ways***: you download from them, and their jack used your
   key in the last 24 hours.
 - ***Waiting for Alice***: you download from Alice and sent them a link, but
-  their jack hasn't used your key in the last 24 hours. The card offers
-  ***Send a new link*** in case they lost it.
+  their jack has never used your key. The card offers ***Send a new link*** in
+  case they lost it.
 - ***Only one way***: one direction is missing, and the card offers the
   button that adds it:
   - ***Paste Alice's link*** when you don't download from Alice yet.
   - ***Send Alice a link*** when Alice can't download from you yet.
+- ***Only one way since 12 Oct***: you download from Alice, but their jack
+  last used your key on 12 Oct, more than 24 hours ago. Their jack checks in
+  every 5 minutes, so this usually means your public address or proxy stopped
+  working for them, or they removed you. The card says ***Alice's jack hasn't
+  connected to yours since 12 Oct.*** and offers ***Check your address***.
 - When the last check of their jack failed, the badge shows the status
   instead: ***Offline since 14:02***, ***Rejected your key***, ***Is blocking
   you*** or ***Needs a newer jack***. A line under it says what to do, and
@@ -230,7 +241,9 @@ and ***Link*** puts both on one card.
   one that answers; ***Remove this address*** drops the other.
 
 ***Friends of friends*** below the cards lists the people your friends
-introduced, with their requests to connect.
+introduced, with their requests to connect. The line under it says whether they
+can see you: only through a friend who has ***Introduce my friends to each
+other*** on. When none of your friends do, it says so.
 
 ### Invite a friend
 
@@ -499,9 +512,10 @@ The streams are plain `GET` endpoints on the management API:
 
 Each sends its current snapshot immediately on connect, then a full snapshot per
 change, with no deltas to reassemble. A `ping` event every 15 seconds keeps idle
-proxies from dropping the connection. The Logs page tails `/logs/stream`, which
-works the same way except each event is a single log line rather than a
-snapshot.
+proxies from dropping the connection. When jack stops, it ends every open
+stream before it exits, so clients see the stream finish and reconnect. The
+Logs page tails `/logs/stream`, which works the same way except each event is a
+single log line rather than a snapshot.
 
 The browser reconnects on its own if a stream drops. ***Dashboard***,
 ***Downloads***, ***Live traffic*** and ***Logs*** show a badge in the header:

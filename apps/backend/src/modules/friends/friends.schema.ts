@@ -44,7 +44,7 @@ export const FriendSchema = z.object({
   name: z.string(),
   peer: FriendPeerSchema.nullable(),
   keys: z.array(FriendKeySchema.extend({
-    link: z.enum(['explicit', 'identity']).nullable().describe('How the key joined the peer: its `peerId`, or its bound identity. Null on a card without a peer'),
+    link: z.enum(['explicit', 'identity']).nullable().describe('How the key joined the peer: its `peerId`, or its bound identity (for a peer that never reported one: its name, see the route description). Null on a card without a peer'),
   })),
   state: z.enum(FRIEND_STATES),
   suggestedKeyIds: z.array(z.number()).describe('Keys on no peer\'s card whose name matches this peer\'s. Never applied'),

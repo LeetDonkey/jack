@@ -61,6 +61,27 @@ export function formatArrValidationFailure(failure: ArrValidationFailure): strin
     : failure.message
 }
 
+const NO_RESULTS = /no results/i
+
+/**
+ * Torznab tests fail with "no results" when no friend has a recent release. *arr
+ * reached jack and got an answer, so for jack that counts as a pass.
+ */
+export function isNoResultsFailure(text: string): boolean {
+  return NO_RESULTS.test(text)
+}
+
+/**
+ * Whether *arr refused a save only because its test of jack's feed found no
+ * results. Warnings don't count; any other error does.
+ */
+export function isOnlyNoResultsRejection(err: unknown): boolean {
+  if (!(err instanceof FetchError) || err.response.status !== 400)
+    return false
+  const errors = parseArrValidationFailures(err.extras.body).filter(failure => !failure.warning)
+  return errors.length > 0 && errors.every(failure => isNoResultsFailure(formatArrValidationFailure(failure)))
+}
+
 /**
  * One readable line for an error from a call to *arr: its validation messages, its
  * `message` field, the HTTP status, or the network error.

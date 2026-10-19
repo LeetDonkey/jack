@@ -69,6 +69,20 @@ client` in the log), jack leaves the indexer as it was, so it stays bound to
 jack's client. Fix the cause, then click ***Register again*** on the server's
 card in the management UI, or restart jack.
 
+## Indexer test says `Query successful, but no results`
+
+The ***Test*** button on the Jack indexer in Radarr or Sonarr answers this
+while jack's feed is empty: you have no friends yet, or they added nothing in
+the last
+[`torznab.rssMaxAgeDays`](../reference/configuration.md#torznab-rssmaxagedays).
+It means the *arr reached jack, so jack counts it as a passed test. jack adds
+its indexer anyway (see
+[`servers[].autoregister`](../reference/configuration.md#servers-autoregister)),
+and Radarr and Sonarr find releases in it once a friend has some.
+
+If an *arr still refused the indexer, the server's card says so, and jack
+tries again when you add or save a friend.
+
 ## Grabs download but never import
 
 The download completes in jack (you see it finish in the logs) but Radarr/Sonarr

@@ -4,6 +4,7 @@ import { Hono } from 'hono'
 import { describeRoute } from 'hono-openapi'
 import { streamSSE } from 'hono/streaming'
 import { z } from 'zod'
+import { trackStream } from '../../lib/sse'
 import { validator as zValidator } from '../../lib/validation'
 
 const LEVEL = z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal'])
@@ -73,10 +74,13 @@ export function getLogsRouter(controller: LogsController) {
       })
 
       stream.onAbort(unsubscribe)
+      // Shutdown ends the stream within one drain interval (see endOpenStreams).
+      const shutdown = new AbortController()
+      const untrack = trackStream(() => shutdown.abort())
 
       try {
         let sincePingMs = 0
-        while (!stream.aborted) {
+        while (!stream.aborted && !shutdown.signal.aborted) {
           while (pending.length > 0)
             await stream.writeSSE({ data: JSON.stringify(pending.shift()) })
 
@@ -89,6 +93,7 @@ export function getLogsRouter(controller: LogsController) {
         }
       }
       finally {
+        untrack()
         unsubscribe()
       }
     })

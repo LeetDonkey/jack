@@ -43,7 +43,8 @@ export interface DirectoryPerson {
 }
 
 export interface IntroductionsOverview {
-  me: { id: string, name: string | null, discoverable: boolean, introduce: boolean, ready: boolean, missing: string[] }
+  /** `introducers`: friends' jacks that introduce you (answered the directory at the last round), counted once per jack; null before the first round. */
+  me: { id: string, name: string | null, discoverable: boolean, introduce: boolean, ready: boolean, missing: string[], introducers: number | null }
   people: DirectoryPerson[]
   /** `ended`: a connected thread whose person is no longer one of your peers (removed since); you can ask to connect again. */
   threads: Array<IntroThread & { safetyCode: string, ended: boolean }>
@@ -70,7 +71,9 @@ const MAX_PENDING_OUTGOING = 20
  */
 export class IntroductionsService {
   private readonly profiles = new Map<string, { at: number, profile: IntroProfile | null }>()
-  private readonly directories = new Map<string, { at: number, directory: IntroDirectory | null }>()
+  // `answered`: the peer answered the directory call once (a directory, or 404
+  // when it doesn't introduce); a failed call keeps the last answer.
+  private readonly directories = new Map<string, { at: number, directory: IntroDirectory | null, answered: boolean }>()
   private timer: ReturnType<typeof setInterval> | undefined
   private syncing: Promise<void> | undefined
 
@@ -287,9 +290,12 @@ export class IntroductionsService {
       const cached = this.directories.get(peer.id)
       if (cached && now - cached.at < DIRECTORY_TTL_MS)
         return { peer, directory: cached.directory }
-      const directory = await peer.introDirectory().catch(() => cached?.directory ?? null)
-      this.directories.set(peer.id, { at: now, directory })
-      return { peer, directory }
+      const entry = await peer.introDirectory().then(
+        directory => ({ at: now, directory, answered: true }),
+        () => ({ at: now, directory: cached?.directory ?? null, answered: cached?.answered ?? false }),
+      )
+      this.directories.set(peer.id, entry)
+      return { peer, directory: entry.directory }
     }))
     return all.filter((d): d is { peer: IntroPeer, directory: IntroDirectory } => d.directory != null)
   }
@@ -467,7 +473,8 @@ export class IntroductionsService {
     const ended = this.endedThreads(profiles)
     const threads = this.deps.store.threads()
     const people = new Map<string, DirectoryPerson>()
-    for (const { peer, directory } of await this.peerDirectories()) {
+    const directories = await this.peerDirectories()
+    for (const { peer, directory } of directories) {
       for (const person of directory.people) {
         if (person.id === me.id || ownPeerIds.has(person.id))
           continue
@@ -479,10 +486,20 @@ export class IntroductionsService {
       }
     }
     return {
-      me: { id: me.id, name, discoverable: Boolean(discovery?.discoverable), introduce: discovery?.introduce ?? false, ready: missing.length === 0, missing },
+      me: { id: me.id, name, discoverable: Boolean(discovery?.discoverable), introduce: discovery?.introduce ?? false, ready: missing.length === 0, missing, introducers: this.introducers(directories) },
       people: [...people.values()].sort((a, b) => a.name.localeCompare(b.name)),
       threads: threads.map(t => ({ ...t, safetyCode: safetyCode(me.publicKey, t.peerKey), ended: ended(t) })),
     }
+  }
+
+  // Friends' jacks that introduce us: a directory at their last answer, one per
+  // jack (two addresses of one friend count once). Null while no current peer
+  // ever answered, so we can't tell yet.
+  private introducers(directories: Array<{ directory: IntroDirectory }>): number | null {
+    const peers = this.deps.peers()
+    if (peers.length > 0 && !peers.some(peer => this.directories.get(peer.id)?.answered))
+      return null
+    return new Set(directories.map(d => d.directory.introducer.id)).size
   }
 
   async request(personId: string, viaPeerId: string, message?: string): Promise<IntroThread> {

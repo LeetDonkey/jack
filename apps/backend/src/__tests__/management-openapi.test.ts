@@ -34,7 +34,7 @@ describe('management OpenAPI spec', () => {
     const json = (operation: any, status: string) => operation.responses[status].content['application/json'].schema
     const friends = json(spec.paths['/friends'].get, '200')
     expect(Object.keys(friends.properties)).toEqual(['peers', 'keys', 'limits', 'friends', 'unlinked'])
-    expect(friends.properties.friends.items.properties.state.enum).toEqual(['offline', 'noKey', 'noPeer', 'waiting', 'both'])
+    expect(friends.properties.friends.items.properties.state.enum).toEqual(['offline', 'noKey', 'noPeer', 'stale', 'waiting', 'both'])
     expect(friends.properties.keys.items.properties.lastUsedTrackedSince).toBeDefined()
     expect(friends.properties.peers.items.properties.identityId).toBeDefined()
     expect(json(spec.paths['/friends/check'].post, '200').properties.friends).toBeDefined()
@@ -49,5 +49,12 @@ describe('management OpenAPI spec', () => {
     const peers = spec.paths['/overview'].get.responses['200'].content['application/json'].schema.properties.peers
     expect(Object.keys(peers.properties)).toEqual(['total', 'initialized', 'online', 'items'])
     expect(Object.keys(peers.properties.items.items.properties.health.properties)).toEqual(['online', 'offlineSince', 'lastSeenAt', 'lastError', 'lastErrorCode', 'checkedAt'])
+
+    const system = spec.paths['/overview'].get.responses['200'].content['application/json'].schema.properties.system
+    expect(Object.keys(system.properties)).toEqual(['bootedAt', 'restartPending', 'notices'])
+    expect(system.properties.notices.items.properties.changed.items.properties.setting.enum).toEqual(['discovery.introduce', 'security.banEnabled', 'security.lanOnlyArrApis', 'security.publicOpenApi'])
+    const dismiss = spec.paths['/system/notices/{id}/dismiss'].post
+    expect(Object.keys(dismiss.responses)).toEqual(['204', '404'])
+    expect(dismiss.operationId).toBe('postSystemNoticesByIdDismiss')
   })
 })

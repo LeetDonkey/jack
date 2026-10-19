@@ -23,6 +23,23 @@ export function normalizeIp(raw: string): string {
   return mapped ? mapped[1]! : ip.toLowerCase()
 }
 
+const PREFIX = /^\d{1,3}$/
+
+/**
+ * Whether `entry` is an IPv4 or IPv6 address, or a CIDR range with a prefix
+ * that fits its family (`172.18.0.0/16`, `fd00::/8`). Host and container names
+ * are not: inRanges never matches them.
+ */
+export function isAddressOrRange(entry: string): boolean {
+  const [base = '', prefix, extra] = entry.trim().split('/')
+  const ip = normalizeIp(base)
+  // A zone id (fe80::1%eth0) never matches a client address.
+  const family = ip.includes('%') ? 0 : isIP(ip)
+  if (family === 0 || extra !== undefined)
+    return false
+  return prefix === undefined || (PREFIX.test(prefix) && Number(prefix) <= (family === 4 ? 32 : 128))
+}
+
 function ipv4ToBigInt(ip: string): bigint {
   return ip.split('.').reduce((acc, part) => (acc << 8n) + BigInt(Number(part)), 0n)
 }

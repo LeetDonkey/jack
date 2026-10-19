@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { Hono } from 'hono'
-import { streamSnapshots } from './sse'
+import { endOpenStreams, streamSnapshots } from './sse'
 
 async function readUntil(reader: ReadableStreamDefaultReader<Uint8Array>, expected: string): Promise<string> {
   const decoder = new TextDecoder()
@@ -72,5 +72,30 @@ describe('streamSnapshots', () => {
 
     expect(unsubscribed).toBe(true)
     await response.body?.cancel().catch(() => {})
+  })
+
+  test('endOpenStreams finishes every open stream instead of leaving it to be cut', async () => {
+    let unsubscribed = 0
+    const app = new Hono().get('/stream', c => streamSnapshots(
+      c,
+      () => ({ ok: true }),
+      () => () => {
+        unsubscribed++
+      },
+      1000,
+    ))
+    const readers = await Promise.all([1, 2].map(async () => (await app.request('/stream')).body!.getReader() as unknown as ReadableStreamDefaultReader<Uint8Array>))
+    for (const reader of readers)
+      expect(await readUntil(reader, '"ok":true')).toContain('"ok":true')
+
+    endOpenStreams()
+
+    for (const reader of readers) {
+      let done = false
+      for (let i = 0; i < 5 && !done; i++)
+        done = (await reader.read()).done
+      expect(done).toBe(true)
+    }
+    expect(unsubscribed).toBe(2)
   })
 })

@@ -12,6 +12,7 @@ import type { NotificationsService } from './modules/notifications/notifications
 import type { RegistrationService } from './modules/registration/registration.service'
 import type { BanList } from './modules/security/ban-list'
 import type { SystemStatus } from './modules/status/status.controller'
+import type { SystemNotices } from './modules/status/system-notices'
 import type { TransfersService } from './modules/transfers/transfers.service'
 import { Hono } from 'hono'
 import { describeRoute, openAPIRouteHandler, resolver } from 'hono-openapi'
@@ -44,6 +45,7 @@ import { getSecurityRouter } from './modules/security/security.router'
 import { StatusController } from './modules/status/status.controller'
 import { getStatusRouter } from './modules/status/status.router'
 import { BuildIdentitySchema } from './modules/status/status.schema'
+import { getSystemRouter } from './modules/status/system.router'
 import { configSecrets } from './modules/support/support-bundle'
 import { getSupportRouter } from './modules/support/support.router'
 import { TransferPauses } from './modules/transfers/transfer-pauses'
@@ -71,8 +73,10 @@ export function getManagementApp(params: {
   registrations?: RegistrationService
   /** How long server saves and POST /config/servers/:id/register wait for the registration (default 25 s). */
   registrationWaitMs?: number
-  /** overview.system: boot time and settings waiting for a restart. */
+  /** overview.system: boot time, settings waiting for a restart and notices. */
   system?: () => SystemStatus
+  /** Dismisses overview.system.notices (POST /system/notices/:id/dismiss); the overview stream follows it. */
+  notices?: Pick<SystemNotices, 'dismiss' | 'subscribe'>
   /** GET /version; defaults to this process's build (lib/build.ts). */
   version?: () => VersionInfo
   /** downloads.completedPath as stored now, for the folder check; null when downloads are off. */
@@ -126,16 +130,21 @@ export function getManagementApp(params: {
   app.route('/config', getConfigRouter(configController))
 
   const configService = params.configService
+  const notices = params.notices
   const statusController = new StatusController(params.connectors, params.downloadsRepository, {
     registrations: params.registrations,
     system: params.system,
     health: params.peerHealth,
     downloadPhases: params.downloadsService,
     traffic: params.transfersService?.ledger,
-    // restartPending changes with every config save.
-    subscriptions: configService ? [subscriber => configService.subscribe(subscriber)] : [],
+    // restartPending and the notices change with every config save, and a notice with a dismiss.
+    subscriptions: [
+      ...(configService ? [(subscriber: () => void) => configService.subscribe(subscriber)] : []),
+      ...(notices ? [(subscriber: () => void) => notices.subscribe(subscriber)] : []),
+    ],
   })
   app.route('/', getStatusRouter(statusController))
+  app.route('/system', getSystemRouter(notices))
 
   app.route('/downloads', getDownloadsManagementRouter(new DownloadsManagementController(
     params.downloadsRepository,

@@ -3,6 +3,7 @@ import { ServerType } from '../../lib/config'
 import { PEER_ERROR_CODES } from '../../lib/net/peer-errors'
 import { ServerRegistrationFieldsSchema } from '../registration/registration.schema'
 import { RESTART_REASONS } from './restart-pending'
+import { CHANGED_DEFAULT_SETTINGS } from './system-notices'
 
 // Response shape of GET /overview, for the OpenAPI docs. Download records are
 // left open: they are the download list's rows.
@@ -18,6 +19,15 @@ const ConnectorFields = z.object({
 export const SystemStatusSchema = z.object({
   bootedAt: z.string().describe('When this jack process started (ISO 8601). A new value means jack restarted'),
   restartPending: z.array(z.enum(RESTART_REASONS)).describe('Settings saved since boot that apply only after a restart of the jack container'),
+  notices: z.array(z.object({
+    id: z.string().describe('Pass to `POST /system/notices/:id/dismiss`'),
+    kind: z.literal('defaultsChanged'),
+    changed: z.array(z.object({
+      setting: z.enum(CHANGED_DEFAULT_SETTINGS),
+      was: z.boolean().describe('What jack did before the update while the setting was not stored'),
+      now: z.boolean().describe('The default now'),
+    })).min(1).describe('Settings whose default changed in an update and whose value still comes from the default. Storing a setting removes it'),
+  })).describe('One-time notices until dismissed. `defaultsChanged` appears only on installs from before the update that changed those defaults'),
 })
 
 const DownloadRow = z.record(z.string(), z.unknown())

@@ -2,6 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { endOpenStreams } from '../../lib/sse'
 import { LogHub } from './log-hub'
 import { LogsController } from './logs.controller'
 import { getLogsRouter } from './logs.router'
@@ -87,5 +88,21 @@ describe('logs router — SSE stream', () => {
       await reader.cancel().catch(() => {})
       ac.abort()
     }
+  })
+
+  test('ends the stream as a finished response on shutdown', async () => {
+    const hub = new LogHub(path)
+    const res = await router(hub).request('/stream')
+    const reader = res.body!.getReader()
+    for (let i = 0; i < 100 && hub.subscriberCount === 0; i++)
+      await Bun.sleep(10)
+    expect(hub.subscriberCount).toBe(1)
+
+    endOpenStreams()
+    let done = false
+    for (let i = 0; i < 5 && !done; i++)
+      done = (await reader.read()).done
+    expect(done).toBe(true)
+    expect(hub.subscriberCount).toBe(0)
   })
 })

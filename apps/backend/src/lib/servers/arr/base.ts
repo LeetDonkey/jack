@@ -8,7 +8,7 @@ import { requiresInitialization } from '../../decorators/requires-initialization
 import { BadRequestError } from '../../errors/BadRequestError'
 import { FetchError } from '../../errors/FetchError'
 import { ServerConnector } from '../base'
-import { parseArrValidationFailures } from './validation'
+import { isOnlyNoResultsRejection, parseArrValidationFailures } from './validation'
 
 const BASENAME_SEPARATOR_REGEX = /[/\\]/
 const TRAILING_SLASH_REGEX = /\/$/
@@ -34,9 +34,9 @@ export const DestinationServerHealthIssue = z.array(
   }),
 )
 
-// *arr returns the saved download client on create; we only need its id to bind
-// the auto-registered indexer to it.
-const DownloadClientResource = z.object({ id: z.number().int() })
+// *arr returns the saved download client or indexer on create; jack only needs
+// its id (to bind the indexer to the client, or to switch the indexer on).
+const ProviderResource = z.object({ id: z.number().int() })
 const CommandResource = z.object({
   id: z.number().int().optional(),
   status: z.string().nullable().optional(),
@@ -443,19 +443,14 @@ export abstract class ArrServerConnector extends ServerConnector {
       ],
     }
 
-    // forceSave: true registers the indexer even when *arr's test query returns
-    // no results (e.g. no peers / empty catalog yet). We always want the Jack
-    // indexer present and bound to the Jack client; it starts returning results
-    // as soon as peers come online.
+    // An update with forceSave skips *arr's test, so the indexer is saved even
+    // when the feed is empty (no friends yet, or nothing new from them).
     if (existing) {
-      await this.fetch(`/api/v3/indexer/${existing.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...body, id: existing.id }),
-        query: { forceSave: 'true' },
-      } as any)
+      await this.putIndexer(existing.id, body)
+      return
     }
-    else {
+
+    try {
       await this.fetch('/api/v3/indexer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -463,6 +458,32 @@ export abstract class ArrServerConnector extends ServerConnector {
         query: { forceSave: 'true' },
       } as any)
     }
+    catch (err) {
+      // On create, forceSave skips only warnings, and an empty feed fails the test
+      // with an error ("Query successful, but no results..."). *arr doesn't test an
+      // indexer that is switched off, so add it off and switch it on with an update.
+      // Checked against Radarr 6.4 and Sonarr 4.0.
+      if (!isOnlyNoResultsRejection(err))
+        throw err
+      logger.info({ destination: this.name }, `${this.name} found nothing in jack's feed yet; adding the indexer without its test`)
+      const created = await this.fetch<typeof ProviderResource>('/api/v3/indexer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...body, enableRss: false, enableAutomaticSearch: false, enableInteractiveSearch: false }),
+        query: { forceSave: 'true' },
+        schema: ProviderResource,
+      } as any)
+      await this.putIndexer(created.id, body)
+    }
+  }
+
+  private async putIndexer(id: number, body: Record<string, unknown>): Promise<void> {
+    await this.fetch(`/api/v3/indexer/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...body, id }),
+      query: { forceSave: 'true' },
+    } as any)
   }
 
   /**
@@ -544,12 +565,12 @@ export abstract class ArrServerConnector extends ServerConnector {
       return existing.id as number
     }
 
-    const created = await this.fetch<typeof DownloadClientResource>('/api/v3/downloadclient', {
+    const created = await this.fetch<typeof ProviderResource>('/api/v3/downloadclient', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
       query: { forceSave: 'true' },
-      schema: DownloadClientResource,
+      schema: ProviderResource,
     } as any)
     return created.id
   }

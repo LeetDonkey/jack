@@ -9,14 +9,17 @@ import type { PeerHealth, PeerHealthMonitor } from '../friends/peer-health'
 import type { RegistrationStatus } from '../registration/registration.service'
 import type { TrafficLedger } from '../transfers/traffic-ledger'
 import type { RestartReason } from './restart-pending'
+import type { SystemNotice } from './system-notices'
 import { DOWNLOAD_STATUSES } from '../../database/schema'
 import { DOWNLOAD_PHASES, isCancelledByUser } from '../downloads/download-state'
 import { serverRegistrationFields } from '../registration/registration.service'
 
-/** The running jack: when it started, and what it needs a restart for. */
+/** The running jack: when it started, what it needs a restart for, and notices for the user. */
 export interface SystemStatus {
   bootedAt: string
   restartPending: RestartReason[]
+  /** One-time notices until dismissed (see SystemNotices). */
+  notices: SystemNotice[]
 }
 
 export interface StatusExtras {
@@ -187,7 +190,7 @@ export class StatusController {
           ...serverRegistrationFields(s, this.extras.registrations),
         })),
       },
-      system: this.extras.system?.() ?? { bootedAt: BOOTED_AT, restartPending: [] },
+      system: this.extras.system?.() ?? { bootedAt: BOOTED_AT, restartPending: [], notices: [] },
       downloads: {
         total: records.length,
         byStatus,

@@ -24,10 +24,21 @@ describe('friendState', () => {
     expect(friendState({ online: true }, used, NOW)).toBe('both')
   })
 
-  test('a key counts as used for 24 hours', () => {
+  test('a key counts as used for 24 hours, then the friend is stale', () => {
     const at = (ms: number) => [{ lastUsedAt: new Date(NOW.getTime() - ms).toISOString() }]
     expect(friendState({ online: true }, at(KEY_ACTIVE_MS), NOW)).toBe('both')
-    expect(friendState({ online: true }, at(KEY_ACTIVE_MS + 60_000), NOW)).toBe('waiting')
+    expect(friendState({ online: true }, at(KEY_ACTIVE_MS + 60_000), NOW)).toBe('stale')
+    expect(friendState({ online: null }, at(3 * KEY_ACTIVE_MS), NOW)).toBe('stale')
+  })
+
+  test('waiting means no key was ever used', () => {
+    const old = new Date(NOW.getTime() - 3 * KEY_ACTIVE_MS).toISOString()
+    expect(friendState({ online: true }, [{ lastUsedAt: null }, { lastUsedAt: null }], NOW)).toBe('waiting')
+    // A key used days ago next to a new, unused one: used before, so stale.
+    expect(friendState({ online: true }, [{ lastUsedAt: null }, { lastUsedAt: old }], NOW)).toBe('stale')
+    expect(friendState({ online: true }, [{ lastUsedAt: old }, { lastUsedAt: minutesAgo(5) }], NOW)).toBe('both')
+    // Offline wins over both.
+    expect(friendState({ online: false }, [{ lastUsedAt: old }], NOW)).toBe('offline')
   })
 
   test('a peer not checked yet is not offline', () => {
@@ -119,6 +130,54 @@ describe('linkFriends', () => {
     expect(unlinked.peers.map(p => [p.id, p.sameAs])).toEqual([['old', 'peer:new']])
   })
 
+  test('a peer that hasn\'t reported its identity takes the keys of the one identity its name matches', () => {
+    // After an update: Alice is down, so jack never learned her identity, but her key is bound to it.
+    const alice = peer('a', 'Alice', { online: false })
+    const keys = [key(1, 'Alice', { boundIdentityId: 'id-alice', lastUsedAt: minutesAgo(3 * 24 * 60) }), key(2, 'Carol (via Alice)', { boundIdentityId: 'id-carol' })]
+    const { friends, unlinked } = linkFriends([alice, peer('c', 'Carol', { identityId: 'id-carol' })], keys, NOW)
+    expect(friends.map(f => [f.key, f.state, f.keys.map(k => [k.id, k.link]), f.suggestedKeyIds])).toEqual([
+      ['peer:a', 'offline', [[1, 'identity']], []],
+      ['peer:c', 'waiting', [[2, 'identity']], []],
+    ])
+    expect(unlinked).toEqual({ peers: [], keys: [] })
+
+    // Not checked yet counts as unknown too.
+    expect(linkFriends([{ ...alice, online: null }], keys.slice(0, 1), NOW).friends.map(f => [f.key, f.state])).toEqual([['peer:a', 'stale']])
+  })
+
+  test('names don\'t link a bound key when the peer reported an identity, is online, or the match isn\'t unique', () => {
+    const bound = key(1, 'Alice', { boundIdentityId: 'id-alice' })
+    const cardsOf = (peers: LinkablePeer[], keys: LinkableKey[]) => linkFriends(peers, keys, NOW).friends.map(f => [f.key, f.keys.map(k => k.id)])
+
+    // Her jack reports another identity: a different jack.
+    expect(cardsOf([peer('a', 'Alice', { identityId: 'id-other', online: false })], [bound]))
+      .toEqual([['peer:a', []], ['identity:id-alice', [1]]])
+    // Online without an identity: her jack would have reported the bound one.
+    expect(cardsOf([peer('a', 'Alice')], [bound])).toEqual([['peer:a', []], ['identity:id-alice', [1]]])
+    // Two unknown peers named Alice.
+    expect(cardsOf([peer('a', 'Alice', { online: false }), peer('b', 'Alice', { online: false })], [bound]))
+      .toEqual([['peer:a', []], ['peer:b', []], ['identity:id-alice', [1]]])
+    // Two identities with keys named Alice.
+    expect(cardsOf([peer('a', 'Alice', { online: false })], [bound, key(2, 'Alice', { boundIdentityId: 'id-alice-2' })]))
+      .toEqual([['peer:a', []], ['identity:id-alice', [1]], ['identity:id-alice-2', [2]]])
+  })
+
+  test('a name another peer shares links nothing, also when that peer reported an identity', () => {
+    const bound = key(1, 'Bob', { boundIdentityId: 'id-bob-2' })
+    const cardsOf = (peers: LinkablePeer[]) => linkFriends(peers, [bound], NOW).friends.map(f => [f.key, f.keys.map(k => [k.id, k.link])])
+    const oldAddress = peer('p2', 'Bob', { online: false })
+
+    // An online Bob reporting another identity, and an offline Bob that never reported one.
+    expect(cardsOf([peer('p1', 'Bob', { identityId: 'id-bob-1' }), oldAddress]))
+      .toEqual([['peer:p2', []], ['peer:p1', []], ['identity:id-bob-2', [[1, null]]]])
+    // The other Bob is the second peer of a jack whose card shows under another name.
+    expect(cardsOf([peer('p1', 'Robert', { identityId: 'id-bob-1' }), peer('p3', 'Bob', { identityId: 'id-bob-1', online: false }), oldAddress]))
+      .toEqual([['peer:p2', []], ['peer:p1', []], ['identity:id-bob-2', [[1, null]]]])
+    // A peer whose name doesn't match changes nothing.
+    expect(cardsOf([peer('p1', 'Carol', { identityId: 'id-carol' }), oldAddress]))
+      .toEqual([['peer:p2', [[1, 'identity']]], ['peer:p1', []]])
+  })
+
   test('of two peers for one jack, the card shows the reachable one, even when the other comes first', () => {
     const old = peer('old', 'Alice (old address)', { identityId: 'id-alice', online: false, lastSeenAt: minutesAgo(600) })
     const moved = peer('new', 'Alice', { identityId: 'id-alice', online: true, lastSeenAt: minutesAgo(2) })
@@ -142,11 +201,13 @@ describe('linkFriends', () => {
         peer('c', 'Carl'),
         peer('d', 'Dora'),
         peer('e', 'Emil'),
+        peer('f', 'Finn'),
       ],
       [
         key(1, 'Anna', { peerId: 'a', lastUsedAt: minutesAgo(1) }),
         key(2, 'Carl', { peerId: 'c' }),
         key(3, 'Zoe', { origin: 'quick-link' }),
+        key(4, 'Finn', { peerId: 'f', lastUsedAt: minutesAgo(3 * 24 * 60) }),
       ],
       NOW,
     )
@@ -155,6 +216,7 @@ describe('linkFriends', () => {
       ['Dora', 'noKey'],
       ['Emil', 'noKey'],
       ['Zoe', 'noPeer'],
+      ['Finn', 'stale'],
       ['Carl', 'waiting'],
       ['Anna', 'both'],
     ])

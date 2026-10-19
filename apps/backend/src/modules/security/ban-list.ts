@@ -39,8 +39,8 @@ const toEntry = (row: BanRow): BanEntry => ({ ip: row.ip, bannedAt: row.banned_a
 /**
  * fail2ban for the public port: an address that fails authentication
  * `maxFailures` times within `windowMinutes` is refused everything for
- * `banMinutes`. Bans are stored, so a restart doesn't lift them. Addresses in
- * `neverBan` (by default the LAN and loopback) are never counted.
+ * `banMinutes`. Bans are stored, so a restart doesn't lift them. The LAN,
+ * loopback and the addresses in `neverBan` are never counted.
  */
 export class BanList {
   private readonly failures = new Map<string, number[]>()
@@ -60,7 +60,9 @@ export class BanList {
   }
 
   exempt(ip: string): boolean {
-    return inRanges(ip, this.config().neverBan ?? PRIVATE_RANGES)
+    // neverBan adds to the private ranges, like arrApiAlsoAllowed: an entry such
+    // as a Tailscale range must not expose your own Radarr/Sonarr to bans.
+    return inRanges(ip, [...PRIVATE_RANGES, ...(this.config().neverBan ?? [])])
   }
 
   /** The active ban for `ip`, or null. Bans apply even if banning was switched off later, until lifted or expired. */

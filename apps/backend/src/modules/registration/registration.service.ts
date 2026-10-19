@@ -99,8 +99,12 @@ function logRegistrationFailure(what: string, destName: string, err: unknown) {
 function stepFailureMessage(destName: string, outcome: ManagedRegistrationOutcome): string | null {
   if (outcome.downloadClient.status === 'failed')
     return `jack couldn't add its download client to ${destName} (${outcome.downloadClient.error}), so it left the indexer as it was. Register again.`
-  if (outcome.indexer.status === 'failed')
+  if (outcome.indexer.status === 'failed') {
+    // Only an *arr that tests even a switched-off indexer gets here (see registerIndexer).
+    if (outcome.indexer.error && isNoResultsFailure(outcome.indexer.error))
+      return `${destName} won't add jack's indexer until your friends have something to share. jack tries again when you add or save a friend.`
     return `jack couldn't add its indexer to ${destName} (${outcome.indexer.error}). Register again.`
+  }
   return null
 }
 
@@ -264,6 +268,23 @@ export class RegistrationService implements RegistrationStatus {
     }
   }
 
+  /**
+   * Register again in every destination whose last indexer step failed, e.g. after
+   * a friend was added: the *arr may have refused the indexer because jack's feed
+   * was empty. Checked when its turn in the queue comes, so a registration that is
+   * running now counts with its result.
+   */
+  registerFailedIndexers(): Promise<Array<DestinationRegistration | null>> {
+    const check = this.queue.then(() => this.deps.destinations()
+      .filter(dest => this.isRegistrable(dest) && dest.isInitialized && this.results.get(dest.id)?.indexer.status === 'failed')
+      .map((dest) => {
+        logger.info({ destination: dest.name }, `Friends changed; adding jack's indexer to ${dest.name} again`)
+        return this.register(dest)
+      }))
+    this.queue = check.catch(() => {})
+    return check.then(runs => Promise.all(runs))
+  }
+
   /** Retry connecting to auto-register destinations that are down, with backoff. */
   retryUninitialized(now = this.now()): void {
     const seen = new Set<string>()
@@ -292,9 +313,11 @@ export class RegistrationService implements RegistrationStatus {
    * - a saved server: that server, and the save answers with the result;
    * - a new internal URL: every destination gets the new address;
    * - downloads turned on: every destination gets the indexer and download client
-   *   that were skipped.
+   *   that were skipped;
+   * - a friend added or saved (also by an invite link or an introduction): every
+   *   destination whose indexer step failed (see registerFailedIndexers).
    */
-  followConfig(config: Pick<ConfigService, 'onServerSaved' | 'onJackSaved' | 'onDownloadsSaved'>): () => void {
+  followConfig(config: Pick<ConfigService, 'onServerSaved' | 'onJackSaved' | 'onDownloadsSaved' | 'onPeerSaved'>): () => void {
     const unsubscribers = [
       config.onServerSaved((id) => {
         const dest = this.deps.destinations().find(d => d.id === id)
@@ -315,6 +338,9 @@ export class RegistrationService implements RegistrationStatus {
           return
         logger.info('Downloads turned on; registering jack in Radarr/Sonarr again')
         void this.registerAll()
+      }),
+      config.onPeerSaved(() => {
+        void this.registerFailedIndexers()
       }),
     ]
     return () => {
