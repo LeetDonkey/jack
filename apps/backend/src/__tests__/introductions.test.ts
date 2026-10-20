@@ -1,10 +1,12 @@
 import type { DiscoveryConfig } from '../lib/config'
-import type { IntroductionsDeps, IntroPeer } from '../modules/introductions/introductions.service'
+import type { IntroductionsDeps, IntroPeer, IntroPeerHealth } from '../modules/introductions/introductions.service'
 import { Database } from 'bun:sqlite'
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { Hono } from 'hono'
 import { ConflictError } from '../lib/errors/ConflictError'
+import { FetchError } from '../lib/errors/FetchError'
 import { open, safetyCode, seal, sharedKey } from '../lib/introductions/crypto'
+import { logger } from '../logger'
 import { IntroStore } from '../modules/introductions/intro-store'
 import { getIntroPeerRouter } from '../modules/introductions/introductions.router'
 import { IntroductionsService } from '../modules/introductions/introductions.service'
@@ -88,6 +90,60 @@ function connect(from: Jack, to: Jack, keyId: number, tamper?: (body: string) =>
 async function syncAll(...jacks: Jack[]) {
   for (const jack of jacks)
     await jack.service.sync()
+}
+
+/**
+ * Carol, a friend of Alice's who introduces Dave. With `state.hung` her host is
+ * off behind a port forward: every call gets no answer until the request timeout
+ * (`hangMs` here). `state.fail`: every call fails with that error at once.
+ */
+function friendCarol(hangMs: number) {
+  const carol = new IntroStore(new Database(':memory:')).identity()
+  const dave = new IntroStore(new Database(':memory:')).identity()
+  const state = { hung: false, fail: null as Error | null }
+  const calls = { profile: 0, directory: 0, mail: 0 }
+  const answer = async <T>(value: T): Promise<T> => {
+    if (state.fail)
+      throw state.fail
+    if (!state.hung)
+      return value
+    await Bun.sleep(hangMs)
+    throw new DOMException('The operation timed out.', 'TimeoutError')
+  }
+  const peer: IntroPeer = {
+    id: 'carol-peer',
+    name: 'Carol',
+    url: 'https://carol.example',
+    isInitialized: true,
+    initializationError: null,
+    introProfile: () => {
+      calls.profile++
+      return answer({ id: carol.id, publicKey: carol.publicKey, name: 'Carol', discoverable: false })
+    },
+    introDirectory: () => {
+      calls.directory++
+      return answer({ introducer: { id: carol.id, name: 'Carol' }, people: [{ id: dave.id, name: 'Dave', publicKey: dave.publicKey }] })
+    },
+    introMail: () => {
+      calls.mail++
+      return answer({ messages: [] })
+    },
+  }
+  return { peer, state, calls }
+}
+
+/** Alice's jack, whose only peer is `peer`. */
+function aliceWith(peer: IntroPeer, extra: Partial<IntroductionsDeps> = {}): IntroductionsService {
+  return new IntroductionsService({
+    store: new IntroStore(new Database(':memory:')),
+    discovery: () => ({ publicName: 'Alice', introduce: true, discoverable: false }),
+    external: () => ({ url: 'https://alice.example', headers: {} }),
+    peers: () => [peer],
+    issueKey: () => ({ id: 1, key: 'k' }),
+    apiKeyName: () => null,
+    addPeer: async () => {},
+    ...extra,
+  })
 }
 
 describe('introductions between friends of friends', () => {
@@ -443,6 +499,107 @@ describe('introductions between friends of friends', () => {
     expect(calls.profile).toBe(2)
     await service.sync()
     expect(calls.profile).toBe(3)
+  })
+
+  test('a friend who stops answering while jack runs is left out until a health check reaches them again, logged once each way', async () => {
+    let now = Date.parse('2026-10-19T12:00:00Z')
+    let health: IntroPeerHealth = { online: true, lastSeenAt: new Date(now).toISOString() }
+    const carol = friendCarol(20)
+    const service = aliceWith(carol.peer, { health: () => health, now: () => new Date(now) })
+    const info = spyOn(logger, 'info')
+    const logged = () => info.mock.calls.map(call => call[1]).filter(message => typeof message === 'string' && message.includes('Carol'))
+    try {
+      await service.sync()
+      expect(carol.calls).toEqual({ profile: 1, directory: 0, mail: 1 })
+
+      // Her host hangs: the next sync's mail gets no answer.
+      carol.state.hung = true
+      now += 60_000
+      await service.sync()
+      expect(carol.calls.mail).toBe(2)
+      expect(logged()).toEqual(['jack can\'t reach Carol; introductions leave them out until it can'])
+
+      // Left out: no sync, Friends page or friend's directory call asks her, also
+      // while the last health check, from before that call, still says online.
+      for (let i = 0; i < 12; i++) {
+        now += 60_000
+        await service.sync()
+        await service.overview()
+        await service.directoryFor(undefined)
+      }
+      health = { online: false, lastSeenAt: health.lastSeenAt }
+      now += 60_000
+      await service.sync()
+      expect(carol.calls).toEqual({ profile: 1, directory: 0, mail: 2 })
+
+      // A health check reaches her: the next sync asks her again.
+      carol.state.hung = false
+      health = { online: true, lastSeenAt: new Date(now).toISOString() }
+      now += 60_000
+      await service.sync()
+      expect(carol.calls).toEqual({ profile: 2, directory: 0, mail: 3 })
+      expect(logged()).toEqual([
+        'jack can\'t reach Carol; introductions leave them out until it can',
+        'jack reaches Carol again; introductions include them',
+      ])
+    }
+    finally {
+      info.mockRestore()
+    }
+  })
+
+  test('a friend the health check finds offline gets no calls until a check reaches them', async () => {
+    let health: IntroPeerHealth = { online: false, lastSeenAt: null }
+    const carol = friendCarol(0)
+    const service = aliceWith(carol.peer, { health: () => health })
+    await service.sync()
+    await service.overview()
+    await service.directoryFor(undefined)
+    expect(carol.calls).toEqual({ profile: 0, directory: 0, mail: 0 })
+    expect(service.identityPending('carol-peer')).toBe(true)
+
+    health = { online: true, lastSeenAt: new Date().toISOString() }
+    await service.sync()
+    expect(carol.calls).toEqual({ profile: 1, directory: 0, mail: 1 })
+    expect(service.identityPending('carol-peer')).toBe(false)
+  })
+
+  test('a failure the friend answered, such as a 500, leaves them in', async () => {
+    const carol = friendCarol(0)
+    const service = aliceWith(carol.peer, { health: () => ({ online: true, lastSeenAt: null }) })
+    await service.sync()
+    carol.state.fail = new FetchError('Failed to fetch url: Internal Server Error', new Response('boom', { status: 500 }))
+    await service.sync()
+    await service.sync()
+    expect(carol.calls.mail).toBe(3)
+  })
+
+  test('the Friends page waits at most answerWaitMs for a friend, answers from the last answers, and shares a running call', async () => {
+    let now = Date.parse('2026-10-19T12:00:00Z')
+    const carol = friendCarol(300)
+    const service = aliceWith(carol.peer, { health: () => ({ online: true, lastSeenAt: null }), answerWaitMs: 20, now: () => new Date(now) })
+    expect((await service.overview()).people.map(p => p.name)).toEqual(['Dave'])
+
+    // Her directory is due again while her host hangs: two page loads answer from
+    // the last directory without waiting for her, and share one call.
+    carol.state.hung = true
+    now += 6 * 60_000
+    let started = performance.now()
+    const pages = await Promise.all([service.overview(), service.overview()])
+    expect(performance.now() - started).toBeLessThan(200)
+    expect(pages.map(page => page.people.map(p => p.name))).toEqual([['Dave'], ['Dave']])
+    expect(carol.calls.directory).toBe(2)
+    await Bun.sleep(350)
+
+    // A friend that hangs from the start: the first page load doesn't wait either.
+    const erin = friendCarol(300)
+    erin.state.hung = true
+    const fresh = aliceWith(erin.peer, { answerWaitMs: 20 })
+    started = performance.now()
+    expect(await fresh.overview()).toMatchObject({ people: [], me: { introducers: null } })
+    expect(performance.now() - started).toBeLessThan(200)
+    expect(erin.calls).toEqual({ profile: 1, directory: 1, mail: 0 })
+    await Bun.sleep(350)
   })
 })
 

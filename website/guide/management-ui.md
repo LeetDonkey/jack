@@ -14,7 +14,9 @@ operate jack day to day:
   - ***Finish setting up jack***: the setup steps left, until jack is ready. An
     optional ***Share with friends*** card follows.
   - ***Needs attention***: what is failing, including a Radarr/Sonarr that jack
-    couldn't set itself up in.
+    couldn't set itself up in. When the only thing to report is a Radarr/Sonarr
+    that skips jack's indexer for now, the card is ***Worth knowing*** instead.
+    While jack doesn't answer, the card is marked ***last known***.
   - ***Right now***: speeds both ways, how many downloads are downloading,
     waiting, queued for import or failed, and the running downloads with speed
     and time left. Each count opens ***Downloads*** with that filter.
@@ -243,7 +245,10 @@ and ***Link*** puts both on one card.
 ***Friends of friends*** below the cards lists the people your friends
 introduced, with their requests to connect. The line under it says whether they
 can see you: only through a friend who has ***Introduce my friends to each
-other*** on. When none of your friends do, it says so.
+other*** on. When none of your friends do, it says so. While jack can't reach a
+friend's jack, requests and messages through that friend wait. The people they
+introduced stay listed from their last answer until jack restarts. After a
+restart, they show again once jack reaches that friend.
 
 ### Invite a friend
 

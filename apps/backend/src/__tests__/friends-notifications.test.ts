@@ -2,15 +2,16 @@ import type { NotificationsConfig } from '../lib/config'
 import type { PeerConnector } from '../lib/servers/peer'
 import type { DownloadRecord } from '../modules/downloads/downloads.repository'
 import type { PeerHealth, PeerHealthEvent } from '../modules/friends/peer-health'
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { NotificationsConfig as NotificationsSchema } from '../lib/config'
+import { logger } from '../logger'
 import { DOWNLOAD_CANCELLED_MESSAGE } from '../modules/downloads/download-state'
 import { friendsSnapshot } from '../modules/friends/friends.router'
-import { PeerHealthMonitor, peerHealthNotification } from '../modules/friends/peer-health'
+import { peerFailedCheckMessage, PeerHealthMonitor, peerHealthNotification } from '../modules/friends/peer-health'
 import { buildDailySummary } from '../modules/notifications/daily-summary'
 import { NotificationsService } from '../modules/notifications/notifications.service'
 
-function fakePeer(ping: () => Promise<unknown>, extra: { isInitialized?: boolean, init?: () => void } = {}): PeerConnector {
+function fakePeer(ping: (schema?: unknown, options?: { quiet?: boolean }) => Promise<unknown>, extra: { isInitialized?: boolean, init?: () => void } = {}): PeerConnector {
   return { id: 'p1', name: 'Nicklas', url: 'https://jack.example', ping, isInitialized: true, init: () => {}, ...extra } as unknown as PeerConnector
 }
 
@@ -47,6 +48,38 @@ describe('PeerHealthMonitor', () => {
     await monitor.checkAll()
     expect(events.map(e => e.type)).toEqual(['offline', 'back'])
     expect(monitor.list()[0]).toMatchObject({ online: true, offlineSince: null, lastError: null, lastErrorCode: null })
+  })
+
+  test('logs a friend going offline and coming back once, and checks quietly while they are offline', async () => {
+    let up = true
+    const quiet: boolean[] = []
+    const peer = fakePeer(async (_schema, options) => {
+      quiet.push(options?.quiet ?? false)
+      if (!up)
+        throw new Error('The operation timed out.')
+      return { version: '0.1.0' }
+    })
+    const monitor = new PeerHealthMonitor(() => [peer], () => 60 * 60_000, () => new Date(0), { classify: async () => 'timeout' })
+    const info = spyOn(logger, 'info')
+    const logged = () => info.mock.calls.map(call => call[1]).filter(message => typeof message === 'string' && message.includes('Nicklas'))
+    try {
+      await monitor.checkAll()
+      up = false
+      for (let i = 0; i < 3; i++)
+        await monitor.checkAll()
+      up = true
+      await monitor.checkAll()
+      await monitor.checkAll()
+      // The first failed check logs its error as usual (not quiet); the ones after it don't.
+      expect(quiet).toEqual([false, false, true, true, true, false])
+      expect(logged()).toEqual([
+        'jack can\'t reach Nicklas\'s jack: it didn\'t answer in time. jack checks again every 5 minutes',
+        'Nicklas is back online',
+      ])
+    }
+    finally {
+      info.mockRestore()
+    }
   })
 
   test('a short outage is not announced', async () => {
@@ -186,6 +219,21 @@ describe('peerHealthNotification', () => {
       expect(notification.message).toBe('jack hasn\'t reached Alice for 60 minutes. Downloads from them wait and retry.\nLast error: boom')
     }
     expect(peerHealthNotification({ type: 'back', peer: { ...peer(null), online: true }, offlineMinutes: 75 })).toEqual({ event: 'peer-back', title: 'Alice is back', message: 'Alice answers again after 75 minutes offline.' })
+  })
+})
+
+describe('peerFailedCheckMessage', () => {
+  test('says what went wrong in words, and calls a jack that answered with a refusal neither offline nor unreachable', () => {
+    const later = '. jack checks again every 5 minutes'
+    expect(peerFailedCheckMessage('Alice', 'unauthorized')).toBe(`Alice's jack rejected your key; ask Alice for a new link${later}`)
+    expect(peerFailedCheckMessage('Alice', 'forbidden')).toBe(`Alice's jack is blocking you; ask Alice to check their jack${later}`)
+    expect(peerFailedCheckMessage('Alice', 'incompatible')).toBe(`Alice's jack runs a version jack can't talk to; downloads from them wait until Alice updates jack${later}`)
+    expect(peerFailedCheckMessage('Alice', 'unavailable')).toBe(`Alice's jack or its proxy answered with an error or cut the connection${later}`)
+    expect(peerFailedCheckMessage('Alice', 'timeout')).toBe(`jack can't reach Alice's jack: it didn't answer in time${later}`)
+    expect(peerFailedCheckMessage('Alice', 'dns')).toBe(`jack can't reach Alice's jack: the address doesn't resolve${later}`)
+    expect(peerFailedCheckMessage('Alice', 'refused')).toBe(`jack can't reach Alice's jack: nothing accepts connections at that address${later}`)
+    expect(peerFailedCheckMessage('Alice', 'tls')).toBe(`jack can't reach Alice's jack: its HTTPS certificate was rejected${later}`)
+    expect(peerFailedCheckMessage('Alice', 'unknown')).toBe(`jack can't reach Alice's jack${later}`)
   })
 })
 

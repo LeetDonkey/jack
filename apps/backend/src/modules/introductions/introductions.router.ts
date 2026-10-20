@@ -54,7 +54,7 @@ export function getIntroductionsRouter(service: ManagementSide) {
   app.get('/', describeRoute({
     tags: ['Introductions'],
     summary: 'Friends of friends and requests',
-    description: 'Your discovery status, the people your friends can introduce you to, and every request with its messages and safety code. `me` is `{ id, name, discoverable, introduce, ready, missing, introducers }`: `introducers` counts the friends\' jacks that introduce you (they have `discovery.introduce` on and answered their directory, counted once per jack), from each friend\'s last answer; null while no friend has answered yet. A request in state `connected` has `ended: true` once that person is no longer one of your peers (you removed them); they are then listed as `available` again and a new request is allowed.',
+    description: 'Your discovery status, the people your friends can introduce you to, and every request with its messages and safety code. `me` is `{ id, name, discoverable, introduce, ready, missing, introducers }`: `introducers` counts the friends\' jacks that introduce you (they have `discovery.introduce` on and answered their directory, counted once per jack), from each friend\'s last answer; null while no friend has answered yet. A request in state `connected` has `ended: true` once that person is no longer one of your peers (you removed them); they are then listed as `available` again and a new request is allowed. Waits at most 5 seconds for a friend\'s jack: the people of a friend that answers later, or not at all, come from that friend\'s last answer.',
     responses: { 200: { description: 'Overview' } },
   }), async c => c.json(await service.overview()))
 

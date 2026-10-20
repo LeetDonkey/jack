@@ -390,7 +390,9 @@ discoverable. Requests, answers and messages are end-to-end encrypted
 (X25519, HKDF-SHA256, AES-256-GCM, with the routing fields authenticated) and
 travel through the friend you have in common: every jack exchanges this mail
 with each of its peers once a minute, in the direction it already connects.
-The friend in between sees who writes to whom, not what.
+The friend in between sees who writes to whom, not what. A peer that doesn't
+answer is left out until jack's 5-minute check of its friends reaches it again,
+and the mail for it waits.
 
 Nothing that locates either side is sent until both have said yes: asking is
 the requester's yes, accepting is the other side's. Then each issues an API key

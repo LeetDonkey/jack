@@ -125,7 +125,8 @@ export abstract class ServerConnector {
   // or non-JSON body resolves to undefined instead of throwing; `schema` is ignored.
   // `expectedFailure`: a non-2xx answer the caller expects and handles (it still
   // throws), logged at debug instead of warn.
-  protected async fetch<TResponseSchema extends z.ZodType = z.ZodUnknown>(path: string, init: RequestInit & { schema?: TResponseSchema, query?: Record<string, string>, timeoutMs?: number, allowEmptyBody?: boolean, expectedFailure?: (status: number, body: string) => boolean } = { method: 'GET' }): Promise<z.infer<TResponseSchema>> {
+  // `quiet`: any failure is logged at debug, for a caller that logs it itself.
+  protected async fetch<TResponseSchema extends z.ZodType = z.ZodUnknown>(path: string, init: RequestInit & { schema?: TResponseSchema, query?: Record<string, string>, timeoutMs?: number, allowEmptyBody?: boolean, expectedFailure?: (status: number, body: string) => boolean, quiet?: boolean } = { method: 'GET' }): Promise<z.infer<TResponseSchema>> {
     const timeoutMs = init.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS
     const initWithAuth = {
       ...init,
@@ -167,7 +168,7 @@ export abstract class ServerConnector {
       catch (err) {
         const timedOut = err instanceof DOMException && err.name === 'TimeoutError'
         setSpanAttribute(span, 'error.timeout', timedOut)
-        logger.warn({ connector: this.name, method, url: url.toString(), timeoutMs, timedOut, err }, timedOut ? `Request timed out after ${timeoutMs}ms` : 'Request failed (network error)')
+        logger[init.quiet ? 'debug' : 'warn']({ connector: this.name, method, url: url.toString(), timeoutMs, timedOut, err }, timedOut ? `Request timed out after ${timeoutMs}ms` : 'Request failed (network error)')
         throw err
       }
 
@@ -180,7 +181,7 @@ export abstract class ServerConnector {
       if (!response.ok) {
         const body = await response.text().catch(() => 'Could not fetch body')
         setSpanAttribute(span, 'http.response.body', redactBody(body))
-        const level = init.expectedFailure?.(response.status, body) ? 'debug' : 'warn'
+        const level = init.quiet || init.expectedFailure?.(response.status, body) ? 'debug' : 'warn'
         logger[level]({ connector: this.name, method, url: url.toString(), status: response.status, body: truncateBody(body) }, 'Request failed (non-2xx)')
         throw new FetchError(`Failed to fetch url: ${response.statusText}`, response, { body, method: init.method, headers: initWithAuth.headers })
       }
@@ -217,8 +218,9 @@ export abstract class ServerConnector {
     })
   }
 
-  async ping<TResponseSchema extends z.ZodType = z.ZodUnknown>(schema?: TResponseSchema): Promise<z.infer<TResponseSchema>> {
-    return await this.fetch(this.pingPath, { method: this.pingMethod, schema })
+  /** `quiet`: a failure is logged at debug (see fetch). */
+  async ping<TResponseSchema extends z.ZodType = z.ZodUnknown>(schema?: TResponseSchema, { quiet = false }: { quiet?: boolean } = {}): Promise<z.infer<TResponseSchema>> {
+    return await this.fetch(this.pingPath, { method: this.pingMethod, schema, quiet })
   }
 
   /**

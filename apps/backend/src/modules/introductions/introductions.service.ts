@@ -4,9 +4,11 @@ import type { Identity, IntroStore, IntroThread } from './intro-store'
 import { randomUUID } from 'node:crypto'
 import { BadRequestError } from '../../lib/errors/BadRequestError'
 import { ConflictError } from '../../lib/errors/ConflictError'
+import { IncompatiblePeerError } from '../../lib/errors/IncompatiblePeerError'
 import { NotFoundError } from '../../lib/errors/NotFoundError'
 import { open, safetyCode, seal, sharedKey } from '../../lib/introductions/crypto'
 import { CardPayload, IntroEnvelope as EnvelopeSchema, MessagePayload, RequestPayload, ResponsePayload } from '../../lib/introductions/wire'
+import { peerErrorStatus } from '../../lib/net/peer-errors'
 import { logger } from '../../logger'
 
 /** The calls one jack makes to a direct friend (implemented by PeerConnector). */
@@ -23,6 +25,14 @@ export interface IntroPeer {
   introMail: (body: IntroMailRequest) => Promise<{ messages: unknown[], refused?: string[] }>
 }
 
+/** What the friend health check last found for a peer (see PeerHealthMonitor). */
+export interface IntroPeerHealth {
+  /** null before the first check. */
+  online: boolean | null
+  /** When a check last reached the peer (ISO time). */
+  lastSeenAt: string | null
+}
+
 export interface IntroductionsDeps {
   store: IntroStore
   discovery: () => DiscoveryConfig | undefined
@@ -36,6 +46,13 @@ export interface IntroductionsDeps {
   linkKey?: (apiKeyId: number, peerUrl: string) => void
   /** The peer id a key is explicitly linked to, or null. */
   keyPeerId?: (apiKeyId: number) => string | null
+  /**
+   * The friend health check's last result for a peer. Without it, a peer that
+   * stops answering is asked again at every sync.
+   */
+  health?: (peer: IntroPeer) => IntroPeerHealth
+  /** How long a caller other than the sync waits for a peer's answer (default ANSWER_WAIT_MS). */
+  answerWaitMs?: number
   now?: () => Date
 }
 
@@ -58,6 +75,11 @@ const PROFILE_TTL_MS = 10 * 60_000
 const DIRECTORY_TTL_MS = 5 * 60_000
 const SYNC_INTERVAL_MS = 60_000
 const MAX_PENDING_OUTGOING = 20
+// The Friends page, a friend's directory call and the mail handling wait this
+// long for a peer's answer, then go on with what jack has; the call finishes in
+// the background and its answer counts from the next caller on. Only the sync
+// waits for the answer.
+const ANSWER_WAIT_MS = 5_000
 
 interface ProfileEntry {
   /** When the call ended. */
@@ -69,6 +91,14 @@ interface ProfileEntry {
   untilConnected: boolean
 }
 
+interface DirectoryEntry {
+  /** When the call ended. */
+  at: number
+  directory: IntroDirectory | null
+  /** The peer answered the directory call once (a directory, or 404 when it doesn't introduce); a failed call keeps the last answer. */
+  answered: boolean
+}
+
 /**
  * A peer whose connection failed. Any call to it would first connect again, a
  * full handshake that waits out the request timeout when the host doesn't answer
@@ -77,6 +107,25 @@ interface ProfileEntry {
  */
 function isDown(peer: IntroPeer): boolean {
   return !peer.isInitialized && peer.initializationError != null
+}
+
+/** A failed call the peer (or its proxy) answered, so it costs no timeout. */
+function peerAnswered(err: unknown): boolean {
+  return peerErrorStatus(err) != null || err instanceof IncompatiblePeerError
+}
+
+/** The call's result, or `fallback()` once `ms` have passed; the call goes on either way. */
+async function within<T>(call: Promise<T>, ms: number, fallback: () => T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback()), Math.max(0, ms))
+  })
+  try {
+    return await Promise.race([call, late])
+  }
+  finally {
+    clearTimeout(timer)
+  }
 }
 
 /**
@@ -95,15 +144,22 @@ function isDown(peer: IntroPeer): boolean {
  */
 export class IntroductionsService {
   private readonly profiles = new Map<string, ProfileEntry>()
-  // The profile call running per peer: callers that come in meanwhile share it.
+  // The profile and directory call running per peer: callers that come in
+  // meanwhile share it.
   private readonly profileCalls = new Map<string, Promise<IntroProfile | null>>()
-  // `answered`: the peer answered the directory call once (a directory, or 404
-  // when it doesn't introduce); a failed call keeps the last answer.
-  private readonly directories = new Map<string, { at: number, directory: IntroDirectory | null, answered: boolean }>()
+  private readonly directories = new Map<string, DirectoryEntry>()
+  private readonly directoryCalls = new Map<string, Promise<DirectoryEntry>>()
+  // When a call to a peer last got no answer (see reachable).
+  private readonly unanswered = new Map<string, number>()
+  // The peers left out right now, so going and coming back is logged once.
+  private readonly leftOut = new Set<string>()
+  private readonly answerWaitMs: number
   private timer: ReturnType<typeof setInterval> | undefined
   private syncing: Promise<void> | undefined
 
-  constructor(private readonly deps: IntroductionsDeps) {}
+  constructor(private readonly deps: IntroductionsDeps) {
+    this.answerWaitMs = deps.answerWaitMs ?? ANSWER_WAIT_MS
+  }
 
   private get now(): Date {
     return (this.deps.now ?? (() => new Date()))()
@@ -154,16 +210,21 @@ export class IntroductionsService {
 
   /** A peer's url, and so its id, changed: keep what it reported under the new id. */
   movePeer(oldPeerId: string, newPeerId: string): void {
-    this.profiles.delete(oldPeerId)
-    this.directories.delete(oldPeerId)
+    this.dropPeer(oldPeerId)
     this.deps.store.movePeer(oldPeerId, newPeerId)
   }
 
   /** A peer was removed: forget what it reported. */
   forgetPeer(peerId: string): void {
+    this.dropPeer(peerId)
+    this.deps.store.forgetPeer(peerId)
+  }
+
+  private dropPeer(peerId: string): void {
     this.profiles.delete(peerId)
     this.directories.delete(peerId)
-    this.deps.store.forgetPeer(peerId)
+    this.unanswered.delete(peerId)
+    this.leftOut.delete(peerId)
   }
 
   private storedIdentity(peerId: string): string | null {
@@ -279,12 +340,12 @@ export class IntroductionsService {
     this.deps.store.prune()
     const me = this.identity
     for (const { peer, profile } of await this.peerProfiles({ refresh: true })) {
-      // Mail for a peer that is down waits in the outbox.
-      if (!profile || isDown(peer))
+      // Mail for a peer that is down or doesn't answer waits in the outbox.
+      if (!profile || !this.reachable(peer))
         continue
       const outgoing = this.deps.store.mailFor(profile.id, me.id)
       try {
-        const { messages, refused } = await peer.introMail({ self: { id: me.id, publicKey: me.publicKey }, messages: outgoing, introduces: this.deps.discovery()?.introduce ?? false })
+        const { messages, refused } = await this.ask(peer, () => peer.introMail({ self: { id: me.id, publicKey: me.publicKey }, messages: outgoing, introduces: this.deps.discovery()?.introduce ?? false }))
         // What the peer won't carry yet stays in our outbox for the next sync.
         const kept = new Set(refused ?? [])
         this.deps.store.delivered(outgoing.filter(e => !kept.has(e.id)).map(e => e.id))
@@ -301,22 +362,77 @@ export class IntroductionsService {
   }
 
   /**
+   * Whether to call a peer now. Left out:
+   * - a peer that is down (see isDown);
+   * - a peer the health check finds offline;
+   * - a peer that didn't answer a call, until a health check after that call
+   *   reaches it. A friend whose host is off or hung costs every call the full
+   *   request timeout, and the health check asks every 5 minutes anyway.
+   *
+   * Without a health check (see IntroductionsDeps.health) only the first applies.
+   */
+  private reachable(peer: IntroPeer): boolean {
+    if (isDown(peer))
+      return false
+    const health = this.deps.health?.(peer)
+    const failedAt = this.unanswered.get(peer.id)
+    if (failedAt !== undefined && health?.lastSeenAt != null && Date.parse(health.lastSeenAt) >= failedAt)
+      this.unanswered.delete(peer.id)
+    const away = health?.online === false || this.unanswered.has(peer.id)
+    if (away !== this.leftOut.has(peer.id)) {
+      const name = peer.name ?? peer.url
+      if (away) {
+        this.leftOut.add(peer.id)
+        // Also a friend whose jack answers with a refusal: the health check
+        // logs the reason, so this line doesn't claim they don't answer.
+        logger.info({ peer: name }, `jack can't reach ${name}; introductions leave them out until it can`)
+      }
+      else {
+        this.leftOut.delete(peer.id)
+        logger.info({ peer: name }, `jack reaches ${name} again; introductions include them`)
+      }
+    }
+    return !away
+  }
+
+  /** A call to a peer. One that gets no answer leaves the peer out (see reachable). */
+  private async ask<T>(peer: IntroPeer, call: () => Promise<T>): Promise<T> {
+    try {
+      return await call()
+    }
+    catch (err) {
+      if (this.deps.health && !peerAnswered(err)) {
+        this.unanswered.set(peer.id, this.now.getTime())
+        this.reachable(peer)
+      }
+      throw err
+    }
+  }
+
+  /**
    * What each peer's jack reported about itself. Only the sync (`refresh`) asks
    * again for what it has: after PROFILE_TTL_MS, or as soon as jack is connected
-   * to a peer it couldn't ask before. Every other caller, such as the Friends
-   * page or a friend's directory call, asks only a peer it has nothing from yet,
-   * so it doesn't wait for one that went down. No caller asks a peer that is down
-   * (see isDown).
+   * to a peer it couldn't ask before, and only the sync waits for the answer.
+   * Every other caller, such as the Friends page or a friend's directory call,
+   * asks only a peer it has nothing from yet, and waits until `until`
+   * (performance.now() time; default answerWaitMs from now). No caller asks a
+   * peer that is left out (see reachable).
    */
-  private async peerProfiles({ refresh = false }: { refresh?: boolean } = {}): Promise<Array<{ peer: IntroPeer, profile: IntroProfile | null }>> {
+  private async peerProfiles({ refresh = false, until = this.waitUntil() }: { refresh?: boolean, until?: number } = {}): Promise<Array<{ peer: IntroPeer, profile: IntroProfile | null }>> {
     const now = this.now.getTime()
     return Promise.all(this.deps.peers().map(async (peer) => {
       const cached = this.profiles.get(peer.id)
       const due = !cached || (refresh && (now - cached.at >= PROFILE_TTL_MS || (cached.untilConnected && peer.isInitialized)))
-      if (!due || isDown(peer))
+      if (!due || !this.reachable(peer))
         return { peer, profile: cached?.profile ?? null }
-      return { peer, profile: await this.askProfile(peer) }
+      const call = this.askProfile(peer)
+      const profile = refresh ? await call : await within(call, until - performance.now(), () => this.profiles.get(peer.id)?.profile ?? null)
+      return { peer, profile }
     }))
+  }
+
+  private waitUntil(): number {
+    return performance.now() + this.answerWaitMs
   }
 
   private askProfile(peer: IntroPeer): Promise<IntroProfile | null> {
@@ -325,7 +441,7 @@ export class IntroductionsService {
       return running
     const call = (async () => {
       try {
-        const profile = await peer.introProfile()
+        const profile = await this.ask(peer, () => peer.introProfile())
         // An answer, so the stored identity follows it (null: no introductions there).
         this.storeIdentity(peer.id, profile?.id ?? null)
         this.profiles.set(peer.id, { at: this.now.getTime(), profile, answered: true, untilConnected: false })
@@ -345,20 +461,46 @@ export class IntroductionsService {
     return call
   }
 
-  private async peerDirectories(): Promise<Array<{ peer: IntroPeer, directory: IntroDirectory }>> {
+  /**
+   * The friends each peer can introduce us to, asked again after
+   * DIRECTORY_TTL_MS. Waits until `until` (as in peerProfiles) and never asks a
+   * peer that is left out (see reachable): both use the last answer.
+   */
+  private async peerDirectories({ until = this.waitUntil() }: { until?: number } = {}): Promise<Array<{ peer: IntroPeer, directory: IntroDirectory }>> {
     const now = this.now.getTime()
     const all = await Promise.all(this.deps.peers().map(async (peer) => {
       const cached = this.directories.get(peer.id)
-      if ((cached && now - cached.at < DIRECTORY_TTL_MS) || isDown(peer))
+      if ((cached && now - cached.at < DIRECTORY_TTL_MS) || !this.reachable(peer))
         return { peer, directory: cached?.directory ?? null }
-      const entry = await peer.introDirectory().then(
-        directory => ({ at: now, directory, answered: true }),
-        () => ({ at: now, directory: cached?.directory ?? null, answered: cached?.answered ?? false }),
-      )
-      this.directories.set(peer.id, entry)
-      return { peer, directory: entry.directory }
+      const entry = await within(this.askDirectory(peer), until - performance.now(), () => this.directories.get(peer.id) ?? null)
+      return { peer, directory: entry?.directory ?? null }
     }))
     return all.filter((d): d is { peer: IntroPeer, directory: IntroDirectory } => d.directory != null)
+  }
+
+  private askDirectory(peer: IntroPeer): Promise<DirectoryEntry> {
+    const running = this.directoryCalls.get(peer.id)
+    if (running)
+      return running
+    const call = (async () => {
+      let entry: DirectoryEntry
+      try {
+        const directory = await this.ask(peer, () => peer.introDirectory())
+        entry = { at: this.now.getTime(), directory, answered: true }
+      }
+      catch {
+        const last = this.directories.get(peer.id)
+        entry = { at: this.now.getTime(), directory: last?.directory ?? null, answered: last?.answered ?? false }
+      }
+      this.directories.set(peer.id, entry)
+      return entry
+    })()
+    this.directoryCalls.set(peer.id, call)
+    void call.finally(() => {
+      if (this.directoryCalls.get(peer.id) === call)
+        this.directoryCalls.delete(peer.id)
+    })
+    return call
   }
 
   // ── Mail handling ──────────────────────────────────────────────────────────
@@ -528,13 +670,16 @@ export class IntroductionsService {
       ...(name ? [] : ['the name friends see']),
       ...(this.deps.external() ? [] : ['the address friends use']),
     ]
-    const profiles = await this.peerProfiles()
+    // Directories after profiles, so a peer found down meanwhile isn't asked, and
+    // both within one answerWaitMs: the page never waits on a friend for longer.
+    const until = this.waitUntil()
+    const profiles = await this.peerProfiles({ until })
     // People who already are our peers, also while they are down.
     const ownPeerIds = this.knownIdentities(profiles)
     const ended = this.endedThreads(profiles)
     const threads = this.deps.store.threads()
     const people = new Map<string, DirectoryPerson>()
-    const directories = await this.peerDirectories()
+    const directories = await this.peerDirectories({ until })
     for (const { peer, directory } of directories) {
       for (const person of directory.people) {
         if (person.id === me.id || ownPeerIds.has(person.id))

@@ -115,8 +115,11 @@ The failures come from:
   [above](#indexer-test-says-query-successful-but-no-results)).
 
 jack checks after every registration whether the *arr skips its indexer, and
-every few minutes after that. The server's card under ***Settings -> Radarr &
-Sonarr*** then says ***Radarr is skipping jack's indexer for a while***. When
+every few minutes after that. The *arr updates that answer a few seconds after
+jack saves the indexer, so a pause found right after a registration is checked
+once more 15 seconds later. The server's card under ***Settings -> Radarr &
+Sonarr*** then says ***Radarr is skipping jack's indexer after earlier
+errors***, and the dashboard lists it under ***Worth knowing***. When
 jack's feed has releases for that *arr, jack runs a test that passes, and a
 passing test ends the pause right away. jack does that at every registration,
 after you add or save a friend, and every 30 minutes while the pause lasts.

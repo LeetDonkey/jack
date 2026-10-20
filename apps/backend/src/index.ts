@@ -133,6 +133,15 @@ const pieceHasher = new PieceHasher(database.sqlite)
 const securityConfig = () => configService?.getSecurity() ?? SecurityConfig.parse(config.security ?? {})
 const bans = new BanList(database.sqlite, securityConfig)
 
+// Notifications (webhooks) and peer reachability, read live from the config.
+// Before introductions, which leave out a friend the health check finds offline.
+const notificationsConfig = () => configService?.getNotifications() ?? config.notifications
+const notifications = new NotificationsService(notificationsConfig)
+const peerHealth = new PeerHealthMonitor(
+  () => connectorManager.peers,
+  () => (notificationsConfig()?.peerOfflineMinutes ?? 60) * 60_000,
+)
+
 // Meeting friends of friends. Needs the management API's config service, since
 // accepting adds a peer to the config file.
 const apiKeysController = new ApiKeysController(apiKeysRepository, { meta: apiKeyMeta })
@@ -157,6 +166,7 @@ const introductions = configService
       addPeer: peer => configService.addPeer(peer, { force: true }),
       linkKey: (apiKeyId, peerUrl) => apiKeyMeta.setPeer(apiKeyId, generateId(peerUrl)),
       keyPeerId: apiKeyId => apiKeyMeta.get(apiKeyId).peerId,
+      health: peer => peerHealth.get({ id: peer.id, name: peer.name ?? peer.url, url: peer.url }),
     })
   : undefined
 introductions?.start()
@@ -210,13 +220,6 @@ const importWatcher = downloadsConfig
     })
   : undefined
 
-// Notifications (webhooks) and peer reachability, read live from the config.
-const notificationsConfig = () => configService?.getNotifications() ?? config.notifications
-const notifications = new NotificationsService(notificationsConfig)
-const peerHealth = new PeerHealthMonitor(
-  () => connectorManager.peers,
-  () => (notificationsConfig()?.peerOfflineMinutes ?? 60) * 60_000,
-)
 peerHealth.onEvent((event) => {
   void notifications.send(peerHealthNotification(event))
 })

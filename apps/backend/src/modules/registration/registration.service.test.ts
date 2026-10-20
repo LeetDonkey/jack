@@ -790,6 +790,84 @@ describe('RegistrationService', () => {
     expect(dest.calls.indexers).toHaveLength(1)
   })
 
+  test('a pause found right after a registration is read once more a little later, and a pause that ended clears', async () => {
+    // The *arr reports a pause that already ended until its health check runs
+    // again, a few seconds after jack saved the indexer.
+    const reads = { ended: 0, lasting: 0, none: 0 }
+    const ended = stubDest({
+      isIndexerPaused: async () => ++reads.ended === 1,
+      testIndexer: async () => failure(NO_RESULTS),
+    })
+    const lasting = stubDest({
+      id: 'srv-b',
+      isIndexerPaused: async () => {
+        reads.lasting++
+        return true
+      },
+      testIndexer: async () => failure(NO_RESULTS),
+    })
+    const none = stubDest({
+      id: 'srv-c',
+      isIndexerPaused: async () => {
+        reads.none++
+        return false
+      },
+    })
+    const registrations = service([ended, lasting, none], { pauseRecheckMs: 50 })
+    await registrations.registerAll()
+    expect(registrations.registration('srv-a')).toMatchObject({ indexerPaused: true })
+    let notified = 0
+    registrations.subscribe(() => notified++)
+
+    await Bun.sleep(120)
+    expect(reads).toEqual({ ended: 2, lasting: 2, none: 1 })
+    expect(registrations.registration('srv-a')).toMatchObject({ indexerPaused: false, message: null })
+    expect(registrations.registration('srv-b')).toMatchObject({ indexerPaused: true })
+    expect(notified).toBe(1)
+
+    // A pause that ended needs no test of the feed 30 minutes later.
+    now += 30 * 60_000
+    await registrations.refreshPauses()
+    await Bun.sleep(5)
+    expect(ended.calls.indexerTests).toHaveLength(1)
+    expect(lasting.calls.indexerTests).toHaveLength(2)
+  })
+
+  test('the second read of a pause is dropped when the destination registers again, is forgotten, or the service stops', async () => {
+    let reads = 0
+    const answers: boolean[] = []
+    const dest = stubDest({
+      isIndexerPaused: async () => {
+        reads++
+        return answers.shift() ?? false
+      },
+      testIndexer: async () => failure(NO_RESULTS),
+    })
+    const registrations = service([dest], { pauseRecheckMs: 20 })
+
+    // Registered again: that registration's own read counts.
+    answers.push(true, false)
+    await registrations.register(dest)
+    await registrations.register(dest)
+    await Bun.sleep(60)
+    expect(reads).toBe(2)
+    expect(registrations.registration('srv-a')).toMatchObject({ indexerPaused: false })
+
+    answers.push(true)
+    await registrations.register(dest)
+    registrations.forget('srv-a')
+    await Bun.sleep(60)
+    expect(reads).toBe(3)
+    expect(registrations.registration('srv-a')).toBeNull()
+
+    answers.push(true)
+    await registrations.register(dest)
+    registrations.stop()
+    await Bun.sleep(60)
+    expect(reads).toBe(4)
+    expect(registrations.registration('srv-a')).toMatchObject({ indexerPaused: true })
+  })
+
   test('a test of the feed in a paused *arr registers again only when the test failed', async () => {
     let answer: 'empty' | 'slow' | 'missing' = 'empty'
     const dest = stubDest({

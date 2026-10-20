@@ -193,6 +193,10 @@ are active.*** jack-ui itself never needs a restart.
    take up to 30 seconds. The dialog then shows the result:
 
    - ***jack is set up in Radarr.*** when both tests passed. Click ***Done***.
+     Until you have a friend, the dialog adds that the ***Test*** button on
+     jack's indexer in Radarr fails for now: jack's feed has nothing to list
+     yet. Leave that button alone until a friend shares movies, because
+     pressing it can make Radarr skip jack's indexer for a while.
    - ***Restart the jack container so Radarr can use jack's download
      client.*** when you turned on downloads in step 2 and haven't restarted
      jack since.

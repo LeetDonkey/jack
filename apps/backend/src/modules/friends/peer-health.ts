@@ -52,6 +52,42 @@ export function peerHealthNotification(event: PeerHealthEvent): Notification {
   }
 }
 
+// Why jack couldn't reach a peer, by the code of its last failed check.
+const UNREACHABLE_DETAIL: Partial<Record<PeerErrorCode, string>> = {
+  timeout: 'it didn\'t answer in time',
+  dns: 'the address doesn\'t resolve',
+  refused: 'nothing accepts connections at that address',
+  tls: 'its HTTPS certificate was rejected',
+}
+
+/**
+ * The log line for a peer that was online and fails a check, worded like
+ * peerHealthNotification: a jack that rejects the key, blocks us or runs a
+ * version jack can't talk to did answer, so it isn't called offline.
+ */
+export function peerFailedCheckMessage(name: string, code: PeerErrorCode): string {
+  let problem: string
+  switch (code) {
+    case 'unauthorized':
+      problem = `${name}'s jack rejected your key; ask ${name} for a new link`
+      break
+    case 'forbidden':
+      problem = `${name}'s jack is blocking you; ask ${name} to check their jack`
+      break
+    case 'incompatible':
+      problem = `${name}'s jack runs a version jack can't talk to; downloads from them wait until ${name} updates jack`
+      break
+    case 'unavailable':
+      problem = `${name}'s jack or its proxy answered with an error or cut the connection`
+      break
+    default: {
+      const detail = UNREACHABLE_DETAIL[code]
+      problem = `jack can't reach ${name}'s jack${detail ? `: ${detail}` : ''}`
+    }
+  }
+  return `${problem}. jack checks again every 5 minutes`
+}
+
 const CHECK_INTERVAL_MS = 5 * 60_000
 
 /** The connector calls a check makes. */
@@ -71,7 +107,9 @@ export interface PeerHealthOptions {
  * Asks every configured peer for its handshake every 5 minutes, so the friends
  * view can show who is reachable even when nothing is transferring. Emits
  * `offline` once a peer has been unreachable for `offlineAfterMs`, and `back`
- * when such a peer answers again.
+ * when such a peer answers again. The log says once when a peer that was online
+ * fails a check and once when it passes again; the failed checks in between log
+ * at debug.
  *
  * It is the one source of a friend's status: a peer that answers with a version
  * jack can't talk to counts as offline (`incompatible`), and a peer that answers
@@ -173,10 +211,13 @@ export class PeerHealthMonitor {
     const health = state.health
     health.name = peer.name ?? peer.url
     health.checkedAt = now.toISOString()
+    const wasOnline = health.online
     let version: string | null = null
     let build: BuildIdentity | null = null
     try {
-      const handshake = await peer.ping() as { version?: unknown } | null
+      // A peer that is offline already fails quietly: going offline and coming
+      // back are logged once each, below.
+      const handshake = await peer.ping(undefined, { quiet: wasOnline === false }) as { version?: unknown } | null
       version = typeof handshake?.version === 'string' ? handshake.version : null
       build = handshakeBuild(handshake)
       if (!version || !isPeerVersionCompatible(version))
@@ -189,6 +230,8 @@ export class PeerHealthMonitor {
       health.lastError = null
       health.lastErrorCode = null
       health.offlineSince = null
+      if (wasOnline === false)
+        logger.info({ peer: health.name }, `${health.name} is back online`)
       if (wasOffline && state.offlineNotified) {
         state.offlineNotified = false
         this.emit({ type: 'back', peer: { ...health }, offlineMinutes: Math.round((now.getTime() - Date.parse(wasOffline)) / 60_000) })
@@ -203,6 +246,8 @@ export class PeerHealthMonitor {
       health.lastError = err instanceof Error ? err.message : String(err)
       health.lastErrorCode = code
       health.offlineSince ??= now.toISOString()
+      if (wasOnline === true)
+        logger.info({ peer: health.name, code, error: health.lastError }, peerFailedCheckMessage(health.name, code))
       const offlineMs = now.getTime() - Date.parse(health.offlineSince)
       if (!state.offlineNotified && offlineMs >= this.offlineAfterMs()) {
         state.offlineNotified = true

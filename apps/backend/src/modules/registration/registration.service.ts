@@ -85,6 +85,8 @@ export interface RegistrationServiceDeps {
   indexerTestTimeoutMs?: number
   /** How long to wait before testing a failed download client once more (default 5 s). */
   clientRetryDelayMs?: number
+  /** How long after a registration that found jack's indexer skipped jack asks once more (default 15 s). */
+  pauseRecheckMs?: number
 }
 
 /** Which *arr API authenticated with the key jack gave it. */
@@ -136,6 +138,10 @@ const LATE_INIT_DEBOUNCE_MS = 1000
 const PAUSE_CHECK_MS = 2 * 60_000
 const PAUSE_TIMER_MS = 5 * 60_000
 const PAUSE_RETRY_MS = 30 * 60_000
+// Radarr and Sonarr run their health check again a few seconds after jack saves
+// its indexer, so the read right after a registration can still show a pause
+// that has ended. A pause found then is read once more after this long.
+const DEFAULT_PAUSE_RECHECK_MS = 15_000
 
 function logRegistrationFailure(what: string, destName: string, err: unknown) {
   if (err instanceof FetchError) {
@@ -201,11 +207,14 @@ export class RegistrationService implements RegistrationStatus {
   private readonly initRetries = new Map<string, { attempts: number, nextAt: number }>()
   // When jack may test the feed again in an *arr that skips its indexer.
   private readonly pauseRetryAt = new Map<string, number>()
+  // The second read of a pause a registration found, per destination (see recheckPause).
+  private readonly pauseRechecks = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly subscribers = new Set<() => void>()
   private readonly now: () => number
   private readonly testTimeoutMs: number
   private readonly indexerTestTimeoutMs: number
   private readonly clientRetryDelayMs: number
+  private readonly pauseRecheckMs: number
   private retryTimer: ReturnType<typeof setInterval> | undefined
   private pauseTimer: ReturnType<typeof setInterval> | undefined
   private lateInitTimer: ReturnType<typeof setTimeout> | undefined
@@ -216,6 +225,7 @@ export class RegistrationService implements RegistrationStatus {
     this.testTimeoutMs = deps.testTimeoutMs ?? DEFAULT_TEST_TIMEOUT_MS
     this.indexerTestTimeoutMs = deps.indexerTestTimeoutMs ?? DEFAULT_INDEXER_TEST_TIMEOUT_MS
     this.clientRetryDelayMs = deps.clientRetryDelayMs ?? DEFAULT_CLIENT_RETRY_DELAY_MS
+    this.pauseRecheckMs = deps.pauseRecheckMs ?? DEFAULT_PAUSE_RECHECK_MS
   }
 
   subscribe(subscriber: () => void): () => void {
@@ -279,6 +289,8 @@ export class RegistrationService implements RegistrationStatus {
   forget(destinationId: string): void {
     this.states.delete(destinationId)
     this.pauseRetryAt.delete(destinationId)
+    clearTimeout(this.pauseRechecks.get(destinationId))
+    this.pauseRechecks.delete(destinationId)
     if (this.results.delete(destinationId))
       this.notify()
   }
@@ -568,6 +580,9 @@ export class RegistrationService implements RegistrationStatus {
     this.pauseTimer = undefined
     clearTimeout(this.lateInitTimer)
     this.lateInitTimer = undefined
+    for (const timer of this.pauseRechecks.values())
+      clearTimeout(timer)
+    this.pauseRechecks.clear()
   }
 
   private publish(destinationId: string, state: DestinationState): DestinationRegistration {
@@ -638,9 +653,44 @@ export class RegistrationService implements RegistrationStatus {
       this.pauseRetryAt.set(dest.id, state.pauseCheckedAt + PAUSE_RETRY_MS)
     else
       this.pauseRetryAt.delete(dest.id)
+    this.recheckPause(dest, state)
     const result = this.publish(dest.id, state)
     this.logTests(dest, result)
     return result
+  }
+
+  /**
+   * After a registration that found jack's indexer skipped, ask the *arr once
+   * more after pauseRecheckMs (see DEFAULT_PAUSE_RECHECK_MS). The registration
+   * saved the indexer just before it asked, so the *arr may not have run its
+   * health check again yet, and the pause it reported may have ended.
+   */
+  private recheckPause(dest: ArrServerConnector, state: DestinationState): void {
+    clearTimeout(this.pauseRechecks.get(dest.id))
+    this.pauseRechecks.delete(dest.id)
+    if (!state.paused)
+      return
+    const timer = setTimeout(() => {
+      this.pauseRechecks.delete(dest.id)
+      void this.readPauseAgain(dest, state)
+    }, this.pauseRecheckMs)
+    timer.unref?.()
+    this.pauseRechecks.set(dest.id, timer)
+  }
+
+  private async readPauseAgain(dest: ArrServerConnector, state: DestinationState): Promise<void> {
+    // A registration that ran meanwhile replaced the state, and asked itself.
+    const current = () => this.states.get(dest.id) === state && state.paused === true
+    if (!current())
+      return
+    const paused = await this.readPause(dest, this.deps.internalUrl())
+    if (paused !== false || !current())
+      return
+    state.paused = false
+    state.pauseCheckedAt = this.now()
+    this.pauseRetryAt.delete(dest.id)
+    logger.info({ destination: dest.name }, `${dest.name} no longer skips jack's indexer`)
+    this.publish(dest.id, state)
   }
 
   /**
