@@ -476,7 +476,8 @@ from:
    prompted for the key once (***Enter the Management key***); it's validated
    against the management API and stored in a sealed `HttpOnly` cookie. Set
    `JACK_SESSION_KEY` in production, at least 32 characters, to seal that
-   cookie.
+   cookie. With an empty or shorter value, the UI shows ***jack-ui is missing
+   a key*** instead of the prompt.
 
 When the UI can't use the management API, it shows ***jack-ui can't reach
 jack***, with the address it tried and what to check, or ***jack rejected

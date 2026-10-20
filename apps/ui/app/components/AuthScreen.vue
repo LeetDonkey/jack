@@ -191,6 +191,23 @@ const unreachable = computed<{ lead: string, suffix?: string, checks: string[] }
         </template>
       </UAlert>
 
+      <!-- The jack-ui template has neither a Management key nor a Session key it can use -->
+      <UAlert
+        v-else-if="state.status === 'error' && state.reason === 'session-key'"
+        color="error"
+        variant="soft"
+        icon="i-ph-key"
+        title="jack-ui is missing a key"
+        :actions="actions('error')"
+      >
+        <template #description>
+          <p>{{ state.message }}</p>
+          <p class="mt-2">
+            This page checks again every 5 seconds.
+          </p>
+        </template>
+      </UAlert>
+
       <!-- Unexpected error -->
       <UAlert
         v-else-if="state.status === 'error'"

@@ -1,5 +1,6 @@
 import type { H3Event } from 'h3'
 import type { ProbeResult } from './upstream'
+import { canSealSession, MISSING_KEY_MESSAGE } from './session-key'
 import { probeJack } from './upstream'
 
 const SESSION_NAME = 'jack_management'
@@ -24,8 +25,16 @@ function isSecure(event: H3Event): boolean {
   return getRequestProtocol(event) === 'https'
 }
 
+/**
+ * The sealed session that holds the key in cookie mode. Callers check
+ * canSealSession first: without a session key that can seal it, there is no
+ * session to open.
+ */
 export function getManagementSession(event: H3Event) {
   const { sessionKey } = useRuntimeConfig(event)
+  // iron-webcrypto's own error, "Empty password", says nothing about the template.
+  if (!canSealSession(sessionKey))
+    throw createError({ statusCode: 500, statusMessage: MISSING_KEY_MESSAGE })
   return useSession<SessionData>(event, {
     name: SESSION_NAME,
     // h3's `useSession` calls this option `password`; it's our session secret.
@@ -45,9 +54,14 @@ export function getManagementSession(event: H3Event) {
  * comes from the sealed session cookie set at login (null until the user logs in).
  */
 export async function resolveKey(event: H3Event): Promise<ResolvedKey> {
-  const { managementKey } = useRuntimeConfig(event)
+  const { managementKey, sessionKey } = useRuntimeConfig(event)
   if (managementKey)
     return { key: managementKey, mode: 'env' }
+
+  // No session key to seal a cookie with, so nobody can have signed in.
+  // /api/ping says what to fix.
+  if (!canSealSession(sessionKey))
+    return { key: null, mode: 'cookie' }
 
   const session = await getManagementSession(event)
   return { key: session.data.key ?? null, mode: 'cookie' }

@@ -18,6 +18,10 @@ describe('authScreenChecksAgain', () => {
     expect(authScreenChecksAgain({ status: 'error', mode: 'env', reason: 'unauthorized' })).toBe(true)
   })
 
+  test('missing keys check again, since Apply restarts jack-ui with the new template', () => {
+    expect(authScreenChecksAgain({ status: 'error', mode: 'cookie', reason: 'session-key', message: 'Management key is empty' })).toBe(true)
+  })
+
   test('the key form waits for the user', () => {
     expect(authScreenChecksAgain({ status: 'needs-key', mode: 'cookie' })).toBe(false)
   })

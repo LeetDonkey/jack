@@ -268,10 +268,15 @@ instead of the console. The address in each message is
   [`MANAGEMENT_PORT`](../reference/environment-variables.md#management-port).
 - ***jack rejected jack-ui's key***: `JACK_MANAGEMENT_KEY` differs between the
   two services. The example compose file reads both from one `.env` entry.
+- ***jack-ui is missing a key***: the jack-ui service has no
+  `JACK_MANAGEMENT_KEY`, and its `JACK_SESSION_KEY` is set but empty or shorter
+  than 32 characters. Set `JACK_MANAGEMENT_KEY` to jack's key, or, for a login
+  prompt, set `JACK_SESSION_KEY` to at least 32 characters.
 
 The checks listed on that screen use the names from the Unraid templates:
-***Management key*** is `JACK_MANAGEMENT_KEY`, and ***Management API*** is
-`JACK_MANAGEMENT_API_URL`. ***Retry*** checks again.
+***Management key*** is `JACK_MANAGEMENT_KEY`, ***Session key*** is
+`JACK_SESSION_KEY`, and ***Management API*** is `JACK_MANAGEMENT_API_URL`.
+***Retry*** checks again.
 
 ## Management UI stuck on "Reconnecting..."
 

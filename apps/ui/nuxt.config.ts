@@ -43,6 +43,8 @@ export default defineNuxtConfig({
     managementKey: '',
     // Seals the cookie that holds the management key in cookie mode. MUST be set
     // (>= 32 chars) in production; the default is a clearly-insecure dev value.
+    // An empty JACK_SESSION_KEY (Unraid passes empty fields as '') replaces it;
+    // without a managementKey too, /api/ping says what to set (server/utils/session-key.ts).
     sessionKey: 'dev-insecure-session-key-change-me-please-1234',
   },
 })

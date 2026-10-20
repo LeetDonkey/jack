@@ -1,8 +1,10 @@
 export type AuthStatus = 'loading' | 'ok' | 'needs-key' | 'disabled' | 'error'
 export type AuthMode = 'env' | 'cookie' | null
 // Why /api/ping couldn't use jack: 'dns', 'down' and 'timeout' mean jack-ui
-// can't reach it, 'unauthorized' that jack rejected the jack-ui template's key.
-export type AuthProbeReason = 'dns' | 'down' | 'timeout' | 'unauthorized'
+// can't reach it, 'unauthorized' that jack rejected the jack-ui template's key,
+// and 'session-key' that the jack-ui template has neither a Management key nor a
+// Session key it can sign you in with.
+export type AuthProbeReason = 'dns' | 'down' | 'timeout' | 'unauthorized' | 'session-key'
 
 export interface AuthState {
   status: AuthStatus

@@ -121,8 +121,8 @@ limits and the daily summary follow it.
 
 Click ***Apply***, then open the interface from the jack-ui icon in the Docker
 tab (***WebUI***) or at `http://<your-server-ip>:3000`. If it shows ***jack-ui
-can't reach jack*** or ***jack rejected jack-ui's key*** instead, see
-[Troubleshooting](#troubleshooting).
+can't reach jack***, ***jack rejected jack-ui's key*** or ***jack-ui is missing
+a key*** instead, see [Troubleshooting](#troubleshooting).
 
 In the Docker tab, switch on ***Autostart*** for jack and jack-ui. Without it,
 both stay stopped after the server or Docker restarts.
@@ -409,12 +409,11 @@ friends see*** and ***Address friends use*** from step 6.
 - **Apply on jack-ui ends with "port is already allocated"**: another
   container uses port 3000. Set ***Web UI port*** to a free port, such as
   3010, and click ***Apply*** again.
-- **jack-ui shows *Something went wrong* and *Could not reach the UI
-  server***: ***Management key*** is empty in the jack-ui template, and
-  ***Session key*** is empty or shorter than 32 characters. Paste the key you
-  saved in step 3 into ***Management key***, or, for a login prompt, set
-  ***Session key*** (under ***Show more settings***) to an
-  `openssl rand -hex 32` value, and click ***Apply***.
+- **jack-ui shows *jack-ui is missing a key***: ***Management key*** is empty
+  in the jack-ui template, and ***Session key*** is empty or shorter than 32
+  characters. Paste the key you saved in step 3 into ***Management key***, or,
+  for a login prompt, set ***Session key*** (under ***Show more settings***) to
+  an `openssl rand -hex 32` value, and click ***Apply***.
 - **jack-ui shows *jack-ui can't reach jack***: the screen names the address it
   tried (`http://jack:5226` by default) and what it found:
   - ***jack-ui can't find jack***: the jack container is stopped, isn't on the
