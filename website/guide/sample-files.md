@@ -6,7 +6,7 @@ description: Copy ready-to-use Docker Compose, environment, JSONC configuration,
 
 The example files jack ships with, rendered straight from the repo's
 [`examples/`](https://github.com/roziscoding/jack/tree/main/examples) folder.
-[Getting started](/guide/getting-started) walks through adapting them.
+[Getting started](./getting-started.md) walks through adapting them.
 
 Fetch them all:
 
@@ -27,7 +27,7 @@ The standard deployment: the jack backend plus the management UI.
 ## `config.jsonc`
 
 The configuration template. The
-[configuration reference](/reference/configuration) documents every key.
+[configuration reference](../reference/configuration.md) documents every key.
 
 <<< ../../examples/config.jsonc{jsonc}
 
@@ -41,7 +41,8 @@ Secrets and optional overrides read by the compose file. Ships as
 ## `compose-with-otel.yml`
 
 An alternative compose that adds an [OpenObserve](https://openobserve.ai)
-service and wires jack's [OpenTelemetry](/reference/environment-variables#opentelemetry)
-tracing to it.
+service and wires jack's
+[OpenTelemetry](../reference/environment-variables.md#opentelemetry) tracing to
+it.
 
 <<< ../../examples/compose-with-otel.yml

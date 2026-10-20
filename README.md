@@ -1,10 +1,8 @@
 # jack
 
 <p align="center">
-  <a href="https://github.com/roziscoding/jack/releases/latest"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/roziscoding/jack?display_name=tag&style=flat-square&label=latest%20release&color=2496ED"></a>
-  <a href="https://jack.roz.ninja"><img src="https://img.shields.io/badge/full%20documentation-jack.roz.ninja-3e63dd?style=flat-square&logoColor=white" alt="Full documentation"></a>
-  <a href="https://github.com/roziscoding/jack/pkgs/container/jack"><img src="https://img.shields.io/badge/-jack-2496ED?style=flat-square&logo=docker&logoColor=white" alt="jack image"></a>
-  <a href="https://github.com/roziscoding/jack/pkgs/container/jack-ui"><img src="https://img.shields.io/badge/-jack--ui-2496ED?style=flat-square&logo=docker&logoColor=white" alt="jack-ui image"></a>
+  <a href="https://hub.docker.com/r/leetdonkey/jack"><img src="https://img.shields.io/badge/-jack-2496ED?style=flat-square&logo=docker&logoColor=white" alt="jack image"></a>
+  <a href="https://hub.docker.com/r/leetdonkey/jack-ui"><img src="https://img.shields.io/badge/-jack--ui-2496ED?style=flat-square&logo=docker&logoColor=white" alt="jack-ui image"></a>
 </p>
 
 **jack** lets you and your friends share media libraries with each other through
@@ -83,20 +81,19 @@ docker compose up -d
 
 The management UI comes up at **http://localhost:3000**. For volume mounts,
 networking, and the path gotchas that make grabs import correctly, follow the
-[getting started guide](https://jack.roz.ninja/guide/getting-started).
+[getting started guide](website/guide/getting-started.md).
 
 ## Documentation
 
-- [What is jack?](https://jack.roz.ninja/guide/what-is-jack) — concepts and roles
-- [Getting started](https://jack.roz.ninja/guide/getting-started) — full setup walkthrough
-- [How it works](https://jack.roz.ninja/guide/how-it-works) — search, download, and serving flows
-- [Peering](https://jack.roz.ninja/guide/peering) — sharing with friends and API keys
-- [Management UI](https://jack.roz.ninja/guide/management-ui) — the web console
-- [Troubleshooting](https://jack.roz.ninja/guide/troubleshooting) — common failures and fixes
-- [Configuration](https://jack.roz.ninja/reference/configuration) and
-  [environment variables](https://jack.roz.ninja/reference/environment-variables) — full reference
-- [Peer API](https://jack.roz.ninja/reference/peer-api) and
-  [management API](https://jack.roz.ninja/reference/management-api) — API reference
+- [Installing on Unraid](website/guide/unraid.md): templates and setup
+- [Getting started](website/guide/getting-started.md): Docker Compose setup
+- [What is jack?](website/guide/what-is-jack.md): concepts and roles
+- [How it works](website/guide/how-it-works.md): search, download and serving
+- [Peering](website/guide/peering.md): sharing with friends and API keys
+- [Management UI](website/guide/management-ui.md): the web interface
+- [Troubleshooting](website/guide/troubleshooting.md): common failures and fixes
+- [Configuration](website/reference/configuration.md) and
+  [environment variables](website/reference/environment-variables.md)
 
 ## Contributing
 

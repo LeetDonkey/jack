@@ -4,12 +4,14 @@ description: Install jack with Docker Compose, connect Radarr or Sonarr, configu
 
 # Getting started
 
+On Unraid, follow [Installing on Unraid](./unraid.md) instead.
+
 This guide takes you from nothing to a running jack instance: configured
 against your Radarr/Sonarr, registered there as an indexer and download
 client, with the management UI up and ready to connect to friends. Docker
 Compose is the recommended way to self-host jack. Two images are published on
 Docker Hub (`leetdonkey/jack` and `leetdonkey/jack-ui`), so there's nothing to
-build. On Unraid, follow [Installing on Unraid](/guide/unraid) instead.
+build.
 
 ## Before you start
 
@@ -22,7 +24,7 @@ You'll need:
   containers where media lives (e.g. `/movies`, `/tv`, or `/data/media`).
   jack streams files using those exact paths, so you'll mirror them.
 
-If you haven't yet, skim [What is jack?](/guide/what-is-jack). The rest of
+If you haven't yet, skim [What is jack?](./what-is-jack.md). The rest of
 this guide assumes you know what a *source*, *destination*, and *peer* are.
 
 ## 1. Create the project files
@@ -114,14 +116,15 @@ It's off by default because it deletes files. The operation is a plain `unlink`
 of that one file: if your *arr hardlinked into the library, the library keeps
 the data; if it copied, you get the space back. You can also flip it later from
 the management UI without a restart. See
-[After the import](/guide/how-it-works#after-the-import) for the full picture,
-and [`unlinkImportedFiles`](/reference/configuration#downloads-unlinkimportedfiles)
+[After the import](./how-it-works.md#after-the-import) for the full picture,
+and [`unlinkImportedFiles`](../reference/configuration.md#downloads-unlinkimportedfiles)
 for the exact guarantees.
 
 Every other key in this block is an optional tuning knob with a sensible
-default, documented under [`downloads`](/reference/configuration#downloads). All
-of them are editable later from the management UI, so you don't have to get them
-right here.
+default, documented under
+[`downloads`](../reference/configuration.md#downloads). All of them are
+editable later from the management UI, so you don't have to get them right
+here.
 
 ### `servers`
 
@@ -151,13 +154,13 @@ and the compose file forwards them into the container:
 By default each server is both a **source** (share its library with friends)
 and a **destination** (search your friends' libraries from its UI). Set
 `"source": false` or `"destination": false` to opt out of either. The
-[configuration reference](/reference/configuration#servers) covers these and the
-other per-server options.
+[configuration reference](../reference/configuration.md#servers) covers these
+and the other per-server options.
 
 ::: info
 You can also inline a key as a plain string (`"apiKey": "abc123..."`), but
 it's not recommended, since the config file then holds live secrets. See
-[`ConfigSecret`](/reference/configuration#configsecret) for all the forms,
+[`ConfigSecret`](../reference/configuration.md#configsecret) for all the forms,
 including reading from a secret file.
 :::
 
@@ -275,7 +278,7 @@ each of them to test both, and the server's card under ***Settings -> Radarr &
 Sonarr*** shows the result, for example
 `jack in Main Radarr: indexer ✓ · download client ✓`.
 
-If something's off, the [troubleshooting guide](/guide/troubleshooting) covers
+If something's off, the [troubleshooting guide](./troubleshooting.md) covers
 the common failures.
 
 ## 6. Connect with a friend
@@ -298,7 +301,7 @@ jack has used your key. Your public address stays editable under ***Settings
 -> Sharing -> Your public address***, where ***Check*** tests it from your
 server.
 
-See [API keys & peering](/guide/peering) for how the keys are scoped and why
+See [API keys & peering](./peering.md) for how the keys are scoped and why
 each peer gets their own.
 
 ## 7. Use it
@@ -310,11 +313,11 @@ into your library.
 
 ## Next steps
 
-- [How it works](/guide/how-it-works): what actually happens on search and
+- [How it works](./how-it-works.md): what actually happens on search and
   grab.
-- [Management UI](/guide/management-ui): day-to-day operation and access
+- [Management UI](./management-ui.md): day-to-day operation and access
   control.
-- [Configuration reference](/reference/configuration): every key, including
+- [Configuration reference](../reference/configuration.md): every key, including
   the download tuning knobs.
-- [Running without Docker](/guide/running-without-docker): for bare-metal
+- [Running without Docker](./running-without-docker.md): for bare-metal
   setups.

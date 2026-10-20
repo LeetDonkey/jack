@@ -10,7 +10,7 @@
   <Support>https://github.com/LeetDonkey/jack/issues</Support>
   <Project>https://github.com/LeetDonkey/jack</Project>
   <ReadMe>https://github.com/LeetDonkey/jack/blob/main/website/guide/unraid.md</ReadMe>
-  <Overview>The web interface for jack: settings, friends, downloads, transfers and the peer catalog. It talks to the jack container over the "jack" Docker network. Keep it on your LAN: never publish it through your reverse proxy.</Overview>
+  <Overview>The web interface for jack, where you set jack up and add friends. It talks to the jack container over the "jack" Docker network. Keep it on your LAN: never add it to your reverse proxy.</Overview>
   <Category>Downloaders: MediaApp:Video Tools:</Category>
   <WebUI>http://[IP]:[PORT:3000]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/LeetDonkey/jack/main/unraid/jack-ui.xml</TemplateURL>
@@ -22,7 +22,7 @@
   <DonateLink/>
   <Requires>The jack container, on the same "jack" Docker network.</Requires>
   <Config Name="Web UI port" Target="3000" Default="3000" Mode="tcp" Description="Host port for the web interface. Pick another (e.g. 3010) if 3000 is taken." Type="Port" Display="always" Required="true" Mask="false">3000</Config>
-  <Config Name="Management key" Target="JACK_MANAGEMENT_KEY" Default="" Mode="" Description="The same value as the management key in the jack container. With it set, the interface doesn't ask for a login, so keep the port on your LAN. Leave it empty to be asked for the key in the browser instead (then also set Session key)." Type="Variable" Display="always" Required="false" Mask="true"/>
-  <Config Name="Session key" Target="JACK_SESSION_KEY" Default="" Mode="" Description="Only when Management key is empty: a random secret of at least 32 characters (openssl rand -hex 32) that seals the login cookie." Type="Variable" Display="advanced" Required="false" Mask="true"/>
+  <Config Name="Management key" Target="JACK_MANAGEMENT_KEY" Default="" Mode="" Description="The same value as Management key in the jack template. With it, jack-ui doesn't ask for a login, so keep its port on your LAN. To be asked for the key in the browser instead, leave this empty and set Session key under Show more settings." Type="Variable" Display="always" Required="false" Mask="true"/>
+  <Config Name="Session key" Target="JACK_SESSION_KEY" Default="" Mode="" Description="Only when Management key is empty: a random secret of at least 32 characters (openssl rand -hex 32). jack-ui uses it to keep you signed in." Type="Variable" Display="advanced" Required="false" Mask="true"/>
   <Config Name="Management API" Target="JACK_MANAGEMENT_API_URL" Default="http://jack:5226" Mode="" Description="jack's management API on the jack network. It is not published on your server." Type="Variable" Display="advanced" Required="true" Mask="false">http://jack:5226</Config>
 </Container>

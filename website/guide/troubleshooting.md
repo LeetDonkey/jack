@@ -166,7 +166,9 @@ Two gotchas:
   linuxserver.io *arr images default to, so files jack writes are owned by the
   same user that imports them. Make sure the completed folder (and the `/config`
   mount) are readable/writable by uid 1000, with `chown -R 1000:1000`. If your
-  *arr uses a different `PUID`, set it to match.
+  *arr uses a different `PUID`, set it to match. On Unraid the template runs
+  jack as `nobody:users` (99:100) instead; see
+  [Installing on Unraid](./unraid.md#troubleshooting).
 
 ## `Downloads are off`, nothing registered
 
@@ -187,10 +189,10 @@ client.
 
 **Fix:** add a `downloads` block with `completedPath`, or click ***Turn
 on downloads*** under ***Settings -> Radarr & Sonarr -> Downloads*** in the
-management UI, and restart jack. Saving it in the management UI registers both
-right away; the restart starts the download client. Until then, the management
-UI names ***Downloads*** in a bar at the top of every page, and each server's
-card reads `download client waits for a restart`.
+management UI, and restart jack. jack registers both when it starts again.
+Until the restart, the management UI names ***Downloads*** in a bar at the top
+of every page, and a Radarr/Sonarr that doesn't have jack's download client
+yet refuses it, so its card reads `indexer skipped · download client failed`.
 
 If registration fails with `Failed to register indexer`, check that the
 destination server is reachable and its API key is correct. Registration logs
@@ -235,12 +237,12 @@ import shares bytes with the library and a copied one doesn't, but either way
 the folder fills up.
 
 **Fix:** turn on
-[`downloads.unlinkImportedFiles`](/reference/configuration#downloads-unlinkimportedfiles),
+[`downloads.unlinkImportedFiles`](../reference/configuration.md#downloads-unlinkimportedfiles),
 in `config.jsonc` or from ***Settings -> Radarr & Sonarr -> Downloads*** in
 the management UI. It applies immediately, with no restart. jack then unlinks
 its copy as each import is confirmed, and only then: one file per confirmed
 import, never your library. Details in
-[After the import](/guide/how-it-works#after-the-import).
+[After the import](./how-it-works.md#after-the-import).
 
 This only affects downloads imported **after** you enable it. Files already in
 the folder are yours to clear out; deleting the download rows from the
@@ -258,9 +260,11 @@ instead of the console. The address in each message is
 - ***jack isn't answering at http://jack:5226***: the name resolves, but
   nothing answers on that port. jack is still starting or has stopped, or it
   runs without `JACK_MANAGEMENT_KEY` and so never started the management API.
+  On Unraid, an empty ***Management key*** stops jack at start instead, which
+  shows as ***jack-ui can't find jack***.
 - ***jack didn't answer at http://jack:5226 within 5 seconds***: check
   `JACK_MANAGEMENT_API_URL` on the jack-ui service. It must point at jack's
-  [`MANAGEMENT_PORT`](/reference/environment-variables#management-port).
+  [`MANAGEMENT_PORT`](../reference/environment-variables.md#management-port).
 - ***jack rejected jack-ui's key***: `JACK_MANAGEMENT_KEY` differs between the
   two services. The example compose file reads both from one `.env` entry.
 
@@ -272,7 +276,7 @@ The checks listed on that screen use the names from the Unraid templates:
 
 The ***Dashboard***, ***Downloads*** and ***Live traffic*** pages show a
 ***Live*** badge while their
-[event stream](/guide/management-ui#live-updates) is connected. If it sits on
+[event stream](./management-ui.md#live-updates) is connected. If it sits on
 ***Connecting...*** or ***Reconnecting...***, or flips to ***Reconnecting...***
 every few seconds, the stream is being closed or buffered before it reaches the
 browser. The pages still load; they just stop updating on their own.
@@ -301,4 +305,4 @@ you exactly what *arr is unhappy about.
 To ask someone for help, click ***Copy support info*** in the management UI's
 ***Logs*** header. It copies jack's build, the state of each Radarr/Sonarr and
 friend, and the last 50 warnings and errors, with keys, header values and
-webhook URLs left out. See [Support info](/guide/management-ui#support-info).
+webhook URLs left out. See [Support info](./management-ui.md#support-info).

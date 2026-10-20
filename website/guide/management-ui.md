@@ -6,7 +6,7 @@ description: Manage Radarr and Sonarr, friends, invite links, downloads, request
 
 jack ships with a web console, the **management UI**, so you can run your
 instance without hand-editing `config.jsonc`. With the
-[Getting started](/guide/getting-started) compose file it runs as the
+[Getting started](./getting-started.md) compose file it runs as the
 `jack-ui` service at **http://localhost:3000**, and it's the easiest way to
 operate jack day to day:
 
@@ -38,11 +38,11 @@ operate jack day to day:
 - ***Settings***, in tabs:
   - ***Radarr & Sonarr***:
     - ***Address Radarr/Sonarr use to reach jack***
-      ([`jack.internalUrl`](/reference/configuration#jack-internalurl)). It
+      ([`jack.internalUrl`](../reference/configuration.md#jack-internalurl)). It
       applies right away.
     - ***Downloads***: the whole
-      [`downloads`](/reference/configuration#downloads) block, and the folder
-      check ([below](#settings-radarr-sonarr-downloads)).
+      [`downloads`](../reference/configuration.md#downloads) block, and the
+      folder check ([below](#settings-radarr-sonarr-downloads)).
     - ***Radarr & Sonarr***: add, edit, and remove your Radarr/Sonarr
       connections, and see what jack set up in each
       ([below](#settings-radarr-sonarr)).
@@ -50,15 +50,16 @@ operate jack day to day:
     - ***Your public address***: how friends' jacks reach yours
       ([below](#settings-sharing)).
     - ***Friends of friends***: the
-      [`discovery`](/reference/configuration#discovery) block.
-    - ***Security***: the [`security`](/reference/configuration#security)
+      [`discovery`](../reference/configuration.md#discovery) block.
+    - ***Security***: the [`security`](../reference/configuration.md#security)
       block, and the banned addresses with ***Lift ban***.
-  - ***Bandwidth***: the [`bandwidth`](/reference/configuration#bandwidth)
+  - ***Bandwidth***: the [`bandwidth`](../reference/configuration.md#bandwidth)
     block, and ***Pause sharing*** and ***Pause downloads***.
   - ***Notifications***: the
-    [`notifications`](/reference/configuration#notifications) block.
+    [`notifications`](../reference/configuration.md#notifications) block.
   - ***Advanced***:
-    - ***RSS feed***: the [`torznab`](/reference/configuration#torznab) block.
+    - ***RSS feed***: the
+      [`torznab`](../reference/configuration.md#torznab) block.
     - ***API keys for other tools***: keys that aren't on a friend's card
       ([below](#settings-advanced)).
     - ***About***: which build jack and jack-ui run, and ***Copy support
@@ -252,7 +253,7 @@ restart, they show again once jack reaches that friend.
 
 ### Invite a friend
 
-***Invite a friend*** makes an [invite link](/guide/quick-links) for one
+***Invite a friend*** makes an [invite link](./quick-links.md) for one
 friend:
 
 1. If ***Name friends see*** or ***Address friends use*** is missing, the
@@ -295,12 +296,12 @@ and `/friends?action=add`.
 
 ## Settings -> Radarr & Sonarr -> Downloads
 
-The whole [`downloads`](/reference/configuration#downloads) block is editable
-here, so there's no reason to hand-edit `config.jsonc` for it:
+The whole [`downloads`](../reference/configuration.md#downloads) block is
+editable here, so there's no reason to hand-edit `config.jsonc` for it:
 
 - The settings you actually choose sit at the top: ***Completed folder***,
   ***Downloads at once***, and the
-  ***[Remove jack's copy after Radarr/Sonarr import it](/reference/configuration#downloads-unlinkimportedfiles)***
+  ***[Remove jack's copy after Radarr/Sonarr import it](../reference/configuration.md#downloads-unlinkimportedfiles)***
   switch.
 - ***Download retries*** and ***Handing files to Radarr/Sonarr*** are collapsed
   below, each labelled with how many of its values you've moved off jack's
@@ -312,7 +313,7 @@ blank. `completedPath` is the exception, since it has no default and so can't be
 cleared. If your config has no `downloads` block at all, the section offers
 ***Turn on downloads***. It prefills ***Completed folder*** with `/data/jack`,
 the folder the Unraid template mounts; with the compose file from
-[Getting started](/guide/getting-started), change it to a path under
+[Getting started](./getting-started.md), change it to a path under
 `/data/torrents`.
 
 Each duration field shows its unit after the number: seconds, minutes or
@@ -343,10 +344,12 @@ the top of every page until you restart.
 folders line up.*** or the first problem, naming the path and the template to
 change, and ***Show details*** lists every check. It also runs by itself after
 you save a new ***Completed folder***, and after you connect a Radarr/Sonarr or
-change its address or roles. Each card under ***Radarr & Sonarr*** and the
-setup card on the ***Dashboard*** show the result too, until you reload the
-page. With downloads off, ***Check folders*** sits above the cards under
-***Radarr & Sonarr*** instead.
+change its address or roles. Each card under ***Radarr & Sonarr*** shows the
+result too, until you reload the page. The setup card on the ***Dashboard***
+keeps a problem in that browser after a reload, with how long ago it was
+checked and ***Check again***, and setup doesn't count as finished until a
+check passes. With downloads off, ***Check folders*** sits above the cards
+under ***Radarr & Sonarr*** instead.
 
 ## Settings -> Radarr & Sonarr
 
@@ -364,8 +367,11 @@ The server's card then shows:
 - What jack set up there, for example
   `jack in Radarr: indexer ✓ · download client ✓`. Other states:
   - `skipped (downloads off)`: downloads are off, so jack added nothing.
-  - `download client waits for a restart`: downloads were turned on after
-    jack started.
+  - `indexer skipped · download client failed`: downloads were turned on
+    after jack started, and Radarr refused jack's download client, which jack
+    serves only after a restart.
+  - `download client waits for a restart`: Radarr already had jack's download
+    client, and downloads were turned on after jack started.
   - `failed`: jack couldn't add that part, or Radarr's test of it failed. The
     reason follows on the next line.
 - When Radarr last reached jack with the key jack gave it, for example
@@ -376,14 +382,14 @@ The server's card then shows:
   after you fixed the address or Radarr was down.
 - The result of the last [folder check](#folder-check) for that server.
 
-[`servers[].autoregister`](/reference/configuration#servers-autoregister)
+[`servers[].autoregister`](../reference/configuration.md#servers-autoregister)
 lists every time jack registers itself.
 
 ## Settings -> Sharing
 
 ***Your public address*** holds the
-[`jack.external`](/reference/configuration#jack-external) profile that invite
-links carry:
+[`jack.external`](../reference/configuration.md#jack-external) profile that
+invite links carry:
 
 - ***Name friends see***: how you show up when a friend adds you, at most 60
   characters.
@@ -455,7 +461,7 @@ it from:
 
 A field whose stored value already comes from a variable or file opens with
 that choice shown. These are the
-[`ConfigSecret`](/reference/configuration#configsecret) forms.
+[`ConfigSecret`](../reference/configuration.md#configsecret) forms.
 
 ## Access control
 
@@ -475,7 +481,7 @@ from:
 When the UI can't use the management API, it shows ***jack-ui can't reach
 jack***, with the address it tried and what to check, or ***jack rejected
 jack-ui's key*** when the injected key doesn't match jack's. See
-[Troubleshooting](/guide/troubleshooting#jack-ui-shows-a-connection-error).
+[Troubleshooting](./troubleshooting.md#jack-ui-shows-a-connection-error).
 
 ## How it works
 
@@ -538,7 +544,7 @@ timeout **longer than 15 seconds** on whatever sits in front of the UI. jack
 sends `X-Accel-Buffering: no` (nginx and compatible proxies honour it) and the
 BFF forwards that header, but proxies that buffer regardless, or cut idle
 connections early, will leave the UI stuck on ***Reconnecting...***. See
-[Troubleshooting](/guide/troubleshooting#management-ui-stuck-on-reconnecting).
+[Troubleshooting](./troubleshooting.md#management-ui-stuck-on-reconnecting).
 
 ## Management API
 

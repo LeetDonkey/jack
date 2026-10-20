@@ -70,10 +70,10 @@ URL your own *arr apps use to reach jack, and the address jack registers for its
 Torznab indexer and qBittorrent download client. Must be resolvable **from the
 Radarr/Sonarr side**: on a shared Docker network use the container name
 (`http://jack:5225`); otherwise the host IP/domain. Peers never use this URL.
-They use whatever you hand them (see [API keys & peering](/guide/peering)).
+They use whatever you hand them (see [API keys & peering](../guide/peering.md)).
 
 A new config file gets `http://jack:5225`, or the value of
-[`JACK_INTERNAL_URL`](/reference/environment-variables#jack-internal-url).
+[`JACK_INTERNAL_URL`](./environment-variables.md#jack-internal-url).
 Changing it in the management UI applies without a restart: jack updates its
 indexer and download client in every auto-register server.
 
@@ -91,8 +91,8 @@ file; the management UI doesn't edit it. Applies after a restart.
 **Type:** `object`
 
 How *another* jack reaches this instance, and the profile jack encodes into the
-[invite links](/guide/quick-links) you create. Optional: without it, peering
-still works, you just hand out the URL and key by hand.
+[invite links](../guide/quick-links.md) you create. Optional: without it,
+peering still works, you just hand out the URL and key by hand.
 
 Edit it from the management UI (***Settings -> Sharing -> Your public
 address***), which writes this block through its own endpoints so the rest of
@@ -157,7 +157,7 @@ below applies again. `unlinkImportedFiles`, `maxConcurrentDownloads` and
 `pausedUntil` take effect immediately; the rest are read at startup, so restart
 jack after changing them. Until then, the management UI names them in a bar at
 the top of every page. Adding the block in the management UI registers jack in
-your *arr apps right away, but grabs only work after the restart.
+your *arr apps after the restart, when jack serves its download client.
 
 ### `downloads.completedPath`
 
@@ -169,7 +169,7 @@ management UI only saves a folder that exists and that jack can write to. It
 must also be mounted into your **Radarr and Sonarr**
 containers at the **same path**, because *arr resolves it in its own filesystem
 to import finished files (see the callout in
-[Getting started](/guide/getting-started)).
+[Getting started](../guide/getting-started.md)).
 
 ### `downloads.maxConcurrentDownloads`
 
@@ -494,7 +494,7 @@ Upper bound on the number of releases in one feed. The newest are kept.
 ## `servers`
 
 Your Radarr/Sonarr servers. Each entry can be a source, a destination, or both
-(see [Concepts](/guide/what-is-jack#concepts)).
+(see [Concepts](../guide/what-is-jack.md#concepts)).
 
 ### `servers[].name`
 
@@ -578,7 +578,7 @@ indexer, the same check as their ***Test*** buttons, and reports the result as
 - **Indexer:** the *arr tests a copy of jack's indexer, which it records
   nothing for. A failed test of the saved indexer, also one that only found no
   results, makes Radarr and Sonarr skip the indexer for a while (see
-  [Troubleshooting](/guide/troubleshooting#radarr-or-sonarr-says-indexers-unavailable-due-to-failures)).
+  [Troubleshooting](../guide/troubleshooting.md#radarr-or-sonarr-says-indexers-unavailable-due-to-failures)).
   `Query successful, but no results...` counts as passed: the *arr reached
   jack.
 - **Skipped indexer:** when the *arr already skips jack's indexer and the copy
@@ -648,7 +648,7 @@ peers.
 **Type:** [`ConfigSecret`](#configsecret) · **Required**
 
 The peer API key that friend issued *you* (see
-[API keys & peering](/guide/peering)), not your own.
+[API keys & peering](../guide/peering.md)), not your own.
 
 ### `peers[].headers`
 
@@ -694,7 +694,7 @@ startup, jack reports the problem and refuses to load that config.
 
 In the management UI, a secret field stores a plain string. ***Use a container
 variable or file instead*** under the field switches it to an `env` or `file`
-reference ([Secret fields](/guide/management-ui#secret-fields)).
+reference ([Secret fields](../guide/management-ui.md#secret-fields)).
 
 ## Full example
 

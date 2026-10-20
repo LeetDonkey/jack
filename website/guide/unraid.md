@@ -4,10 +4,8 @@ description: Install jack on Unraid from the templates, connect Radarr and Sonar
 
 # Installing on Unraid
 
-This guide installs jack on Unraid from ready-made templates, connects it to
-your Radarr and Sonarr, and gets you connected to a friend. It takes about
-fifteen minutes. Everything after the install is done in jack's web interface;
-you never have to edit a config file.
+This guide takes you from the two Unraid templates to downloading from a
+friend. Once the containers run, you set up jack in its web interface.
 
 jack runs as two containers:
 
@@ -25,12 +23,14 @@ You'll need:
 - **Radarr and/or Sonarr**, and their API keys (***Settings -> General ->
   API Key*** in each).
 - **The paths your Radarr and Sonarr use inside their containers**, both for
-  your libraries (their root folders, e.g. `/movies` or `/data/media/tv`) and
-  for downloads. Open the Radarr container's ***Edit*** page in the Docker tab
-  and note each *Container Path* and the share it points to.
+  your libraries (their root folders, under ***Settings -> Media Management ->
+  Root Folders*** in Radarr and Sonarr, e.g. `/movies` or `/data/media/tv`)
+  and for downloads. Open the Radarr container's ***Edit*** page in the Docker
+  tab and note each ***Container Path*** and the share it points to.
 - **To share with friends over the internet:** a domain name and a reverse
-  proxy with HTTPS, such as Nginx Proxy Manager. You can install and try jack
-  without one.
+  proxy with HTTPS, such as Nginx Proxy Manager. A reverse proxy receives your
+  friends' requests for your domain and passes them on to jack. Step 6 shows
+  the settings jack needs. You can install and try jack without one.
 
 ## 1. Create the jack network
 
@@ -60,111 +60,116 @@ Container -> Template*** (in the ***User templates*** group).
 
 ## 3. Install jack
 
-***Docker -> Add Container***, pick ***jack*** under ***Template***, and fill in:
+***Docker -> Add Container***, pick ***jack*** under ***Template***, and fill
+in:
 
-- **Peer and \*arr port** (`5225`): leave it unless something else uses 5225.
-  If you change it, use your port instead of 5225 everywhere below.
-- **Appdata** (`/mnt/user/appdata/jack`): jack keeps its config, database and
-  logs here and creates a default config on first start.
-- **Movies** and **TV**: the libraries you share with friends.
-  - The *Host Path* is the share, e.g. `/mnt/user/media/movies`.
-  - The *Container Path* must be exactly what your Radarr (or Sonarr) uses for
-    that folder. Click ***Edit*** next to the entry to change it. jack serves a
-    file by the path your *arr reports, so a different path here means
-    friends get "file not found".
-  - Use ***Add another Path*** if your *arr has several root folders. Remove an
-    entry you don't need. Read-only is enough: jack never changes your library.
-- **Downloads** (`/data/jack`): where jack puts finished downloads for your
-  Radarr/Sonarr to import. They must see the same folder at the same
-  *Container Path*. If your Radarr maps `/mnt/user/downloads` to `/data`, keep
-  the *Container Path* `/data/jack` and set the *Host Path* to
-  `/mnt/user/downloads/jack`.
-- **Internal URL**: `http://<your-server-ip>:5225`, the address your
+- ***Port for Radarr/Sonarr and friends*** (`5225`): leave it unless something
+  else uses 5225. If you change it, use your port instead of 5225 everywhere
+  below.
+- ***Appdata*** (`/mnt/user/appdata/jack`): jack keeps its config, database
+  and logs here and creates a default config on first start.
+- ***Movies*** and ***TV***: the libraries you share with friends.
+  - The ***Host Path*** is your share: click the field to pick it. Leave it
+    empty if you don't share that library.
+  - The ***Container Path*** must be exactly what your Radarr (or Sonarr) uses
+    for that folder. Click ***Edit*** next to the entry to change it. jack
+    serves a file by the path your *arr reports, so a different path here
+    means friends get "file not found".
+  - If your Radarr or Sonarr has more than one root folder, add an entry for
+    each extra one with ***Add another Path, Port, Variable, Label or
+    Device***:
+    - ***Config Type***: ***Path***.
+    - ***Container Path***: the root folder, exactly as Radarr/Sonarr show it.
+    - ***Host Path***: the share it points to.
+    - ***Access Mode***: ***Read Only***. jack never changes your library.
+- ***Downloads*** (`/data/jack`): where jack puts finished downloads for your
+  Radarr/Sonarr to import. Set the ***Host Path*** to a `jack` folder in the
+  share your Radarr/Sonarr download into: pick the share, then add `/jack`, for
+  example `/mnt/user/downloads/jack`. Keep the ***Container Path***
+  `/data/jack`: Radarr and Sonarr must see the same folder at `/data/jack` too.
+  - If they map that share to `/data`, they already do.
+  - If they don't, for example when they map it to `/downloads`, add a path to
+    the Radarr and Sonarr templates with the same ***Host Path*** and the
+    ***Container Path*** `/data/jack`.
+  - Unraid creates any folder in a ***Host Path*** that doesn't exist yet,
+    such as `jack`. Share names are case-sensitive, so a mistyped share
+    becomes a new, empty share.
+- ***Internal URL***: `http://<your-server-ip>:5225`, the address your
   Radarr/Sonarr use to reach jack. jack reads it when it creates its config on
   first start; after that you change it in jack-ui.
-- **Management key**: a long random secret. Generate one in the terminal:
+- ***Management key***: a long random secret. Generate one in the terminal:
 
   ```bash
   openssl rand -hex 32
   ```
 
-  Copy it somewhere; jack-ui needs the same value.
+  Keep a copy somewhere safe: jack-ui needs the same value, and Unraid hides
+  it once it's in the template.
 
-Click ***Apply***. The template runs jack as `nobody:users` (the `--user
-99:100` in ***Extra Parameters***), so downloaded files get the same owner as
-the rest of your shares. Unraid passes your server's time zone (***Settings ->
-Date and Time***) to the container; bandwidth schedules, daily limits and the
-daily summary follow it.
+Click ***Apply***. The template runs jack as `nobody:users` (the
+`--user 99:100` in ***Extra Parameters***), so downloaded files get the same
+owner as the rest of your shares. Unraid passes your server's time zone
+(***Settings -> Date and Time***) to the container; bandwidth schedules, daily
+limits and the daily summary follow it.
 
 ## 4. Install jack-ui
 
 ***Add Container*** again, pick ***jack-ui***, and fill in:
 
-- **Web UI port** (`3000`): pick another port if 3000 is taken.
-- **Management key**: the same value as in jack.
+- ***Web UI port*** (`3000`): pick another port if 3000 is taken.
+- ***Management key***: the same value as in jack.
 
 Click ***Apply***, then open the interface from the jack-ui icon in the Docker
 tab (***WebUI***) or at `http://<your-server-ip>:3000`. If it shows ***jack-ui
 can't reach jack*** or ***jack rejected jack-ui's key*** instead, see
 [Troubleshooting](#troubleshooting).
 
-::: warning Keep jack-ui on your LAN
-With the management key set, jack-ui doesn't ask for a login. Never add it to
-your reverse proxy. If you want a login prompt anyway, leave ***Management
-key*** empty in jack-ui and set ***Session key*** (under ***Show more
-settings***) to another `openssl rand -hex 32` value; jack-ui then asks for the
-management key in each new browser session.
-:::
+In the Docker tab, switch on ***Autostart*** for jack and jack-ui. Without it,
+both stay stopped after the server or Docker restarts.
+
+> [!WARNING]
+> **Keep jack-ui on your LAN.** With the management key set, jack-ui doesn't
+> ask for a login. Never add it to your reverse proxy. If you want a login
+> prompt anyway, leave ***Management key*** empty in jack-ui and set ***Session
+> key*** (under ***Show more settings***) to another `openssl rand -hex 32`
+> value. jack-ui then asks for the management key in each new browser session.
 
 ## 5. Connect Radarr and Sonarr
 
-Open jack-ui. Until jack is set up, the ***Dashboard*** shows a setup card,
-***Finish setting up jack***, with steps 1 to 3 below, in order. Each step has
-a button that opens its section of ***Settings***, and the card ticks the step
-off once it's done. Once Radarr or Sonarr has tested jack's address, step 1
-follows that test: it ticks off when the test passed and shows the test's
-message when it failed. When every step is done, the card reads ***jack is set
-up*** and offers ***Hide***. A second card, ***Share with friends***, points to
-steps 6 and 7 and is optional.
+Open jack-ui. The ***Dashboard*** shows the card ***Finish setting up jack***
+with the steps below. A step that needs you has a button to the right place in
+***Settings***, and each step ticks off once it's done. Then the card reads
+***jack is set up*** and offers ***Hide***.
 
-Some settings, such as turning on downloads, only apply when jack starts. Until
-you restart the jack container (Docker tab -> jack -> ***Restart***), a bar at
-the top of every page names them, for example ***jack needs a restart to
-apply: Downloads***, and the setup card adds the step ***Restart the jack
-container***. Once jack is back, jack-ui shows ***jack restarted. New settings
-are active.*** jack-ui itself never needs a restart.
+1. ***Tell jack how Radarr/Sonarr reach it.*** At the top of ***Settings ->
+   Radarr & Sonarr***, ***Address Radarr/Sonarr use to reach jack*** must be
+   `http://<your-server-ip>:5225`, the ***Internal URL*** from the template.
+   - If it shows `http://jack:5225`, type your address and click ***Save
+     changes***. jack updates Radarr/Sonarr right away. If you opened jack-ui
+     by IP address, a button under the field fills in the address, for example
+     ***Use http://192.168.1.10:5225 (if you kept port 5225)***.
+   - Keep `http://jack:5225` only if Radarr and Sonarr are on the `jack`
+     network too, and click ***Yes, on the jack network*** on the setup card.
+   - The step ticks off once Radarr or Sonarr has tested the address in step 3.
+     If that test fails, the card shows why.
+2. ***Turn on downloads.*** On first start jack turns on downloads with
+   ***Completed folder*** `/data/jack`, the ***Container Path*** of your
+   downloads mount. Under ***Settings -> Radarr & Sonarr -> Downloads***, turn
+   on ***Remove jack's copy after Radarr/Sonarr import it*** and click ***Save
+   changes***. jack then deletes its own copy of a download once Radarr/Sonarr
+   confirm the import, which saves disk space. The file in your library stays.
 
-1. **jack's address.** At the top of ***Settings -> Radarr & Sonarr***, check
-   that ***Address Radarr/Sonarr use to reach jack*** is
-   `http://<your-server-ip>:5225` (the ***Internal URL*** you set in the
-   template). If it shows the default `http://jack:5225`, change it and click
-   ***Save changes***. If you opened jack-ui by IP address, a button under the
-   field fills in that address, for example ***Use http://192.168.1.10:5225
-   (if you kept port 5225)***. The default only works if Radarr and Sonarr run on the jack network
-   too; in that case keep it and click ***Yes, on the jack network*** on the
-   setup card. A new address applies right away: jack updates its indexer and
-   download client in every Radarr/Sonarr it is registered in.
-2. **Downloads.** On first start jack turns on downloads with ***Completed
-   folder*** `/data/jack`, the *Container Path* of your downloads mount. Under
-   ***Settings -> Radarr & Sonarr -> Downloads***, turn on ***Remove jack's
-   copy after Radarr/Sonarr import it*** and click ***Save changes***. With it
-   on, jack removes its own copy once Radarr/Sonarr confirm the import: if they
-   copied the file (the usual case when downloads and library are separate
-   mounts in their container) that saves the space of a second copy; if they
-   hardlinked it, only jack's extra link goes away.
-
-   If the section offers ***Turn on downloads*** instead (the config is from an
-   older jack, or jack couldn't write to `/data/jack` on first start), click
-   it, check that ***Completed folder*** is `/data/jack`, and click ***Save
-   changes***. If jack can't write to that folder, the field says so and
-   nothing is saved: check the ***Downloads*** path in the jack template. After
-   saving, restart the jack container. Radarr and Sonarr can only use jack's
-   download client after that restart.
-
-   If you only want to share your library, click ***I only share*** on the
-   setup card instead and skip this step.
-3. **Radarr & Sonarr.** Under ***Settings -> Radarr & Sonarr***, click
-   ***Connect Radarr or Sonarr*** once for each of them:
+   If the section offers ***Turn on downloads*** instead, jack found no folder
+   it could write to at `/data/jack` on first start, or the config is from an
+   older jack. Click it, set ***Completed folder*** to the ***Container
+   Path*** of ***Downloads*** in the jack template (`/data/jack` unless you
+   changed it), and click ***Save changes***. If jack can't write to that
+   folder, the field says so and nothing is saved: see "Saving Downloads
+   fails" under [Troubleshooting](#troubleshooting). Then restart jack from
+   the Docker tab (jack -> ***Restart***) before you connect Radarr and Sonarr.
+   They can use jack's download client only after that restart.
+3. ***Connect Radarr or Sonarr.*** Under ***Settings -> Radarr & Sonarr***,
+   click ***Connect Radarr or Sonarr*** once for each of them:
    - ***Name***: e.g. `Radarr` or `Sonarr`.
    - ***URL***: e.g. `http://<your-server-ip>:7878` for Radarr, `:8989` for
      Sonarr.
@@ -181,10 +186,17 @@ are active.*** jack-ui itself never needs a restart.
        ***Indexer priority***: 1 is the most preferred and 50 the least. The
        form starts at 50, so your other indexers win when two releases are
        otherwise equal.
-     - ***Releases from friends***: whether friends' copies of movies or
-       episodes you already have are offered as upgrades. ***Offer upgrades up
-       to a size*** keeps a friend's 60 GB remux from replacing your 10 GB
-       file.
+     - ***Releases from friends***: what jack offers for movies or episodes
+       you already have. Missing ones are always offered.
+       - ***Also offer upgrades*** (the default): upgrades of any size.
+       - ***Offer upgrades up to a size***: only up to ***Largest upgrade***
+         (GB), so a friend's 60 GB copy doesn't replace your 10 GB file.
+       - ***Only offer what is missing***: no upgrades.
+
+   If you only want to share your library, turn off ***Download from friends
+   into this Radarr***. Once it's connected, the setup card asks for a Radarr
+   or Sonarr that receives downloads: click ***I only share*** there to skip
+   the steps only a downloader needs.
 
    Click ***Connect Radarr*** (or ***Connect Sonarr***). With auto-register
    ticked, jack adds itself there as ***Jack*** under ***Settings ->
@@ -197,15 +209,16 @@ are active.*** jack-ui itself never needs a restart.
      jack's indexer in Radarr fails for now: jack's feed has nothing to list
      yet. Leave that button alone until a friend shares movies, because
      pressing it can make Radarr skip jack's indexer for a while.
-   - ***Restart the jack container so Radarr can use jack's download
-     client.*** when you turned on downloads in step 2 and haven't restarted
-     jack since.
+   - ***jack couldn't add its download client to Radarr (Unable to connect to
+     qBittorrent ...)*** when you turned on downloads in step 2 and haven't
+     restarted jack since. Restart the jack container: jack adds itself to
+     Radarr when it starts.
    - Otherwise what went wrong, in plain words, with a button to the setting
      that fixes it, such as ***Change the address*** for step 1.
 
    If Radarr takes longer to test, the dialog says so and the card shows the
-   result once it's in. The setup card ticks off step 3 once jack's download
-   client is in Radarr or Sonarr.
+   result once it's in. The setup card ticks off step 3 once jack's indexer
+   and download client are both in Radarr or Sonarr.
 
    Radarr's card under ***Radarr & Sonarr*** keeps the result, for example
    `jack in Radarr: indexer ✓ · download client ✓`, and shows when Radarr last
@@ -216,21 +229,32 @@ are active.*** jack-ui itself never needs a restart.
 
    Each time you connect a Radarr or Sonarr, jack-ui also checks the folders:
    that jack sees each library at the path Radarr and Sonarr use, and that
-   they see the ***Completed folder*** at the same path as jack. The setup card
-   and each card under ***Radarr & Sonarr*** show the result: ***All folders
-   line up.***, or the first problem with the path and the template to change.
-   After changing a template, click ***Check folders*** on the setup card, or
-   under ***Settings -> Radarr & Sonarr -> Downloads***, to check again.
+   they see the ***Completed folder*** at the same path as jack. The cards
+   under ***Radarr & Sonarr*** show the result, ***Folders line up.*** or the
+   first problem with the path and the template to change. The setup card
+   shows ***All folders line up.*** until you reload the page. A problem stays
+   on it, in this browser, until a check passes. After changing a template,
+   click ***Check again*** on the setup card, or ***Check folders*** under
+   ***Settings -> Radarr & Sonarr -> Downloads***.
+4. ***Restart the jack container.*** The card shows this step only when a
+   saved setting waits for a restart, such as turning on downloads. A bar at
+   the top of every page names those settings, for example ***jack needs a
+   restart to apply: Downloads***. Restart jack from the Docker tab (jack ->
+   ***Restart***). Once jack is back, jack-ui shows ***jack restarted. New
+   settings are active.*** jack-ui itself never needs a restart.
 
-::: tip Radarr, Sonarr or a proxy with their own IP
-If a container runs on `br0` (or another custom network) with its own IP, use
-that IP instead of `<your-server-ip>`, and turn on ***Host access to custom
-networks*** in ***Settings -> Docker*** (switch to ***Advanced View*** and stop
-Docker to change it). Without it, containers on `br0` and containers using the
-server's IP can't reach each other.
-:::
+> [!TIP]
+> **Radarr, Sonarr or a proxy with their own IP.** If a container runs on
+> `br0` (or another custom network) with its own IP, use that IP instead of
+> `<your-server-ip>`, and turn on ***Host access to custom networks*** in
+> ***Settings -> Docker*** (switch to ***Advanced View*** and stop Docker to
+> change it). Without it, containers on `br0` and containers using the
+> server's IP can't reach each other.
 
 ## 6. Open jack to your friends
+
+The second card on the ***Dashboard***, ***Share with friends***, points to
+this step and step 7.
 
 Your friends' jacks reach yours through your reverse proxy. On your router,
 forward ports 80 and 443 to the HTTP and HTTPS ports of your Nginx Proxy
@@ -255,10 +279,22 @@ In Nginx Proxy Manager, add a ***Proxy Host***:
   traffic*** then shows the wrong speed, upload limits are off, and nginx
   writes large temporary files.
 
-Your friends only need `/ping`, `/handshake` and `/peer/`. The Torznab
-(`/torznab`) and qBittorrent (`/api/v2`) paths are for your own Radarr/Sonarr on
-the LAN, and jack refuses them to every other address, also through the proxy
-(***Settings -> Sharing -> Security -> Radarr/Sonarr APIs only on your LAN***).
+> [!TIP]
+> **A proxy on a VPS needs its address under Trusted proxies.** jack only
+> believes the visitor's address that a proxy on a private address passes on,
+> such as Nginx Proxy Manager on Unraid. If your proxy runs on a VPS and
+> reaches your server over Tailscale, enter the VPS's Tailscale address under
+> ***Settings -> Sharing -> Security -> Trusted proxies*** and click ***Save
+> changes***. Otherwise every friend reaches jack from that one address, and
+> ten refused requests within ten minutes, from a friend with an old key or
+> from a scanner, ban it for an hour. Every friend then sees ***Is blocking
+> you***.
+
+Your friends' jacks only use `/ping`, `/handshake` and `/peer/`, so you don't
+need to block anything in the proxy. The paths your own Radarr and Sonarr use
+answer only addresses on your LAN, also through the proxy. If your Radarr or
+Sonarr reaches jack from elsewhere, such as over Tailscale or from a VPS, add
+its address under ***Settings -> Sharing -> Security -> Also allow***.
 
 Then, in jack-ui, open ***Settings -> Sharing -> Your public address***: set
 ***Name friends see*** and ***Address friends use***
@@ -277,12 +313,14 @@ An invite link carries everything a friend's jack needs to reach yours: your
 public address and an access key made for them. You each send the other a
 link, so you can download from each other.
 
-1. ***Friends -> Invite a friend***. Fill in ***Who is this link for?*** with
-   your friend's name (so you can limit or revoke their access later), click
-   ***Create invite link***, then ***Copy link***, and send them the
-   `jack-link:` text in a private message. The link is shown only once, so
-   send it before closing the dialog. If you skipped step 6, the dialog asks
-   for ***Name friends see*** and ***Address friends use*** first.
+1. ***Friends -> Invite a friend***. If you skipped step 6, the dialog first
+   asks for ***Name friends see*** and ***Address friends use***, with ***Save
+   and continue***.
+   - Fill in ***Who is this link for?*** with your friend's name, so you can
+     limit or revoke their access later.
+   - Click ***Create invite link***, then ***Copy link***.
+   - Send them the `jack-link:` text in a private message before you close the
+     dialog. The link is shown only once.
 2. Your friend now has a card on ***Friends*** that reads ***You don't
    download from Alice yet.*** When their link arrives, click ***Paste Alice's
    link*** on that card, paste it, click ***Continue***, check the name and
@@ -302,12 +340,16 @@ link, so you can download from each other.
 From then on, your Radarr/Sonarr find your friends' releases through the Jack
 indexer, and grabs download through jack.
 
-If you and another jack user share a friend, you don't even need to exchange
-links: see ***Settings -> Sharing -> Friends of friends***. It is off until you
-turn it on: you choose ***Let friends of friends find me***, and the friend you
-have in common turns on ***Introduce my friends to each other***.
+If you and another jack user share a friend, you can connect without
+exchanging links. Under ***Settings -> Sharing -> Friends of friends***, you
+turn on ***Let friends of friends find me***, and the friend you have in
+common turns on ***Introduce my friends to each other***. Both are off by
+default. People you can meet this way show under ***Friends of friends*** on
+the ***Friends*** page, each with ***Ask to connect***. A request to you shows
+there with ***Accept*** and ***Decline***. Asking and accepting need ***Name
+friends see*** and ***Address friends use*** from step 6.
 
-## 8. Worth a look
+## 8. Other features
 
 - ***Settings -> Bandwidth***: upload and download limits, a weekly schedule
   (e.g. less upload in the evening), and limits per friend.
@@ -315,9 +357,12 @@ have in common turns on ***Introduce my friends to each other***.
   under ***Settings -> Bandwidth***: for 1 or 4 hours, until 08:00, or until
   you resume. Transfers already running finish. While sharing is paused,
   friends' jacks wait and try again later.
-- ***Settings -> Notifications***: Discord, ntfy or a JSON webhook (e.g. Home
-  Assistant) when a download fails for good, a friend goes offline, and a
-  daily summary.
+- ***Settings -> Notifications***: messages to Discord, ntfy or a JSON webhook
+  (e.g. Home Assistant) for:
+  - ***Failed downloads***
+  - ***Friends going offline***
+  - ***Banned addresses***
+  - ***Daily summary***, at a time you pick
 - ***Settings -> Sharing -> Security***: on by default. Addresses that keep
   sending wrong keys are banned for an hour, the Radarr/Sonarr APIs only answer
   your LAN, and the public port doesn't publish its API description. Banned
@@ -337,34 +382,61 @@ have in common turns on ***Introduce my friends to each other***.
   from where they were.
 - ***Settings -> Advanced -> About*** shows which build jack and jack-ui run,
   and warns when they differ. Update both containers then.
-- To get a newer template (new settings), run the two `wget` lines from step 2
-  again. Your container's values stay as they are.
+- Don't run the `wget` lines from step 2 again on an installed jack.
+  `my-jack.xml` and `my-jack-ui.xml` hold the values you entered, and
+  ***Update*** rebuilds each container from its file. A fresh download puts
+  the template's defaults back: jack gets an empty ***Management key*** and
+  stops at start, and loses its library and download folders. To add a
+  setting later, use ***Add another Path, Port, Variable, Label or Device***
+  on the container's ***Edit*** page.
 - Back up `/mnt/user/appdata/jack`. It holds your config, your friends' keys
   and the download history. The Appdata Backup plugin covers it.
 
 ## Troubleshooting
 
-- **jack stops right after starting, with "EACCES" or "permission denied" in its
-  log**: the appdata folder existed before and isn't owned by `nobody:users`. Fix
-  it in the terminal with `chown -R nobody:users /mnt/user/appdata/jack` and
-  start jack again. (Unraid creates missing folders with the right owner.)
+- **jack stops right after starting, with "EACCES" or "permission denied" in
+  its log**: the appdata folder existed before and isn't owned by
+  `nobody:users`. Fix it in the terminal with
+  `chown -R nobody:users /mnt/user/appdata/jack` and start jack again. (Unraid
+  creates missing folders with the right owner.)
+- **jack stops right after starting, with `MANAGEMENT_KEY` and "Too small" in
+  its log**: ***Management key*** in the jack template is empty. Paste the key
+  you saved in step 3, or put a new `openssl rand -hex 32` value into
+  ***Management key*** in both templates, and click ***Apply*** on each. If
+  you ran the `wget` lines from step 2 again, jack-ui's ***Management key***
+  is empty too, so paste the key there as well. Then set your library and
+  download paths again, and jack-ui's ***Web UI port***.
+- **Apply on jack-ui ends with "port is already allocated"**: another
+  container uses port 3000. Set ***Web UI port*** to a free port, such as
+  3010, and click ***Apply*** again.
+- **jack-ui shows *Something went wrong* and *Could not reach the UI
+  server***: ***Management key*** is empty in the jack-ui template, and
+  ***Session key*** is empty or shorter than 32 characters. Paste the key you
+  saved in step 3 into ***Management key***, or, for a login prompt, set
+  ***Session key*** (under ***Show more settings***) to an
+  `openssl rand -hex 32` value, and click ***Apply***.
 - **jack-ui shows *jack-ui can't reach jack***: the screen names the address it
   tried (`http://jack:5226` by default) and what it found:
   - ***jack-ui can't find jack***: the jack container is stopped, isn't on the
-    `jack` network, or isn't named `jack`.
-  - ***jack isn't answering***: jack is still starting or has stopped (check
-    its log; for EACCES see the entry above), or ***Management key*** in the
-    jack template is empty. jack only lets jack-ui connect when that key is
-    set.
+    `jack` network, or isn't named `jack`. If jack stops right after starting,
+    see the entries above.
+  - ***jack isn't answering***: jack is still starting or has stopped. Check
+    its log; for EACCES see the entry above.
   - ***jack didn't answer ... within 5 seconds***: check ***Management API***
     in the jack-ui template (under ***Show more settings***). The default,
     `http://jack:5226`, works when both containers are on the `jack` network.
 
-  Click ***Retry*** once it's fixed.
+  The screen checks again every 5 seconds and opens once jack answers, so it
+  can also show for a moment if you open jack-ui while jack is starting.
+  ***Retry*** checks right away.
 - **jack-ui shows *jack rejected jack-ui's key***: ***Management key*** differs
-  between the two templates. Copy the value from the jack template into the
-  jack-ui template and click ***Apply***. If jack-ui asks for the key instead
-  (its ***Management key*** is empty), paste the value from the jack template.
+  between the two templates. Paste the key you saved in step 3 into
+  ***Management key*** in the jack-ui template and click ***Apply***. If
+  jack-ui asks for the key instead (its ***Management key*** is empty), paste
+  the saved key into that prompt. Unraid hides the value in the jack template
+  and won't let you copy it. If you no longer have the key, make a new one
+  with `openssl rand -hex 32`, paste it into ***Management key*** in both
+  templates and click ***Apply*** on each.
 - **Radarr says it can't reach jack, or grabs never start**: ***Address
   Radarr/Sonarr use to reach jack*** (***Settings -> Radarr & Sonarr***) is
   wrong. It must be an address your Radarr container can reach, usually
@@ -374,24 +446,50 @@ have in common turns on ***Introduce my friends to each other***.
   IP in Address Radarr/Sonarr use to reach jack.*** Saving a new address
   updates Radarr and tests again; ***Register again*** on the card does the
   same without a change.
+- **Radarr or Sonarr outside your LAN is refused (403)**: jack answers the
+  Radarr/Sonarr APIs only to your LAN. A Radarr that reaches jack over
+  Tailscale or from a VPS counts as outside, and so does one that uses your
+  public domain as jack's address. ***Logs*** shows
+  `Refused the Radarr/Sonarr API to an address outside your LAN` with the
+  address. Radarr's card can read ***jack rejected Radarr's key***, and
+  ***Register again*** alone doesn't fix that. Add the address under
+  ***Settings -> Sharing -> Security -> Also allow*** (`100.64.0.0/10` for
+  Tailscale), or use your server's LAN IP in ***Address Radarr/Sonarr use to
+  reach jack***. Click ***Save changes***, then ***Register again*** on
+  Radarr's card to test again.
 - **No Jack indexer or download client in Radarr/Sonarr**: Radarr's card reads
   `jack in Radarr: skipped (downloads off)`. Click ***Turn on downloads***
-  under ***Settings -> Radarr & Sonarr -> Downloads*** and save; saving adds
-  both to every Radarr/Sonarr right away. Then restart the jack container:
-  until then the card reads `download client waits for a restart`, and Radarr
-  can't use the download client.
+  under ***Settings -> Radarr & Sonarr -> Downloads***, save, and restart the
+  jack container. Until the restart, Radarr refuses jack's download client and
+  the card reads `indexer skipped · download client failed`. jack adds both
+  when it starts.
+- **Radarr says *Indexers unavailable due to failures: Jack***: Radarr skips
+  an indexer for a while after it fails, for example while jack restarts for
+  an update, or after ***Test*** on jack's indexer while jack's feed was
+  empty. Until then Radarr finds nothing from your friends. Radarr's card
+  under ***Settings -> Radarr & Sonarr*** says the same. Radarr resumes the
+  indexer by itself, and jack resumes it once a friend adds new movies. More
+  in
+  [Troubleshooting](./troubleshooting.md#radarr-or-sonarr-says-indexers-unavailable-due-to-failures).
 - **Saving Downloads fails with "jack can't write to /data/jack"**: that folder
   doesn't exist in the jack container, or jack can't write to it. Check that
-  the ***Downloads*** path in the jack template has the *Container Path*
-  `/data/jack`. If its host folder existed before, fix the owner with
-  `chown -R nobody:users` on that folder.
+  ***Downloads*** in the jack template has the same ***Container Path*** as
+  ***Completed folder***. If its host folder existed before, fix the owner in
+  the terminal, for example `chown -R nobody:users /mnt/user/downloads/jack`
+  (the ***Host Path*** of ***Downloads***).
+- **The folder check names a permissions problem**: on Unraid jack runs as
+  user 99 (`nobody:users`), the owner of your shares, even where the message
+  names user 1000. Give the folder back to that user in the terminal, using
+  its ***Host Path***, for example
+  `chown -R nobody:users /mnt/user/downloads/jack`.
 - **Downloads finish but Radarr doesn't import them**: the downloads folder
-  doesn't match. jack's ***Completed folder***, its downloads *Container Path*
-  and the path your Radarr sees must all be the same. ***Check folders*** under
-  ***Settings -> Radarr & Sonarr -> Downloads*** names the path that differs.
-- **Friends get "can't find this file on disk"**: your Movies/TV *Container
-  Paths* differ from the ones in your Radarr/Sonarr. ***Check folders*** finds
-  this too.
+  doesn't match. jack's ***Completed folder***, its downloads ***Container
+  Path*** and the path your Radarr sees must all be the same. ***Check
+  folders*** under ***Settings -> Radarr & Sonarr -> Downloads*** names the
+  path that differs.
+- **Friends get "can't find this file on disk"**: the ***Container Path*** of
+  ***Movies*** or ***TV*** differs from the root folder in your Radarr/Sonarr.
+  ***Check folders*** finds this too.
 - **A friend's card shows a problem**: the badge on ***Friends*** has the
   result of the last check of their jack, and a line on the card says what to
   do. ***Check now*** at the top of the page checks again right away.

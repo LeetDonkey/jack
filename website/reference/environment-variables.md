@@ -53,7 +53,7 @@ Port for the public HTTP listener (peer API, Torznab, qBittorrent).
 **Format:** filesystem path\
 **Default:** `/config/config.jsonc`
 
-Path to the [configuration file](/reference/configuration). Written with a
+Path to the [configuration file](./configuration.md). Written with a
 default config on first boot if it doesn't exist.
 
 ### `JACK_INTERNAL_URL`
@@ -62,7 +62,7 @@ default config on first boot if it doesn't exist.
 **Format:** `http`/`https` URL; `http://` is added when the scheme is missing\
 **Default:** `http://jack:5225`
 
-The [`jack.internalUrl`](/reference/configuration#jack-internalurl) written
+The [`jack.internalUrl`](./configuration.md#jack-internalurl) written
 into the default config file, for example `http://192.168.1.10:5225`. jack
 reads it only when it creates that file. To change the address later, use
 ***Settings -> Radarr & Sonarr*** in the management UI. A value that isn't an

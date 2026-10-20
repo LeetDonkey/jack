@@ -41,6 +41,7 @@ them, jack looks like any other indexer.
 
 ## Next steps
 
-- [Getting started](/guide/getting-started): run jack with Docker Compose.
-- [How it works](/guide/how-it-works): the search and download flows in detail.
-- [API keys & peering](/guide/peering): exchange keys with friends and start sharing.
+- [Getting started](./getting-started.md): run jack with Docker Compose.
+- [How it works](./how-it-works.md): the search and download flows in detail.
+- [API keys & peering](./peering.md): exchange keys with friends and start
+  sharing.

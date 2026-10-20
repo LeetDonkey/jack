@@ -25,7 +25,7 @@ a channel you trust and never paste one into a public issue, gist, or forum.
 
 Invite links require a `jack.external` profile, editable under ***Settings ->
 Sharing -> Your public address*** in the
-[management UI](/guide/management-ui). ***Invite a friend*** also asks for it
+[management UI](./management-ui.md). ***Invite a friend*** also asks for it
 when it's missing.
 
 - ***Name friends see***: the name friends see for you when they add your
@@ -36,12 +36,12 @@ when it's missing.
   there, the way a friend's jack would.
 - ***Proxy headers (optional)***: headers a friend's jack must send to get
   through your proxy, such as Cloudflare Access service tokens. Each value is a
-  [`ConfigSecret`](/reference/configuration#configsecret): ***Use a container
-  variable or file instead*** under a value reads it from a variable or a file
-  in the jack container, so the secret stays out of the config file.
+  [`ConfigSecret`](../reference/configuration.md#configsecret): ***Use a
+  container variable or file instead*** under a value reads it from a variable
+  or a file in the jack container, so the secret stays out of the config file.
 
 Click ***Save changes***. Every link you create reuses the saved profile.
-Full schema: [`jack.external`](/reference/configuration#jack-external).
+Full schema: [`jack.external`](../reference/configuration.md#jack-external).
 
 ::: tip Use HTTPS
 The API key in an invite link, and in every request the peer later makes,
@@ -50,9 +50,9 @@ and jack warns at startup about peers configured over plain HTTP.
 :::
 
 ::: warning Internal and external URLs are not the same
-[`jack.internalUrl`](/reference/configuration#jack-internalurl) is the address
-your own Radarr/Sonarr use to reach jack. Putting it in ***Address friends
-use*** hands friends an address that only resolves on your side.
+[`jack.internalUrl`](../reference/configuration.md#jack-internalurl) is the
+address your own Radarr/Sonarr use to reach jack. Putting it in ***Address
+friends use*** hands friends an address that only resolves on your side.
 :::
 
 ## Invite a friend
@@ -76,7 +76,7 @@ API key**, and returns the encoded link.
 
 The plaintext link appears **once**, in that dialog. Closing it discards the key
 from the UI, the same one-time reveal as any other
-[peer API key](/guide/peering). Copy it with ***Copy link*** before closing; if
+[peer API key](./peering.md). Copy it with ***Copy link*** before closing; if
 you lose it, ***Send a new link*** on the friend's card makes another.
 
 ::: tip One link per friend

@@ -8,7 +8,7 @@ jack authenticates each external surface by **key type**, so a credential only
 works where it's meant to (`/ping` is the only unauthenticated route):
 
 - **Peer API keys.** Issued per friend: every
-  [invite link](/guide/quick-links) carries a new one, and ***Settings ->
+  [invite link](./quick-links.md) carries a new one, and ***Settings ->
   Advanced -> API keys for other tools -> Create key*** in the management UI,
   or the management API, makes one by hand. They are named, revocable, and
   optionally expiring. Scoped to the **peer API** (`/handshake`, `/peer/*`): a
@@ -35,7 +35,7 @@ address your own Radarr/Sonarr use to reach jack.
 
 ### With an invite link
 
-The easiest way to do that exchange is an [invite link](/guide/quick-links):
+The easiest way to do that exchange is an [invite link](./quick-links.md):
 ***Friends -> Invite a friend*** in the management UI makes one, and your
 friend pastes it under ***Friends -> Add a friend*** in theirs. The link
 carries your peer URL, a peer API key issued on the spot, and any proxy

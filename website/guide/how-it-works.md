@@ -29,11 +29,11 @@ sequenceDiagram
 jack registers itself in each `destination` Radarr/Sonarr as a **Torznab
 indexer** and a **qBittorrent download client**: at startup, and again when a
 setting it registers changes (see
-[`autoregister`](/reference/configuration#servers-autoregister)). It registers
-neither while `downloads` isn't configured. Both registrations point at
-`jack.internalUrl` and authenticate with an auto-issued **managed key**. If
+[`autoregister`](../reference/configuration.md#servers-autoregister)). It
+registers neither while `downloads` isn't configured. Both registrations point
+at `jack.internalUrl` and authenticate with an auto-issued **managed key**. If
 you'd rather register jack yourself, set that server's
-[`autoregister.enable`](/reference/configuration#servers-autoregister) to
+[`autoregister.enable`](../reference/configuration.md#servers-autoregister) to
 `false`.
 
 From then on, every search works like this:
@@ -104,7 +104,7 @@ Which on-disk outcome you get is decided by your *arr:
   of every file you've ever grabbed. Left alone, `completedPath` grows without
   bound.
 
-[`downloads.unlinkImportedFiles`](/reference/configuration#downloads-unlinkimportedfiles)
+[`downloads.unlinkImportedFiles`](../reference/configuration.md#downloads-unlinkimportedfiles)
 is the switch for this. Turn it on and jack unlinks its copy as soon as the
 import is confirmed: in the hardlink case that just drops the redundant
 directory entry and your library is untouched, and in the copy case it frees the
@@ -119,7 +119,7 @@ jack removes that one file and nothing else; it never touches your library.
 
 Turn on ***Remove jack's copy after Radarr/Sonarr import it*** under
 ***Settings -> Radarr & Sonarr -> Downloads*** in the
-[management UI](/guide/management-ui), or set it in `config.jsonc`. Saved from
+[management UI](./management-ui.md), or set it in `config.jsonc`. Saved from
 the UI, it applies without a restart.
 
 ## 3. Serving as a peer to others
