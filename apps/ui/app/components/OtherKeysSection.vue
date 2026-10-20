@@ -167,7 +167,7 @@ const keyName = (key: ApiKey) => key.name?.trim() || `Key #${key.id}`
       <UButton label="Create key" icon="i-ph-plus" color="neutral" variant="outline" @click="openForm(null)" />
     </template>
 
-    <LoadErrorAlert v-if="error && !data" :error="error" :retry="refresh" />
+    <LoadErrorAlert v-if="error && !data" :error="error" :retry="refresh" what="the API keys" />
 
     <p v-else-if="pending && !data" class="flex items-center gap-2 text-sm text-muted">
       <UIcon name="i-ph-circle-notch" class="size-4 animate-spin" />

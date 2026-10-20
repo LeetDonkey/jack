@@ -24,11 +24,21 @@ const TONES = {
   error: { color: 'error', icon: 'i-ph-warning-circle', class: 'text-error' },
 } as const
 
+// With no friends jack's feed is empty: the *arr's own Test button on jack's
+// indexer fails then, and pressing it can pause the indexer. The headline and the
+// indexer's row then say the *arr reached jack, not that it works (emptyFeedNote).
+// With friends the page can't tell, so it says nothing.
+const { overview } = useOverview()
+const friends = computed(() => overview.value?.peers.total ?? null)
+const emptyFeed = computed(() => props.registration
+  ? emptyFeedNote(props.registration, { name: props.name, type: props.type }, friends.value, props.now)
+  : null)
+
 const alert = computed(() => {
   const registration = props.registration
   if (!registration)
     return null
-  const { tone, title, description } = registrationHeadline(registration, { name: props.name, type: props.type }, props.now)
+  const { tone, title, description } = registrationResultHeadline(registration, { name: props.name, type: props.type }, friends.value, props.now)
   return { ...TONES[tone], title, description }
 })
 
@@ -46,7 +56,7 @@ const rows = computed(() => {
   ] as const
   return steps.map(({ kind, label, step, test, testError }) => ({
     label,
-    detail: registrationStepDetail(kind, step, test, props.name, pausedFor),
+    detail: kind === 'indexer' && emptyFeed.value ? emptyFeed.value.indexerDetail : registrationStepDetail(kind, step, test, props.name, pausedFor),
     tone: TONES[registrationStepTone(kind, step, test, pause !== null)],
     // The *arr's own words, under the plain-language summary above.
     raw: test === 'failed' ? testError : null,
@@ -80,6 +90,15 @@ const fix = computed(() => props.registration ? registrationFix(props.registrati
           </dd>
         </div>
       </dl>
+
+      <UAlert
+        v-if="emptyFeed"
+        color="info"
+        variant="subtle"
+        icon="i-ph-info"
+        :title="emptyFeed.title"
+        :description="emptyFeed.description"
+      />
     </template>
 
     <div class="flex flex-wrap justify-end gap-2 pt-2">

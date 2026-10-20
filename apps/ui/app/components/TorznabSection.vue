@@ -33,7 +33,7 @@ watch(() => torznab.value, seed, { immediate: true })
 const dirty = computed(() => JSON.stringify(state) !== baseline.value)
 useUnsavedGuard().track('RSS feed', dirty)
 const saving = ref(false)
-const saveError = ref<string | null>(null)
+const { saveError, failed: saveFailed } = useSaveError()
 const saved = ref(false)
 watch(dirty, (isDirty) => {
   if (isDirty)
@@ -51,7 +51,7 @@ async function save() {
     saved.value = true
   }
   catch (err) {
-    saveError.value = extractError(err, 'Could not save the RSS feed settings.')
+    saveFailed(err, extractError(err, 'Could not save the RSS feed settings.'))
   }
   finally {
     saving.value = false
@@ -71,7 +71,7 @@ function revert() {
     title="RSS feed"
     description="What your Radarr/Sonarr see on every RSS sync. Searches (a new movie, a request, a manual search) always look through every friend's whole library."
   >
-    <UAlert v-if="loadError" color="error" variant="soft" icon="i-ph-warning" title="Failed to load the RSS feed settings." />
+    <LoadErrorAlert v-if="loadError" :error="loadError" :retry="refresh" what="the RSS feed settings" />
 
     <p v-else-if="pending && torznab === undefined" class="flex items-center gap-2 text-sm text-muted">
       <UIcon name="i-ph-circle-notch" class="size-4 animate-spin" />

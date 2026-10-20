@@ -78,9 +78,10 @@ export function formatPauseEnd(iso: string, now: number): string {
  * step, a client that waits for a restart or the backend's message, that would
  * contradict the fix those ask for.
  *
- * Register again isn't offered. It ends the pause only when the *arr's test finds
- * something in jack's feed, which lists only friends' releases of the last
- * `torznab.rssMaxAgeDays`, and a test that finds nothing can make the pause longer.
+ * The text doesn't send the user to Register again. It ends the pause only when
+ * the *arr's test finds something in jack's feed, which lists only friends'
+ * releases of the last `torznab.rssMaxAgeDays`, and jack runs that test by itself
+ * every 30 minutes while the pause lasts. The server card still has the button.
  */
 export function indexerPauseText(server: { name: string, type: string }, registration: DestinationRegistration | null, now: number): { title: string, detail: string } | null {
   const pause = indexerPause(registration, now)
@@ -95,7 +96,7 @@ export function indexerPauseText(server: { name: string, type: string }, registr
   if (!pause.until) {
     const resumes = `${name} resumes it by itself after a while, and jack resumes it once a friend adds new ${media}.`
     return {
-      title: `${name} is skipping jack's indexer for a while after earlier errors, so it won't find friends' ${media} until then.`,
+      title: `${name} is skipping jack's indexer after earlier errors, so it won't find friends' ${media} for now.`,
       detail: alone ? `${resumes} You don't need to do anything.` : resumes,
     }
   }

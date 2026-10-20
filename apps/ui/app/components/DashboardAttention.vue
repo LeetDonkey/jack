@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { SetupRequiredState } from '~/composables/useSetupStatus'
 import type { ActivityOverview, OverviewPeer } from '~/types/activity'
+import type { AttentionCounts } from '~/utils/attention'
 
 const props = withDefaults(defineProps<{
   overview: ActivityOverview
@@ -135,18 +136,21 @@ const pausedIndexers = computed(() => props.overview.servers.items.flatMap((serv
 }))
 
 // Each unreachable connector and each server jack isn't set up in is its own
-// fixable thing; download problems collapse to one line each. The count drives the
-// badge.
-const issueCount = computed(() =>
-  downFriends.value.length
-  + unreachableServers.value.length
-  + registrationProblems.value.length
-  + pausedIndexers.value.length
-  + (queuedCount.value ? 1 : 0)
-  + (failedCount.value ? 1 : 0)
-  + (mismatchCount.value ? 1 : 0)
-  + (onlySharesIsIssue.value ? 1 : 0))
-const hasIssues = computed(() => issueCount.value > 0)
+// fixable thing; download problems collapse to one line each. The counts drive the
+// heading and its badge: red only for something broken, and no "issues" at all
+// when every row resolves by itself.
+const counts = computed((): AttentionCounts => ({
+  errors: downFriends.value.length
+    + unreachableServers.value.length
+    + registrationProblems.value.length
+    + (failedCount.value ? 1 : 0),
+  warnings: (queuedCount.value ? 1 : 0)
+    + (mismatchCount.value ? 1 : 0)
+    + (onlySharesIsIssue.value ? 1 : 0),
+  notices: pausedIndexers.value.length,
+}))
+const issueCount = computed(() => counts.value.errors + counts.value.warnings + counts.value.notices)
+const heading = computed(() => attentionHeading(counts.value))
 
 const nothingConfigured = computed(() => props.overview.peers.total === 0 && props.overview.servers.total === 0)
 
@@ -167,13 +171,16 @@ function plural(n: number, word: string) {
 
 <template>
   <div class="space-y-4">
-    <!-- Something needs doing. -->
-    <UCard v-if="hasIssues" variant="subtle" :ui="{ body: '!p-0' }">
+    <!-- Something needs doing, or is worth knowing. While jack isn't answering it
+         is what jack last sent, marked like the dashboard's other sections. -->
+    <UCard v-if="heading" variant="subtle" class="transition-[filter]" :class="{ grayscale: stale }" :ui="{ body: '!p-0' }">
       <UCollapsible v-model:open="open" :ui="{ root: 'group' }">
         <button type="button" class="flex w-full items-center gap-3 px-4 py-3.5 text-left">
           <UIcon name="i-ph-caret-down" class="size-4 text-muted transition-transform group-data-[state=closed]:-rotate-90" />
-          <span class="text-sm font-semibold text-highlighted">Needs attention</span>
-          <UBadge class="ml-auto" color="error" variant="subtle" :label="plural(issueCount, 'issue')" />
+          <span class="text-sm font-semibold text-highlighted">
+            {{ heading.title }}<span v-if="stale" class="font-normal text-muted"> · last known</span>
+          </span>
+          <UBadge class="ml-auto" :color="heading.color" variant="subtle" :label="heading.badge" />
         </button>
 
         <template #content>
@@ -219,8 +226,9 @@ function plural(n: number, word: string) {
               <UButton v-else :to="settingsLink('servers')" label="Edit Radarr & Sonarr" trailing-icon="i-ph-arrow-right" variant="link" size="sm" class="ml-7 shrink-0 px-0 sm:ml-0 sm:px-2.5" />
             </div>
 
-            <!-- Radarr/Sonarr skip jack's indexer for now. It resumes by itself, and
-                 Register again can make the pause longer, so there is no link. -->
+            <!-- Radarr/Sonarr skip jack's indexer for now. It resumes by itself, so
+                 there is no link. Register again on the server's card ends it once a
+                 friend has new releases. -->
             <div v-for="pause in pausedIndexers" :key="`paused-${pause.id}`" class="flex gap-3 px-4 py-3">
               <UIcon name="i-ph-pause-circle" class="mt-0.5 size-4 shrink-0 text-warning" />
               <div class="min-w-0 flex-1">

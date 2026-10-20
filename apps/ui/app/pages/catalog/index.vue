@@ -269,7 +269,9 @@ async function onConfirm(payload: CatalogRequestPayload) {
             aria-label="Search your friends' library"
             class="w-full sm:hidden"
           />
-          <UTabs v-model="typeFilter" size="sm" :items="TYPE_TABS" :content="false" />
+          <!-- Inactive tabs in text-toned in light mode: text-muted on the tab list's
+               bg-elevated is only 4.4:1. -->
+          <UTabs v-model="typeFilter" size="sm" :items="TYPE_TABS" :content="false" :ui="{ trigger: 'data-[state=inactive]:text-toned dark:data-[state=inactive]:text-muted' }" />
           <USelect
             v-model="sort"
             :items="sortItems"

@@ -154,3 +154,29 @@ export function useOverview() {
 
   return { overview, connected, hasConnectedOnce, jackDown, pending, error, refresh, whenLoaded }
 }
+
+/**
+ * The overview stream's state as useOverview keeps it, read without becoming one
+ * of its consumers, for components that only react to it. The layout's
+ * useOverview keeps it current on every page.
+ */
+export function useJackStatus() {
+  return {
+    connected: readonly(useState('overview:connected', () => false)),
+    jackDown: readonly(useState('overview:jack-down', () => false)),
+  }
+}
+
+/**
+ * Calls `fn` each time the overview stream reaches jack again after it was
+ * closed: jack is back after a restart, or the tab is shown again. A load that
+ * failed meanwhile tries again then instead of waiting for a reload. Stops with
+ * the component that called it.
+ */
+export function onJackBack(fn: () => void) {
+  const { connected } = useJackStatus()
+  watch(connected, (isConnected, wasConnected) => {
+    if (isConnected && !wasConnected)
+      fn()
+  })
+}

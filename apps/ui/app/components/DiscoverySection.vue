@@ -41,7 +41,7 @@ watch(() => discovery.value, seed, { immediate: true })
 const dirty = computed(() => JSON.stringify(state) !== baseline.value)
 useUnsavedGuard().track('Friends of friends', dirty)
 const saving = ref(false)
-const saveError = ref<string | null>(null)
+const { saveError, failed: saveFailed } = useSaveError()
 const saved = ref(false)
 watch(dirty, (isDirty) => {
   if (isDirty)
@@ -75,7 +75,7 @@ async function save() {
     saved.value = true
   }
   catch (err) {
-    saveError.value = extractError(err, 'Could not save the friends-of-friends settings.')
+    saveFailed(err, extractError(err, 'Could not save the friends-of-friends settings.'))
   }
   finally {
     saving.value = false
@@ -95,7 +95,7 @@ function revert() {
     title="Friends of friends"
     description="Let people your friends know find you by name, and ask to connect. Your address stays hidden until you both accept."
   >
-    <UAlert v-if="loadError" color="error" variant="soft" icon="i-ph-warning" title="Failed to load the friends-of-friends settings." />
+    <LoadErrorAlert v-if="loadError" :error="loadError" :retry="refresh" what="the friends-of-friends settings" />
 
     <p v-else-if="pending && discovery === undefined" class="flex items-center gap-2 text-sm text-muted">
       <UIcon name="i-ph-circle-notch" class="size-4 animate-spin" />

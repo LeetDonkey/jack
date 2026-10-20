@@ -17,31 +17,63 @@ const keyCreatedAt = computed<Record<number, string>>(() => Object.fromEntries((
 const now = ref(new Date())
 const checking = ref(false)
 
+// Once the list is on screen, reloads go around useAsyncData, whose failed
+// refresh empties `data`: while jack is away the last list stays, marked as last
+// known. Until then a failure lands in `error`, and LoadErrorAlert tries again.
+// `loadSeq` drops an answer that a newer load or Check now has overtaken.
+let loadSeq = 0
+async function loadFriends(): Promise<void> {
+  if (!data.value)
+    return refresh()
+  const seq = ++loadSeq
+  try {
+    const snapshot = await request<FriendsSnapshot>('friends')
+    if (seq === loadSeq)
+      data.value = snapshot
+  }
+  catch {
+    // The next poll, or jack's return, tries again.
+  }
+}
+
 async function reload() {
-  await Promise.all([refresh(), refreshKeys()])
+  await Promise.all([loadFriends(), refreshKeys()])
   now.value = new Date()
 }
 
+const { overview, jackDown } = useOverview()
+
 // Health is checked every 5 minutes and traffic is flushed every 30 seconds, so a
 // slow poll is enough. The overview stream says when a check changed something.
+// Nothing is asked while jack is away; its return reloads the list.
 let timer: ReturnType<typeof setInterval> | undefined
 onMounted(() => {
   timer = setInterval(() => {
     now.value = new Date()
-    if (!checking.value)
-      void refresh()
+    if (!checking.value && !jackDown.value)
+      void loadFriends()
   }, 30_000)
 })
 onBeforeUnmount(() => clearInterval(timer))
 
-const { overview } = useOverview()
+// A list on screen is reloaded at once (without one, LoadErrorAlert does that).
+// Keys that failed to load while jack was away load again too.
+onJackBack(() => {
+  if (data.value && !checking.value) {
+    void loadFriends()
+    now.value = new Date()
+  }
+  if (apiKeys.value === undefined)
+    void refreshKeys()
+})
+
 const healthSignature = computed(() => {
   const items = overview.value?.peers.items as Array<{ id: string, health?: PeerHealth }> | undefined
   return items?.map(peer => `${peer.id}:${peer.health?.online}:${peer.health?.lastErrorCode}`).join('|') ?? ''
 })
 watch(healthSignature, (next, prev) => {
   if (prev && next !== prev && !checking.value)
-    void refresh()
+    void loadFriends()
 })
 
 // Asks every friend's jack now; the answer can take up to 30 s per friend that doesn't answer.
@@ -50,7 +82,9 @@ async function checkNow() {
     return
   checking.value = true
   try {
-    data.value = await request<FriendsSnapshot>('friends/check', { method: 'POST' })
+    const snapshot = await request<FriendsSnapshot>('friends/check', { method: 'POST' })
+    loadSeq++
+    data.value = snapshot
     now.value = new Date()
   }
   catch (err) {
@@ -314,7 +348,13 @@ const unlinkedOpen = ref(false)
       </p>
 
       <div v-else-if="data" class="space-y-8">
-        <section class="space-y-3">
+        <!-- While jack is away the list stays as jack last sent it, greyed like the
+             dashboard's, and the layout's notice says why. -->
+        <section class="space-y-3 transition-[filter]" :class="{ grayscale: jackDown }">
+          <p v-if="jackDown" role="status" class="text-xs text-muted">
+            Last known. This list updates once jack is back.
+          </p>
+
           <UCard v-if="friends.length === 0" variant="subtle">
             <div class="flex flex-col items-center gap-3 py-6 text-center">
               <UIcon name="i-ph-users-three" class="size-8 text-dimmed" />

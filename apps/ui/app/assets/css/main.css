@@ -13,16 +13,21 @@
    update notice) fold their details away below it. */
 @custom-variant roomy (@media (width >= 40rem) and (height >= 36rem));
 
-/* Light mode only, dark mode keeps Nuxt UI's values. Nuxt UI's warning
-   (yellow-500) is 1.8:1 on its own pale background and dimmed text (neutral-400)
-   2.6:1 on white, too faint for the setup steps and hints they carry. Warning
-   needs the 800 shade: soft alerts tint their background with the same color
-   and fade the description to 90%, which leaves 700 at 3.7:1 and 800 at 4.8:1
-   (WCAG AA asks 4.5:1). Neutral-500 gives dimmed text 4.8:1. Same layer as Nuxt
-   UI's color variables, where :root:not(.dark) outranks their `:root, .light`. */
+/* Nuxt UI's warning (yellow-500) is 1.8:1 on its own pale background in light
+   mode, and dimmed text 2.6:1 on white (neutral-400) and 3.4:1 on dark cards
+   (neutral-500), too faint for the setup steps, counts and hints they carry.
+   Light warning needs the 800 shade: soft alerts tint their background with the
+   same color and fade the description to 90%, which leaves 700 at 3.7:1 and 800
+   at 4.8:1 (WCAG AA asks 4.5:1). Dimmed text takes the muted shade in both modes:
+   neutral-500 in light (4.8:1 on white), neutral-400 in dark (5.6:1 on elevated
+   backgrounds). Same layer as Nuxt UI's color variables, where these selectors
+   outrank their `:root, .light` and `.dark`. */
 @layer theme {
   :root:not(.dark) {
     --ui-warning: var(--ui-color-warning-800);
     --ui-text-dimmed: var(--ui-color-neutral-500);
+  }
+  :root.dark {
+    --ui-text-dimmed: var(--ui-color-neutral-400);
   }
 }

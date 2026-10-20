@@ -20,6 +20,10 @@ const { data: bandwidth, status: bandwidthStatus, refresh: refreshBandwidth } = 
   'transfers-bandwidth',
   () => request<BandwidthConfig | null>('config/bandwidth'),
 )
+onJackBack(() => {
+  if (bandwidthStatus.value === 'error')
+    void refreshBandwidth()
+})
 watch(() => data.value?.schedulePeriod, (next, prev) => {
   if (next != null && next !== prev)
     void refreshBandwidth()

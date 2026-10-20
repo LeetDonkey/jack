@@ -83,7 +83,7 @@ const dirty = computed(() => JSON.stringify(state) !== baseline.value)
 useUnsavedGuard().track('Bandwidth', dirty)
 
 const saving = ref(false)
-const saveError = ref<string | null>(null)
+const { saveError, failed: saveFailed } = useSaveError()
 const saved = ref(false)
 watch(dirty, (isDirty) => {
   if (isDirty)
@@ -177,7 +177,7 @@ async function save() {
     saved.value = true
   }
   catch (err) {
-    saveError.value = extractError(err, 'Could not save the bandwidth settings.')
+    saveFailed(err, extractError(err, 'Could not save the bandwidth settings.'))
   }
   finally {
     saving.value = false
@@ -230,7 +230,7 @@ function revert() {
       </div>
     </UCard>
 
-    <UAlert v-if="loadError" color="error" variant="soft" icon="i-ph-warning" title="Failed to load the bandwidth settings." />
+    <LoadErrorAlert v-if="loadError" :error="loadError" :retry="refresh" what="the bandwidth settings" />
 
     <p v-else-if="pending && bandwidth === undefined" class="flex items-center gap-2 text-sm text-muted">
       <UIcon name="i-ph-circle-notch" class="size-4 animate-spin" />

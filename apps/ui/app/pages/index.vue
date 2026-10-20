@@ -185,7 +185,7 @@ const lifetime = computed(() => {
       <div v-else-if="overview && counts && (setup.settled || shownOnce)" class="space-y-8">
         <!-- What needs doing, first: setup, then problems. -->
         <div class="space-y-4">
-          <SetupChecklist :status="setup" :now="now" />
+          <SetupChecklist :status="setup" :now="now" :stale="jackDown" />
           <DashboardAttention
             :overview="overview"
             :setup-state="setup.requiredState"
@@ -364,6 +364,11 @@ const lifetime = computed(() => {
                       class="block truncate text-xs text-muted"
                       :title="formatDate(server.lastContactAt)"
                     >last reached jack {{ formatTimeAgo(server.lastContactAt, now) }}</span>
+                    <!-- The attention card above says what it means. -->
+                    <span
+                      v-if="server.initialized && indexerPause(server.registration, now)"
+                      class="block truncate text-xs text-warning"
+                    >skips jack's indexer for now</span>
                   </span>
                   <span v-if="server.initialized" class="text-right text-xs text-muted">{{ serverRoleLabel(server) }}</span>
                   <span v-else-if="server.initializationError" class="text-xs text-error">unreachable</span>

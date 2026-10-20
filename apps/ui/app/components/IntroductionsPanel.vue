@@ -136,7 +136,7 @@ const setup = computed(() => {
       <UButton label="Refresh" icon="i-ph-arrows-clockwise" size="xs" color="neutral" variant="ghost" :loading="busy === 'sync'" @click="act('sync', 'introductions/sync')" />
     </div>
 
-    <UAlert v-if="error && !data" color="error" variant="soft" icon="i-ph-warning" title="Failed to load friends of friends." />
+    <LoadErrorAlert v-if="error && !data" :error="error" :retry="refresh" what="friends of friends" />
 
     <template v-else-if="data">
       <UAlert
@@ -227,6 +227,13 @@ const setup = computed(() => {
         </div>
       </UCard>
     </template>
+
+    <!-- jack asks each friend for their directory, which can take a while when one
+         doesn't answer. -->
+    <p v-else class="flex items-center gap-2 text-sm text-muted">
+      <UIcon name="i-ph-circle-notch" class="size-4 animate-spin" />
+      Loading…
+    </p>
 
     <UModal :open="asking != null" :title="asking ? `Ask ${asking.name} to connect` : ''" @update:open="(open: boolean) => { if (!open) asking = null }">
       <template #body>

@@ -8,7 +8,7 @@ const { onError, showFixHint } = useFormErrorFocus(form)
 
 // `null` is a real answer here: no downloads block in the config file, so downloads
 // are off and the section offers to turn them on.
-const { data: downloads, pending, error: loadError } = useDownloadsConfig()
+const { data: downloads, pending, error: loadError, refresh } = useDownloadsConfig()
 
 // jack's own record of what still waits for a restart (overview.system.restartPending).
 const { overview, refresh: refreshOverview } = useOverview()
@@ -66,7 +66,7 @@ const dirty = computed(() => JSON.stringify(state) !== baseline.value)
 useUnsavedGuard().track('Downloads', dirty)
 
 const saving = ref(false)
-const saveError = ref<string | null>(null)
+const { saveError, failed: saveFailed } = useSaveError()
 const saved = ref(false)
 // Editing again makes the "Saved" confirmation stale, so retire it on the next change.
 watch(dirty, (isDirty) => {
@@ -182,7 +182,7 @@ async function save() {
       saveError.value = 'Not saved. Check the Completed folder.'
     }
     else {
-      saveError.value = message
+      saveFailed(err, message)
     }
   }
   finally {
@@ -246,7 +246,7 @@ const guideUrl = docsUrl('unraid', '5-connect-radarr-and-sonarr')
   >
     <!-- Only when the first load failed. A save reads the block back itself, so a
          failed read after a save never lands here. -->
-    <UAlert v-if="loadError && downloads === undefined" color="error" variant="soft" icon="i-ph-warning" title="Failed to load the downloads settings." />
+    <LoadErrorAlert v-if="loadError && downloads === undefined" :error="loadError" :retry="refresh" what="the downloads settings" />
 
     <p v-else-if="pending && downloads === undefined" class="flex items-center gap-2 text-sm text-muted">
       <UIcon name="i-ph-circle-notch" class="size-4 animate-spin" />

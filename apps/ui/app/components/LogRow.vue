@@ -116,10 +116,10 @@ async function copyRaw() {
         <span class="sr-only">Help available</span>
       </span>
 
-      <!-- Repeat counter -->
+      <!-- Repeat counter. text-toned: text-muted on bg-accented is 3.9:1. -->
       <span
         v-if="count > 1"
-        class="shrink-0 rounded-full bg-accented px-1.5 py-px text-[0.65rem] font-semibold tabular-nums text-muted"
+        class="shrink-0 rounded-full bg-accented px-1.5 py-px text-[0.65rem] font-semibold tabular-nums text-toned"
         :title="`${count} consecutive identical lines`"
       >×{{ count }}</span>
 

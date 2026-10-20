@@ -6,7 +6,9 @@ import type { SetupStepState } from '~/utils/setup-steps'
 // card for sharing with friends. All state comes from useSetupStatus (the page owns
 // it, because the attention panel needs the same answer). `now` is the page's
 // ticking clock, so "Checked 5 min ago" moves on while the page stays open.
-const props = defineProps<{ status: SetupStatus, now: number }>()
+// `stale`: jack isn't answering, so the steps are what jack last said, marked like
+// the dashboard's other sections.
+const props = defineProps<{ status: SetupStatus, now: number, stale?: boolean }>()
 
 const MARKERS: Record<Exclude<SetupStepState, 'open'>, { icon: string, class: string, label: string }> = {
   done: { icon: 'i-ph-check-circle-fill', class: 'text-success', label: 'Done' },
@@ -90,7 +92,7 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
 <template>
   <div v-if="status.showSetupCard || status.showSharingCard" class="space-y-4">
     <!-- Required steps. -->
-    <UCard v-if="status.showSetupCard" variant="subtle" :ui="{ body: '!p-0' }">
+    <UCard v-if="status.showSetupCard" variant="subtle" class="transition-[filter]" :class="{ grayscale: stale }" :ui="{ body: '!p-0' }">
       <div class="flex items-center gap-3 px-4 py-3.5">
         <UIcon
           :name="status.setupComplete ? 'i-ph-check-circle' : 'i-ph-list-checks'"
@@ -98,7 +100,7 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
           :class="status.setupComplete ? 'text-success' : 'text-primary'"
         />
         <h2 class="text-sm font-semibold text-highlighted">
-          {{ setupTitle }}
+          {{ setupTitle }}<span v-if="stale" class="font-normal text-muted"> · last known</span>
         </h2>
         <UButton
           v-if="status.setupComplete"
@@ -329,7 +331,7 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
     </UCard>
 
     <!-- Optional: sharing with friends. Never counts towards the steps above. -->
-    <UCard v-if="status.showSharingCard" variant="subtle" :ui="{ body: '!p-0' }">
+    <UCard v-if="status.showSharingCard" variant="subtle" class="transition-[filter]" :class="{ grayscale: stale }" :ui="{ body: '!p-0' }">
       <div class="flex items-center gap-3 px-4 py-3.5">
         <UIcon name="i-ph-users-three" class="size-5 shrink-0 text-muted" />
         <h2 class="text-sm font-semibold text-highlighted">

@@ -8,6 +8,8 @@ import { serverFolderResult } from '~/utils/folder-check'
 const { request, extractError } = useManagement()
 const { settings, pending, error, reload, applyServerRegistration } = useSettings()
 const toast = useToast()
+// The number of friends, for the toast after Register again (registrationResultHeadline).
+const { overview } = useOverview()
 
 // The folder check's result shows on each card once it has run this session.
 // Downloads -> Folder check runs it; with downloads off that section can't, so
@@ -149,7 +151,7 @@ async function registerAgain(server: ServerItem) {
     if (res.registration) {
       applyServerRegistration(server.id, res.registration)
       // Worded as the result dialog after a save words the same outcome.
-      const { tone, title, description } = registrationHeadline(res.registration, server)
+      const { tone, title, description } = registrationResultHeadline(res.registration, server, overview.value?.peers.total ?? null)
       toast.add({
         color: tone === 'ok' ? 'success' : tone,
         icon: tone === 'ok' ? 'i-ph-check-circle' : 'i-ph-warning',
@@ -271,7 +273,7 @@ const destinations = computed(() => servers.value.filter(s => s.destination).len
       <UButton label="Connect Radarr or Sonarr" icon="i-ph-plus" @click="openForm(null)" />
     </template>
 
-    <UAlert v-if="error && !settings" color="error" variant="soft" icon="i-ph-warning" title="Failed to load Radarr and Sonarr." />
+    <LoadErrorAlert v-if="error && !settings" :error="error" :retry="reload" what="Radarr and Sonarr" />
 
     <p v-else-if="pending && !settings" class="flex items-center gap-2 text-sm text-muted">
       <UIcon name="i-ph-circle-notch" class="size-4 animate-spin" />
@@ -357,6 +359,9 @@ const destinations = computed(() => servers.value.filter(s => s.destination).len
                   </template>
                 </template>
                 <span v-else class="text-muted">not added yet</span>
+                <!-- Also with a pause alone: once a friend has new releases, it ends
+                     the pause. It can't make the pause longer, since jack tests a copy
+                     of the indexer, and the saved one only once the copy finds releases. -->
                 <UButton
                   label="Register again"
                   icon="i-ph-arrows-clockwise"

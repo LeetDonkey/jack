@@ -93,6 +93,8 @@ function removeWebhook(index: number) {
 }
 
 const hasWebhooks = computed(() => state.webhooks.length > 0)
+// Without a webhook the controls fade: nothing is sent, though they stay editable.
+const controlClass = computed(() => (hasWebhooks.value ? undefined : 'opacity-60'))
 
 // The number input stores `v ?? null`: an empty input reports undefined when it
 // loses focus, which JSON leaves out, so the form would look edited.
@@ -100,7 +102,7 @@ const dirty = computed(() => JSON.stringify(state) !== baseline.value)
 useUnsavedGuard().track('Notifications', dirty)
 
 const saving = ref(false)
-const saveError = ref<string | null>(null)
+const { saveError, failed: saveFailed } = useSaveError()
 const saved = ref(false)
 watch(dirty, (isDirty) => {
   if (isDirty)
@@ -143,7 +145,7 @@ async function save() {
     saved.value = true
   }
   catch (err) {
-    saveError.value = extractError(err, 'Could not save the notification settings.')
+    saveFailed(err, extractError(err, 'Could not save the notification settings.'))
   }
   finally {
     saving.value = false
@@ -181,7 +183,7 @@ async function sendTest() {
     title="Notifications"
     description="Messages to your phone or chat when a download fails for good, a friend goes offline, and a daily summary."
   >
-    <UAlert v-if="loadError" color="error" variant="soft" icon="i-ph-warning" title="Failed to load the notification settings." />
+    <LoadErrorAlert v-if="loadError" :error="loadError" :retry="refresh" what="the notification settings" />
 
     <p v-else-if="pending && notifications === undefined" class="flex items-center gap-2 text-sm text-muted">
       <UIcon name="i-ph-circle-notch" class="size-4 animate-spin" />
@@ -222,16 +224,18 @@ async function sendTest() {
           <UIcon name="i-ph-info" class="size-4 shrink-0" />
           Add a webhook above to receive these.
         </p>
-        <!-- Still editable without a webhook, so the choices are ready when one is added. -->
-        <div class="space-y-4" :class="{ 'opacity-60': !hasWebhooks }">
+        <!-- Still editable without a webhook, so the choices are ready when one is added.
+             Only the controls fade: the descriptions are what tells whether a webhook
+             is worth adding, and faded they fall to 2.3:1. -->
+        <div class="space-y-4">
           <UFormField name="downloadFailed" label="Failed downloads" description="A download that still fails after its retries and retry window.">
-            <USwitch v-model="state.downloadFailed" :disabled="saving" />
+            <USwitch v-model="state.downloadFailed" :disabled="saving" :class="controlClass" />
           </UFormField>
           <UFormField name="peerOffline" label="Friends going offline" description="A friend unreachable for the time below, and again when they are back.">
-            <USwitch v-model="state.peerOffline" :disabled="saving" />
+            <USwitch v-model="state.peerOffline" :disabled="saving" :class="controlClass" />
           </UFormField>
           <UFormField v-if="state.peerOffline" name="peerOfflineMinutes" label="Offline for at least" hint="minutes" :ui="{ hint: 'font-mono text-xs text-dimmed' }">
-            <UInputNumber :model-value="state.peerOfflineMinutes" :disabled="saving" :min="5" :increment="false" :decrement="false" placeholder="60" class="w-28" @update:model-value="v => (state.peerOfflineMinutes = v ?? null)" />
+            <UInputNumber :model-value="state.peerOfflineMinutes" :disabled="saving" :min="5" :increment="false" :decrement="false" placeholder="60" class="w-28" :class="controlClass" @update:model-value="v => (state.peerOfflineMinutes = v ?? null)" />
           </UFormField>
           <UFormField name="ipBanned" label="Banned addresses">
             <template #description>
@@ -240,10 +244,10 @@ async function sendTest() {
                 Ban settings
               </ULink>
             </template>
-            <USwitch v-model="state.ipBanned" :disabled="saving" />
+            <USwitch v-model="state.ipBanned" :disabled="saving" :class="controlClass" />
           </UFormField>
           <UFormField name="dailySummaryAt" label="Daily summary" description="Traffic per friend and how downloads went, once a day at this time in jack's time zone. Empty means none.">
-            <UInput v-model="state.dailySummaryAt" type="time" :disabled="saving" class="w-32" />
+            <UInput v-model="state.dailySummaryAt" type="time" :disabled="saving" class="w-32" :class="controlClass" />
           </UFormField>
         </div>
       </UCard>

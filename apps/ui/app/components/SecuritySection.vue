@@ -13,13 +13,18 @@ const { data: security, pending, error: loadError, refresh } = useLazyAsyncData(
   'security-config',
   () => request<SecurityConfigResponse | null>('config/security'),
 )
-const { data: bans, refresh: refreshBans } = useLazyAsyncData('security-bans', () => request<BansSnapshot>('security/bans'))
+const { data: bans, error: bansError, refresh: refreshBans } = useLazyAsyncData('security-bans', () => request<BansSnapshot>('security/bans'))
 
 const timer = ref<ReturnType<typeof setInterval>>()
 onMounted(() => {
   timer.value = setInterval(() => void refreshBans(), 30_000)
 })
 onBeforeUnmount(() => clearInterval(timer.value))
+// The 30 s refresh would get there too; once jack is back there is no need to wait.
+onJackBack(() => {
+  if (bansError.value)
+    void refreshBans()
+})
 
 const DEFAULTS = { maxFailures: 10, windowMinutes: 10, banMinutes: 60 }
 
@@ -70,7 +75,7 @@ const dirty = computed(() => JSON.stringify(state) !== baseline.value)
 const canSave = computed(() => securityCanSave(dirty.value, security.value?.ignoredEntries))
 useUnsavedGuard().track('Security', dirty)
 const saving = ref(false)
-const saveError = ref<string | null>(null)
+const { saveError, failed: saveFailed } = useSaveError()
 const saved = ref(false)
 watch(dirty, (isDirty) => {
   if (isDirty)
@@ -129,9 +134,9 @@ function showSaveError(err: unknown, patch: SecurityConfigPatch) {
     return
   }
   const [hidden] = securityFieldErrors(issues, sent, new Set(Object.keys(FIELD_LABELS)))
-  saveError.value = hidden
+  saveFailed(err, hidden
     ? `${FIELD_LABELS[hidden.name]}: ${hidden.message}`
-    : extractError(err, 'Could not save the security settings.')
+    : extractError(err, 'Could not save the security settings.'))
 }
 
 async function save() {
@@ -188,7 +193,7 @@ async function unban(ip: string) {
     title="Security"
     description="How jack's public port protects itself. Everything here is on by default."
   >
-    <UAlert v-if="loadError" color="error" variant="soft" icon="i-ph-warning" title="Failed to load the security settings." />
+    <LoadErrorAlert v-if="loadError" :error="loadError" :retry="refresh" what="the security settings" />
 
     <p v-else-if="pending && security === undefined" class="flex items-center gap-2 text-sm text-muted">
       <UIcon name="i-ph-circle-notch" class="size-4 animate-spin" />
@@ -287,7 +292,15 @@ async function unban(ip: string) {
       <p class="text-sm font-medium text-highlighted">
         Banned addresses
       </p>
-      <p v-if="!bans?.bans.length" class="text-xs text-muted">
+      <!-- A failed load empties the list, which must not read as "nobody". -->
+      <p v-if="!bans && bansError" class="text-xs text-muted">
+        Can't load the list right now. It updates by itself once jack answers.
+      </p>
+      <p v-else-if="!bans" class="flex items-center gap-2 text-xs text-muted">
+        <UIcon name="i-ph-circle-notch" class="size-3.5 animate-spin" />
+        Loading…
+      </p>
+      <p v-else-if="!bans.bans.length" class="text-xs text-muted">
         Nobody is banned.
       </p>
       <div v-for="ban in bans?.bans ?? []" :key="ban.ip" class="flex flex-wrap items-center justify-between gap-2 rounded-md border border-default p-2">

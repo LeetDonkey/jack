@@ -45,7 +45,7 @@ watch(jack, (config) => {
 }, { immediate: true })
 
 const saving = ref(false)
-const saveError = ref<string | null>(null)
+const { saveError, failed: saveFailed } = useSaveError()
 const saved = ref(false)
 // The confirmation belongs to the saved values; editing again retires it.
 watch(dirty, (isDirty) => {
@@ -114,7 +114,7 @@ async function onSubmit() {
       void onError()
     }
     else {
-      saveError.value = extractError(err, 'Could not save your public address.')
+      saveFailed(err, extractError(err, 'Could not save your public address.'))
     }
   }
   finally {
@@ -172,7 +172,7 @@ async function remove() {
       </p>
     </template>
 
-    <UAlert v-if="loadError && jack === undefined" color="error" variant="soft" icon="i-ph-warning" title="Failed to load your public address." />
+    <LoadErrorAlert v-if="loadError && jack === undefined" :error="loadError" :retry="refresh" what="your public address" />
 
     <p v-else-if="pending && jack === undefined" class="flex items-center gap-2 text-sm text-muted">
       <UIcon name="i-ph-circle-notch" class="size-4 animate-spin" />

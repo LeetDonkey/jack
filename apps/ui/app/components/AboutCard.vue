@@ -6,14 +6,21 @@ const { request } = useManagement()
 // Which build each container runs: jack's from jack, the UI's from jack-ui's own
 // server. Both images report null without the REVISION/BUILD_DATE build args, and
 // an older jack has no /version; either way it reads "unknown build".
-const { data: jackBuild, pending: jackPending } = useLazyAsyncData('about-jack-build', () =>
+const { data: jackBuild, pending: jackPending, refresh: refreshJackBuild } = useLazyAsyncData('about-jack-build', () =>
   request<JackVersion>('version').catch(() => null))
 const { data: uiBuild, pending: uiPending } = useLazyAsyncData('about-ui-build', () =>
   $fetch<BuildIdentity>('/api/version').catch(() => null))
 
 // TMDB is credited only while jack uses a TMDB key.
-const { data: tmdbStatus } = useLazyAsyncData('about-tmdb-status', () =>
+const { data: tmdbStatus, refresh: refreshTmdbStatus } = useLazyAsyncData('about-tmdb-status', () =>
   request<{ configured: boolean, ok: boolean }>('catalog/tmdb/status').catch(() => null))
+
+// jack may come back from a restart as another build, and a call that failed
+// meanwhile reads as null, so both are asked again.
+onJackBack(() => {
+  void refreshJackBuild()
+  void refreshTmdbStatus()
+})
 
 const HEX_REVISION = /^[0-9a-f]{8,}$/i
 

@@ -10,7 +10,7 @@ const { request, extractError } = useManagement()
 const { data: jack, pending, error: loadError, refresh } = useJackConfig()
 
 const submitting = ref(false)
-const saveError = ref<string | null>(null)
+const { saveError, failed: saveFailed } = useSaveError()
 const saved = ref(false)
 const formRevision = ref(0)
 
@@ -25,7 +25,7 @@ async function save(input: JackConfig) {
     saved.value = true
   }
   catch (err) {
-    saveError.value = extractError(err, 'Could not save the address.')
+    saveFailed(err, extractError(err, 'Could not save the address.'))
   }
   finally {
     submitting.value = false
@@ -40,7 +40,7 @@ async function save(input: JackConfig) {
       title="Address Radarr/Sonarr use to reach jack"
       description="Radarr and Sonarr search your friends' libraries and hand downloads to jack at this address."
     >
-      <UAlert v-if="loadError && jack === undefined" color="error" variant="soft" icon="i-ph-warning" title="Failed to load the address." />
+      <LoadErrorAlert v-if="loadError && jack === undefined" :error="loadError" :retry="refresh" what="the address" />
 
       <!-- Only on the first load. A save refreshes the config too, and hiding the
            form then would flash the card. -->

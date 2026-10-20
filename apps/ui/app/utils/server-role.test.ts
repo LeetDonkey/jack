@@ -219,7 +219,7 @@ describe('indexerPauseText', () => {
   })
 
   // Register again only helps when the *arr's test finds friends' releases of the
-  // last 7 days, and a test that finds none makes the pause longer.
+  // last 7 days, and jack runs that test by itself while the pause lasts.
   test('never sends the user to Register again', () => {
     const texts = [
       registration({ indexerPausedUntil: LATER_TODAY }),
@@ -242,7 +242,7 @@ describe('indexerPauseText', () => {
 
   test('says the pause without an end when the *arr doesn\'t give one', () => {
     expect(indexerPauseText({ name: 'Sonarr', type: 'sonarr' }, registration({ indexerPaused: true }), NOW)).toEqual({
-      title: 'Sonarr is skipping jack\'s indexer for a while after earlier errors, so it won\'t find friends\' episodes until then.',
+      title: 'Sonarr is skipping jack\'s indexer after earlier errors, so it won\'t find friends\' episodes for now.',
       detail: 'Sonarr resumes it by itself after a while, and jack resumes it once a friend adds new episodes. You don\'t need to do anything.',
     })
     expect(indexerPauseText(RADARR, registration({ indexerPaused: true, clientTest: 'failed' }), NOW)?.detail)
@@ -278,7 +278,7 @@ describe('a paused indexer', () => {
       tone: 'warning',
     })
     expect(registrationHeadline(registration({ indexerPaused: true }), RADARR, NOW).title)
-      .toBe('Radarr is skipping jack\'s indexer for a while after earlier errors, so it won\'t find friends\' movies until then.')
+      .toBe('Radarr is skipping jack\'s indexer after earlier errors, so it won\'t find friends\' movies for now.')
   })
 
   test('stays failed when its test failed', () => {
