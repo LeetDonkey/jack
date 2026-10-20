@@ -477,10 +477,10 @@ friends see*** and ***Address friends use*** from step 6.
   ***Completed folder***. If its host folder existed before, fix the owner in
   the terminal, for example `chown -R nobody:users /mnt/user/downloads/jack`
   (the ***Host Path*** of ***Downloads***).
-- **The folder check names a permissions problem**: on Unraid jack runs as
-  user 99 (`nobody:users`), the owner of your shares, even where the message
-  names user 1000. Give the folder back to that user in the terminal, using
-  its ***Host Path***, for example
+- **The folder check says jack isn't allowed to open, read or write a
+  folder**: the message names user 99, which is `nobody:users`, the user the
+  template runs jack as and the owner of your shares. Give the folder back to
+  that user in the terminal, using its ***Host Path***, for example
   `chown -R nobody:users /mnt/user/downloads/jack`.
 - **Downloads finish but Radarr doesn't import them**: the downloads folder
   doesn't match. jack's ***Completed folder***, its downloads ***Container

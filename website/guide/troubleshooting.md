@@ -165,9 +165,10 @@ Two gotchas:
 - **Permissions.** jack runs as **uid/gid 1000**, matching the `PUID/PGID` the
   linuxserver.io *arr images default to, so files jack writes are owned by the
   same user that imports them. Make sure the completed folder (and the `/config`
-  mount) are readable/writable by uid 1000, with `chown -R 1000:1000`. If your
-  *arr uses a different `PUID`, set it to match. On Unraid the template runs
-  jack as `nobody:users` (99:100) instead; see
+  mount) are readable/writable by uid 1000, with `chown -R 1000:1000`.
+  ***Check folders*** names the user jack runs as when it can't open, read or
+  write a folder. If your *arr uses a different `PUID`, set it to match. On
+  Unraid the template runs jack as `nobody:users` (99:100) instead; see
   [Installing on Unraid](./unraid.md#troubleshooting).
 
 ## `Downloads are off`, nothing registered

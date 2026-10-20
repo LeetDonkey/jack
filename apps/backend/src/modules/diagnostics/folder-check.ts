@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import fs from 'node:fs/promises'
 import { join } from 'node:path'
+import process from 'node:process'
 
 /** `ok` passed, `error` found a problem, `unknown` couldn't check. */
 export type CheckStatus = 'ok' | 'error' | 'unknown'
@@ -66,6 +67,8 @@ export interface FolderCheckDeps {
   fsTimeoutMs?: number
   /** For the library listing behind the sample files (default 30 s; a big library takes a while). */
   libraryTimeoutMs?: number
+  /** The user jack runs as, named in permission errors (default: this process's, or 1000 where there is none). */
+  uid?: number
   now?: () => Date
 }
 
@@ -119,12 +122,15 @@ export class FolderCheck {
   private readonly timeoutMs: number
   private readonly fsTimeoutMs: number
   private readonly libraryTimeoutMs: number
+  private readonly uid: number
   private readonly now: () => Date
 
   constructor(private readonly deps: FolderCheckDeps) {
     this.timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS
     this.fsTimeoutMs = deps.fsTimeoutMs ?? this.timeoutMs
     this.libraryTimeoutMs = deps.libraryTimeoutMs ?? DEFAULT_LIBRARY_TIMEOUT_MS
+    // The image runs as 1000, but the Unraid template runs jack as 99:100.
+    this.uid = deps.uid ?? process.getuid?.() ?? 1000
     this.now = deps.now ?? (() => new Date())
   }
 
@@ -177,7 +183,7 @@ export class FolderCheck {
       if (code === 'ENOENT' || code === 'ENOTDIR')
         return { path, status: 'error', message: `jack can't see ${path}. ${server.name} keeps its library there, but jack's container has no such folder. In the jack template, add a path with Container Path ${path}, pointing to the same host folder as in ${label(server)}'s template.` }
       if (code === 'EACCES' || code === 'EPERM')
-        return { path, status: 'error', message: `jack isn't allowed to open ${path}. Check the folder's permissions for user 1000 (the jack container's user).` }
+        return { path, status: 'error', message: `jack isn't allowed to open ${path}. Check that user ${this.uid} (the user jack runs as) can open this folder.` }
       return { path, status: 'unknown', message: `jack couldn't check ${path}: ${messageOf(err)}` }
     }
   }
@@ -200,7 +206,7 @@ export class FolderCheck {
       if (code === 'ENOENT' || code === 'ENOTDIR')
         return { path, status: 'error', message: `jack can't find ${path}, a file ${server.name} has. Friends who ask for it get "file missing". Map ${label(server)}'s library folder into the jack container at the same path.` }
       if (code === 'EACCES' || code === 'EPERM')
-        return { path, status: 'error', message: `jack sees ${path} but isn't allowed to read it. Check the file's permissions for user 1000 (the jack container's user).` }
+        return { path, status: 'error', message: `jack sees ${path} but isn't allowed to read it. Check that user ${this.uid} (the user jack runs as) can read the file.` }
       return { path, status: 'unknown', message: `jack couldn't read ${path}: ${messageOf(err)}` }
     }
   }
@@ -237,7 +243,7 @@ export class FolderCheck {
       void write.then(() => fs.rm(probePath, { force: true })).catch(() => {})
       const code = errorCode(err)
       if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS')
-        return { ...fail('error', `jack can't write to the completed folder ${path}. Check its permissions for user 1000 (the jack container's user), and that the template doesn't mount it read-only.`, true, false), freeBytes }
+        return { ...fail('error', `jack can't write to the completed folder ${path}. Check that user ${this.uid} (the user jack runs as) can write to it, and that the template doesn't mount it read-only.`, true, false), freeBytes }
       if (code === 'ENOSPC')
         return { ...fail('error', `The disk with the completed folder ${path} is full.`, true, false), freeBytes }
       return { ...fail('unknown', `jack couldn't write a test file to ${path}: ${messageOf(err)}`, true, null), freeBytes }

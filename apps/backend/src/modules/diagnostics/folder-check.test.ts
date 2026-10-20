@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import fsp, { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import process from 'node:process'
 import { FolderCheck } from './folder-check'
 
 let dir: string
@@ -111,6 +112,51 @@ describe('FolderCheck', () => {
     expect(report.completed?.destinations[0]).toMatchObject({ status: 'unknown' })
     expect(await readdir(completed)).toEqual([])
   }, 1000)
+
+  test('permission errors name the user jack runs as', async () => {
+    // Tests may run as root, which no permission stops, so the calls fail by hand.
+    const denied = (call: string) => Object.assign(new Error(`EACCES: permission denied, ${call}`), { code: 'EACCES' })
+    const realStat = fsp.stat
+    const spies = [
+      spyOn(fsp, 'stat').mockImplementation(((...args: Parameters<typeof fsp.stat>) => {
+        if (args[0] === library)
+          return Promise.reject(denied('stat'))
+        return realStat(...args)
+      }) as typeof fsp.stat),
+      spyOn(fsp, 'open').mockImplementation((async () => {
+        throw denied('open')
+      }) as typeof fsp.open),
+      spyOn(fsp, 'writeFile').mockImplementation((async () => {
+        throw denied('open')
+      }) as typeof fsp.writeFile),
+    ]
+    try {
+      // The Unraid template runs jack as 99:100.
+      const report = await new FolderCheck({ servers: () => [arr()], completedPath: () => completed, uid: 99 }).run()
+
+      expect(report.sources[0]!.rootFolders[0]).toMatchObject({ status: 'error', message: `jack isn't allowed to open ${library}. Check that user 99 (the user jack runs as) can open this folder.` })
+      expect(report.sources[0]!.sampleFiles[0]).toMatchObject({ status: 'error', message: expect.stringContaining('Check that user 99 (the user jack runs as) can read the file.') })
+      expect(report.completed).toMatchObject({ status: 'error', writable: false, message: expect.stringContaining('Check that user 99 (the user jack runs as) can write to it') })
+    }
+    finally {
+      for (const spy of spies)
+        spy.mockRestore()
+    }
+  })
+
+  test('without a uid, permission errors name this process\'s user', async () => {
+    const spy = spyOn(fsp, 'writeFile').mockImplementation((async () => {
+      throw Object.assign(new Error('EROFS: read-only file system'), { code: 'EROFS' })
+    }) as typeof fsp.writeFile)
+    try {
+      const report = await new FolderCheck({ servers: () => [], completedPath: () => completed }).run()
+      expect(report.completed?.message).toContain(`user ${process.getuid!()} (the user jack runs as)`)
+      expect(report.completed?.message).toContain('doesn\'t mount it read-only')
+    }
+    finally {
+      spy.mockRestore()
+    }
+  })
 
   test('a test file written after the timeout is removed once the write ends', async () => {
     // Runs the held-back write; resolves once the file is on disk.
