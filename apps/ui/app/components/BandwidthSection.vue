@@ -287,7 +287,8 @@ function revert() {
             <p class="text-xs text-muted">
               The first period that matches the current day and time wins. A limit left empty in a
               period uses the limit above. Times use jack's time zone. On Unraid that's the
-              server's own, from Settings -> Date and Time; elsewhere, set TZ on the jack container.
+              server's time zone from Unraid's Settings -> Date and Time; elsewhere, set TZ on the
+              jack container.
             </p>
           </div>
           <UButton label="Add period" icon="i-ph-plus" size="sm" variant="soft" :disabled="saving" @click="addPeriod" />
