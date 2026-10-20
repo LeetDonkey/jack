@@ -156,7 +156,7 @@ function onSubmit() {
             Help
           </ULink>
         </template>
-        <UInput v-model="state.url" :placeholder="state.type === 'sonarr' ? 'http://sonarr:8989' : 'http://radarr:7878'" class="w-full" />
+        <UInput v-model="state.url" :placeholder="state.type === 'sonarr' ? 'http://192.168.1.10:8989' : 'http://192.168.1.10:7878'" class="w-full" />
       </UFormField>
       <UFormField name="type" label="Type">
         <USelect v-model="state.type" :items="typeItems" class="w-32" />
