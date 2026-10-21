@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { pendingRestart, stableStringify } from './restart-pending'
+import { DownloadsConfig } from '../../lib/config'
+import { IMPORT_DOWNLOAD_KEYS, LIVE_DOWNLOAD_KEYS, pendingRestart, stableStringify } from './restart-pending'
 
 describe('pendingRestart', () => {
   const boot = {
@@ -25,6 +26,22 @@ describe('pendingRestart', () => {
       downloads: { completedPath: '/data/other', maxConcurrentDownloads: 8, unlinkImportedFiles: true, retryWindowMs: 0 },
     }
     expect(pendingRestart(boot, current)).toEqual(['downloads.completedPath', 'downloads.retries', 'jack.tmdbApiKey', 'jack.apiKey'])
+  })
+
+  test('a retry knob and an import knob are separate reasons', () => {
+    const changed = (downloads: Record<string, unknown>) => pendingRestart(boot, { ...boot, downloads: { ...boot.downloads, ...downloads } })
+    expect(changed({ idleTimeoutMs: 120_000 })).toEqual(['downloads.retries'])
+    expect(changed({ importPollIntervalMs: 60_000 })).toEqual(['downloads.import'])
+    expect(changed({ retryBaseDelayMs: 5000, manualImportBackoffMaxMs: 60_000 })).toEqual(['downloads.retries', 'downloads.import'])
+  })
+
+  test('a new downloads key has to be sorted into retries or import here', () => {
+    const keys = Object.keys(DownloadsConfig.shape)
+    expect([...IMPORT_DOWNLOAD_KEYS].filter(key => !keys.includes(key))).toEqual([])
+    expect([...LIVE_DOWNLOAD_KEYS].filter(key => !keys.includes(key))).toEqual([])
+    // The rest, read at startup, are the retry and timeout knobs.
+    expect(keys.filter(key => key !== 'completedPath' && !LIVE_DOWNLOAD_KEYS.has(key) && !IMPORT_DOWNLOAD_KEYS.has(key)).sort())
+      .toEqual(['idleTimeoutMs', 'maxDownloadAttempts', 'retryBaseDelayMs', 'retryMaxDelayMs', 'retryWindowMs'])
   })
 
   test('downloads added since boot is one reason, whatever it contains', () => {

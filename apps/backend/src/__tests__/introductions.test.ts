@@ -6,6 +6,7 @@ import { Hono } from 'hono'
 import { ConflictError } from '../lib/errors/ConflictError'
 import { FetchError } from '../lib/errors/FetchError'
 import { open, safetyCode, seal, sharedKey } from '../lib/introductions/crypto'
+import { PeerConnector } from '../lib/servers/peer'
 import { logger } from '../logger'
 import { IntroStore } from '../modules/introductions/intro-store'
 import { getIntroPeerRouter } from '../modules/introductions/introductions.router'
@@ -600,6 +601,42 @@ describe('introductions between friends of friends', () => {
     expect(performance.now() - started).toBeLessThan(200)
     expect(erin.calls).toEqual({ profile: 1, directory: 1, mail: 0 })
     await Bun.sleep(350)
+  })
+})
+
+describe('a friend\'s jack over HTTP', () => {
+  // Not introducing is the default, so every friend's jack answers the directory with
+  // 404 'Not introducing', and an older jack has no profile route.
+  test('a 404 from the introduction routes is null and logs no warning; other failures still warn', async () => {
+    const bob = makeJack('Bob', { introduce: false }, 'https://bob.example')
+    let failing = false
+    const server = Bun.serve({
+      port: 0,
+      fetch: (req) => {
+        if (failing)
+          return new Response('boom', { status: 500 })
+        const { pathname } = new URL(req.url)
+        return pathname === '/peer/intro/directory' ? bob.app.request('/peer/intro/directory') : new Response('404 Not Found', { status: 404 })
+      },
+    })
+    const peer = new PeerConnector({ url: `http://127.0.0.1:${server.port}`, apiKey: 'bob-key', name: 'Bob' }) as any
+    peer._isInitialized = true
+    peer._initState = 'initialized'
+    peer._initialization.resolve()
+    const warn = spyOn(logger, 'warn')
+    try {
+      expect(await peer.introDirectory()).toBeNull()
+      expect(await peer.introProfile()).toBeNull()
+      expect(warn).not.toHaveBeenCalled()
+
+      failing = true
+      await expect(peer.introDirectory()).rejects.toBeInstanceOf(FetchError)
+      expect(warn.mock.calls.map(call => (call[0] as { status?: number }).status)).toEqual([500])
+    }
+    finally {
+      warn.mockRestore()
+      void server.stop(true)
+    }
   })
 })
 

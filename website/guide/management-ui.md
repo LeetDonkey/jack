@@ -19,7 +19,8 @@ operate jack day to day:
     While jack doesn't answer, the card is marked ***last known***.
   - ***Right now***: speeds both ways, how many downloads are downloading,
     waiting, queued for import or failed, and the running downloads with speed
-    and time left. Each count opens ***Downloads*** with that filter.
+    and time left. Each count opens ***Downloads*** with that filter. While
+    every count is 0, the counts are hidden.
   - ***Friends & Radarr/Sonarr***: each friend's status and when jack last
     reached them, and when each Radarr/Sonarr last reached jack.
   - ***Lifetime***: what you downloaded from and shared with friends, and how
@@ -52,7 +53,11 @@ operate jack day to day:
     - ***Friends of friends***: the
       [`discovery`](../reference/configuration.md#discovery) block.
     - ***Security***: the [`security`](../reference/configuration.md#security)
-      block, and the banned addresses with ***Lift ban***.
+      block, and the banned addresses with ***Lift ban***. ***Trusted
+      proxies***, ***Never ban*** and ***Radarr/Sonarr outside your LAN*** are
+      folded away under ***Reverse proxy and exceptions***. A link to one of
+      them, such as the help on a refused Radarr/Sonarr line in ***Logs***,
+      opens it.
   - ***Bandwidth***: the [`bandwidth`](../reference/configuration.md#bandwidth)
     block, and ***Pause sharing*** and ***Pause downloads***.
   - ***Notifications***: the
@@ -127,30 +132,44 @@ back.
 ## Downloads
 
 ***Downloads*** opens on ***Active***: what is downloading, waiting for import
-or failed. The other filters are ***Downloading***, ***Import queued***,
-***Failed***, ***Cancelled***, ***Imported*** and ***All***. A link such as
-`/downloads?status=failed` opens a filter directly; the ***Dashboard*** uses
-these.
+or failed. The other filters are ***Downloading***, ***Waiting***, ***Import
+queued***, ***Failed***, ***Cancelled***, ***Imported*** and ***All***.
+***Waiting*** holds the downloads that wait for a free slot or to retry, and
+***Downloading*** the rest of the running ones, as the ***Dashboard*** counts
+them. A link such as `/downloads?status=failed` opens a filter directly; the
+***Dashboard*** uses these.
 
 Each row shows its status:
 
 - ***Downloading***, with speed and time left under the progress bar.
 - ***Waiting for a free slot***: more downloads are running than ***Downloads
   at once*** allows.
-- ***Paused***: downloads are paused, and this one starts when you resume
-  them.
-- ***Retrying at 14:32***: the last attempt hit a network error, a timeout or
-  a busy friend. The line under the file name says which attempt failed and
-  why.
+- ***Paused***: downloads are paused, and this one starts or retries when you
+  resume them.
+- ***Retrying at 14:32***: the last attempt hit a network error, a timeout, a
+  busy friend, or a file the friend's jack couldn't find. The line under the
+  file name says which attempt failed and why.
 - ***Import queued***: finished, and waiting for Radarr/Sonarr to import it.
 - ***Imported***.
 - ***Failed***, with the error.
 - ***Cancelled***: you cancelled it. It doesn't count as failed.
 
+Common errors read in plain words, such as ***The connection to Alice
+dropped.*** jack's own error text shows when you hover the line, and under it
+on narrower screens.
+
+While downloads are paused and the list shows a running or waiting download,
+the top of the page says until when, for example ***Downloads paused until
+18:30***, with ***Resume*** next to it.
+
 The actions:
 
+- ***Retry now*** starts the next attempt of a download that waits to retry,
+  instead of at the time shown. It still waits for a free slot, ahead of new
+  downloads. It isn't offered while downloads are paused.
 - ***Cancel*** stops a running download after asking ***Cancel this
-  download?***. The partial file is kept.
+  download?***. The partial file is kept, and Radarr/Sonarr show the download
+  as paused.
 - ***Retry*** starts a failed or cancelled download again. A cancelled one
   continues from the partial file. Under ***Active*** and ***Failed***,
   ***Retry all failed*** retries every failed download that can be retried.
@@ -160,9 +179,11 @@ The actions:
 
 ## Live traffic
 
-***Live traffic*** lists every running download and upload, with the friend,
-progress, speed and time left. While a bandwidth schedule period applies, a
-line names it with a link to edit it.
+***Live traffic*** lists what you download from friends and share with them
+right now, with the friend, progress, speed and time left. The cards show how
+many run at once, for example ***1 of 3 at once***, and the current limit. A
+link under them opens ***Settings -> Bandwidth***. While a bandwidth schedule
+period applies, the line names it and the link reads ***Edit schedule***.
 
 The header has ***Pause sharing*** and ***Pause downloads***, and so does
 ***Settings -> Bandwidth***. Each pauses ***For 1 hour***, ***For 4 hours***,
@@ -342,7 +363,9 @@ the top of every page until you restart.
 
 ***Check folders*** runs it, which can take up to 30 seconds. It shows ***All
 folders line up.*** or the first problem, naming the path and the template to
-change, and ***Show details*** lists every check. It also runs by itself after
+change, and ***Show details*** lists every check. With no Radarr/Sonarr
+connected yet, it says that jack can write to the ***Completed folder*** and
+asks you to connect one. It also runs by itself after
 you save a new ***Completed folder***, and after you connect a Radarr/Sonarr or
 change its address or roles. Each card under ***Radarr & Sonarr*** shows the
 result too, until you reload the page. The setup card on the ***Dashboard***
@@ -440,7 +463,8 @@ helps you:
   in it.
 - Each friend: status, last error and build.
 - Each key's name and when it was last used.
-- The last 50 warnings and errors from the log.
+- The last 50 warnings and errors from the log, and the lines that say a
+  Radarr, Sonarr or friend that failed to connect is reachable again.
 
 Keys, header values and webhook URLs are left out. Error messages and log
 lines can still contain the addresses of your Radarr, Sonarr and friends, so

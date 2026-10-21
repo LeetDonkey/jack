@@ -108,6 +108,7 @@ export function getApp(envs: Envs, config: AppConfig, connManager: { servers: Co
   // managed keys (see qbittorrent.controller), so it's mounted outside the api-key
   // scopes below.
   if (config.downloads && services.downloadsRepository) {
+    const transfers = services.transfersService
     const qbController = new QbittorrentController({
       apiKey: config.jack.apiKey ?? '',
       completedPath: config.downloads.completedPath,
@@ -116,6 +117,8 @@ export function getApp(envs: Envs, config: AppConfig, connManager: { servers: Co
       downloadsService: services.downloadsService,
       managedKeysRepository: services.managedKeysRepository,
       onContact: id => services.onArrContact?.(id, 'qbittorrent'),
+      // Real speed and time left for Radarr/Sonarr's queue.
+      liveTransfers: transfers ? () => transfers.monitor.list() : undefined,
     })
     if (services.arrAccess)
       app.use('/api/v2/*', lanGuard(services.arrAccess))

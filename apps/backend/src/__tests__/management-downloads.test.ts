@@ -3,10 +3,13 @@ import { describe, expect, mock, test } from 'bun:test'
 import { drizzle } from 'drizzle-orm/bun-sqlite'
 import { runMigrations } from '../database/connection'
 import * as schema from '../database/schema'
+import { ConflictError } from '../lib/errors/ConflictError'
+import { NotFoundError } from '../lib/errors/NotFoundError'
 import { getManagementApp } from '../management-app'
 import { DownloadsRepository } from '../modules/downloads/downloads.repository'
 
 const HEADERS = { 'X-Management-Key': 'secret' }
+const MISSING_ID = 999
 
 function setup() {
   const sqlite = new Database(':memory:')
@@ -26,9 +29,16 @@ function setup() {
   })
   const cancel = mock(async (id: number) => repository.get(id)!)
   const retryTransfer = mock((id: number) => repository.get(id)!)
+  const retryNow = mock((id: number) => {
+    if (id === MISSING_ID)
+      throw new NotFoundError(`Download ${id} not found`)
+    if (id !== row.id)
+      throw new ConflictError(`Download ${id} is not waiting to retry`)
+    return repository.get(id)!
+  })
   const deleteDownload = mock(async (id: number) => repository.delete(id))
   const retryImport = mock(async (id: number) => repository.get(id)!)
-  const downloadsService = { cancel, retry: retryTransfer, delete: deleteDownload } as any
+  const downloadsService = { cancel, retry: retryTransfer, retryNow, delete: deleteDownload } as any
   const app = getManagementApp({
     environment: 'test',
     managementKey: 'secret',
@@ -37,7 +47,7 @@ function setup() {
     downloadsService,
     importWatcher: { retry: retryImport } as any,
   })
-  return { app, cancel, retryTransfer, retryImport, deleteDownload, repository, row, sqlite }
+  return { app, cancel, retryTransfer, retryNow, retryImport, deleteDownload, repository, row, sqlite }
 }
 
 describe('management download actions', () => {
@@ -76,6 +86,34 @@ describe('management download actions', () => {
     const importResponse = await app.request(`/downloads/${row.id}/retry`, { method: 'POST', headers: HEADERS })
     expect(importResponse.status).toBe(200)
     expect(retryImport).toHaveBeenCalledWith(row.id)
+    sqlite.close()
+  })
+
+  test('POST /downloads/:id/retry-now ends the wait, and answers 409 for a row that isn\'t waiting', async () => {
+    const { app, retryNow, row, sqlite } = setup()
+
+    const response = await app.request(`/downloads/${row.id}/retry-now`, { method: 'POST', headers: HEADERS })
+    expect(response.status).toBe(200)
+    expect(retryNow).toHaveBeenCalledWith(row.id)
+    expect((await response.json() as { download: { id: number } }).download.id).toBe(row.id)
+
+    const conflict = await app.request(`/downloads/${row.id + 1}/retry-now`, { method: 'POST', headers: HEADERS })
+    expect(conflict.status).toBe(409)
+    sqlite.close()
+  })
+
+  // jack-ui tells the two apart: a gone row is stale, a missing route means jack
+  // is older than jack-ui.
+  test('a gone download answers 404 with NOT_FOUND, and a route jack lacks 404 without it', async () => {
+    const { app, sqlite } = setup()
+
+    const gone = await app.request(`/downloads/${MISSING_ID}/retry-now`, { method: 'POST', headers: HEADERS })
+    expect(gone.status).toBe(404)
+    expect((await gone.json() as { error: { code: string } }).error.code).toBe('NOT_FOUND')
+
+    const missingRoute = await app.request('/downloads/1/no-such-action', { method: 'POST', headers: HEADERS })
+    expect(missingRoute.status).toBe(404)
+    expect(await missingRoute.text()).not.toContain('NOT_FOUND')
     sqlite.close()
   })
 

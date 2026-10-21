@@ -2,7 +2,8 @@ import type { ArrServerConnector } from '../../lib/servers/arr/base'
 import type { DownloadRecord, DownloadsRepository } from '../downloads/downloads.repository'
 import type { DownloadsService } from '../downloads/downloads.service'
 import type { ManagedKeysRepository } from '../managed-keys/managed-keys.repository'
-import type { QbTorrent } from './qbittorrent.mapper'
+import type { TransferInfo } from '../transfers/transfer-monitor'
+import type { QbLiveState, QbTorrent } from './qbittorrent.mapper'
 import type { QbSession } from './qbittorrent.session'
 import { Buffer } from 'node:buffer'
 import { unlink } from 'node:fs/promises'
@@ -20,6 +21,8 @@ export interface QbittorrentControllerDeps {
   managedKeysRepository?: ManagedKeysRepository
   /** Called with the server id on every login and every request with a valid session. */
   onContact?: (serverId: string) => void
+  /** The live transfers (TransferMonitor.list), for the speed and time left of running downloads. */
+  liveTransfers?: () => readonly Pick<TransferInfo, 'direction' | 'downloadId' | 'bytesPerSecond' | 'etaSeconds'>[]
 }
 
 // Matches a jack download URL path: /torznab/download/<peerId:itemId>.torrent
@@ -119,10 +122,28 @@ export class QbittorrentController {
     return this.deps.repository.list().filter(r => deriveHash(r.release.title, r.releaseSize) === target)
   }
 
+  /**
+   * What jack knows live about each running row, read once per listing: its
+   * phase, whether downloads are paused, and its transfer's speed.
+   */
+  private liveStates(): (record: DownloadRecord) => QbLiveState {
+    const service = this.deps.downloadsService
+    const downloadsPaused = service?.isPaused ?? false
+    const speeds = new Map<number, { bytesPerSecond: number, etaSeconds: number | null }>()
+    for (const transfer of this.deps.liveTransfers?.() ?? []) {
+      if (transfer.direction === 'download' && transfer.downloadId != null)
+        speeds.set(transfer.downloadId, { bytesPerSecond: transfer.bytesPerSecond, etaSeconds: transfer.etaSeconds })
+    }
+    return record => record.status === 'downloading'
+      ? { phase: service?.phaseOf(record.id)?.phase ?? null, downloadsPaused, ...speeds.get(record.id) }
+      : {}
+  }
+
   torrentsInfo(filter: { category?: string, hashes?: string[] }): QbTorrent[] {
     const { completedPath } = this.deps
+    const live = this.liveStates()
     let result = this.deps.repository.list()
-      .map(r => toQbTorrent(r, { completedPath, category: r.qbCategory ?? '' }))
+      .map(r => toQbTorrent(r, { completedPath, category: r.qbCategory ?? '', live: live(r) }))
     if (filter.category !== undefined)
       result = result.filter(t => t.category === filter.category)
     if (filter.hashes && filter.hashes.length > 0) {

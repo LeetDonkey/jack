@@ -179,7 +179,7 @@ export function getManagementApp(params: {
     health: params.peerHealth,
     apiKeys: params.apiKeysRepository,
     keyMeta: params.apiKeyMeta,
-    logs: (lines, minLevel) => logHub.backfill({ lines, minLevel }),
+    logs: (lines, keep) => logHub.backfill({ lines, keep }),
     secrets: () => [params.managementKey, ...configSecrets(configService?.getRaw() ?? null)],
   }))
 

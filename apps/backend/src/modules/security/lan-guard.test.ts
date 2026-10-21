@@ -1,9 +1,10 @@
 import type { ArrAccess } from './lan-guard'
 import { Database } from 'bun:sqlite'
-import { describe, expect, it } from 'bun:test'
+import { describe, expect, it, spyOn } from 'bun:test'
 import { Hono } from 'hono'
 import { SecurityConfig } from '../../lib/config'
 import { clientIp, PRIVATE_RANGES } from '../../lib/net/ip'
+import { logger } from '../../logger'
 import { banGuard } from './ban-guard'
 import { BanList } from './ban-list'
 import { lanGuard } from './lan-guard'
@@ -68,6 +69,21 @@ describe('lanGuard', () => {
     expect((await app.request('/torznab/api', {}, from('100.101.102.103'))).status).toBe(200)
     expect((await app.request('/torznab/api', {}, from('192.168.0.20'))).status).toBe(200)
     expect((await app.request('/torznab/api', {}, from('203.0.113.9'))).status).toBe(403)
+  })
+
+  it('logs a refused address once, naming the field in Settings that lets it in', async () => {
+    const warn = spyOn(logger, 'warn')
+    try {
+      const app = appWith({})
+      for (let i = 0; i < 2; i++)
+        expect((await app.request('/torznab/api', {}, from('198.51.100.201'))).status).toBe(403)
+      const lines = warn.mock.calls.filter(([fields]) => (fields as { ip?: string }).ip === '198.51.100.201')
+      expect(lines).toHaveLength(1)
+      expect(lines[0]?.[1]).toEndWith('add it under Settings -> Sharing -> Security -> Reverse proxy and exceptions -> Radarr/Sonarr outside your LAN.')
+    }
+    finally {
+      warn.mockRestore()
+    }
   })
 
   it('lets everyone through when switched off', async () => {

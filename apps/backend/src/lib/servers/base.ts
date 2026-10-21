@@ -168,7 +168,11 @@ export abstract class ServerConnector {
       catch (err) {
         const timedOut = err instanceof DOMException && err.name === 'TimeoutError'
         setSpanAttribute(span, 'error.timeout', timedOut)
-        logger[init.quiet ? 'debug' : 'warn']({ connector: this.name, method, url: url.toString(), timeoutMs, timedOut, err }, timedOut ? `Request timed out after ${timeoutMs}ms` : 'Request failed (network error)')
+        // The Logs page shows this line to friends, so the wait is in seconds;
+        // timeoutMs keeps the exact value.
+        const seconds = Math.max(1, Math.round(timeoutMs / 1000))
+        const waited = seconds === 1 ? '1 second' : `${seconds} seconds`
+        logger[init.quiet ? 'debug' : 'warn']({ connector: this.name, method, url: url.toString(), timeoutMs, timedOut, err }, timedOut ? `${this.name} didn't answer within ${waited}` : `Couldn't reach ${this.name}`)
         throw err
       }
 
@@ -182,7 +186,8 @@ export abstract class ServerConnector {
         const body = await response.text().catch(() => 'Could not fetch body')
         setSpanAttribute(span, 'http.response.body', redactBody(body))
         const level = init.quiet || init.expectedFailure?.(response.status, body) ? 'debug' : 'warn'
-        logger[level]({ connector: this.name, method, url: url.toString(), status: response.status, body: truncateBody(body) }, 'Request failed (non-2xx)')
+        // Says who answered what, as in "Radarr answered 401 for /api/v3/indexer".
+        logger[level]({ connector: this.name, method, url: url.toString(), status: response.status, body: truncateBody(body) }, `${this.name} answered ${response.status} for ${url.pathname}`)
         throw new FetchError(`Failed to fetch url: ${response.statusText}`, response, { body, method: init.method, headers: initWithAuth.headers })
       }
 
@@ -265,6 +270,11 @@ export abstract class ServerConnector {
       setSpanAttribute(span, 'connector.initialized', true)
     })
       .then(() => {
+        // Without this, the log ends on the failure, as if the connector were
+        // still down. `recovered: true` puts the line in the support bundle,
+        // which otherwise keeps only warnings and errors (keepInSupportLog).
+        if (retrying)
+          logger.info({ connector: this.name, url: this.url, previousError, recovered: true }, `Connector "${this.name}" is reachable again`)
         this._isInitialized = true
         this._initState = 'initialized'
         this._initialization.resolve()

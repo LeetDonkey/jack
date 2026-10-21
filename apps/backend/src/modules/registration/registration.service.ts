@@ -75,6 +75,12 @@ export interface RegistrationServiceDeps {
   downloads: () => boolean
   /** Whether jack started with downloads, i.e. serves the qBittorrent API right now. */
   downloadsActive: () => boolean
+  /**
+   * Whether jack answers the Radarr/Sonarr APIs only to the LAN and the addresses
+   * under Radarr/Sonarr outside your LAN (security.lanOnlyArrApis, on by
+   * default), which words a refused test.
+   */
+  arrApisLanOnly?: () => boolean
   now?: () => number
   /** How long the *arr may take to test the download client (default 20 s). */
   testTimeoutMs?: number
@@ -143,6 +149,10 @@ const PAUSE_RETRY_MS = 30 * 60_000
 // that has ended. A pause found then is read once more after this long.
 const DEFAULT_PAUSE_RECHECK_MS = 15_000
 
+// Where the UI's Turn on downloads button is, as the guide names it. The log line
+// at boot (index.ts) names it the same way.
+export const DOWNLOADS_SETTING = 'Settings -> Radarr & Sonarr -> Downloads'
+
 function logRegistrationFailure(what: string, destName: string, err: unknown) {
   if (err instanceof FetchError) {
     logger.error({ destination: destName, status: err.extras.status ?? err.response.status, body: err.extras.body }, `Failed to register ${what}`)
@@ -152,14 +162,39 @@ function logRegistrationFailure(what: string, destName: string, err: unknown) {
   logger.error({ destination: destName, error: message }, `Failed to register ${what}`)
 }
 
-function stepFailureMessage(destName: string, outcome: ManagedRegistrationOutcome): string | null {
-  if (outcome.downloadClient.status === 'failed')
-    return `jack couldn't add its download client to ${destName} (${outcome.downloadClient.error}), so it left the indexer as it was. Register again.`
+// Also a full stop inside the *arr's own brackets or quotes: "Authentication
+// Failure (Please verify your username and password.)" needs no period after it.
+const SENTENCE_END = /[.!?]["')\]]*$/
+
+// ": Unauthorized." or ": …category settings.", the error as a sentence of its own.
+function stepCause(error: string | undefined): string {
+  const text = error?.trim()
+  if (!text)
+    return '.'
+  return SENTENCE_END.test(text) ? `: ${text}` : `: ${text}.`
+}
+
+// These messages also head the result dialog after a save, which has no Register
+// again button, so they say where it is. The toast after Register again leaves
+// the sentence out (registrationHeadline in the UI), which finds it by this shape:
+// "To …, use Register again on <name>'s card."
+function registerAgainHint(destName: string, purpose = 'To try again'): string {
+  return `${purpose}, use Register again on ${destName}'s card.`
+}
+
+function stepFailureMessage(destName: string, outcome: ManagedRegistrationOutcome, downloadsActive: boolean): string | null {
+  if (outcome.downloadClient.status === 'failed') {
+    // jack serves the qBittorrent API only from the boot after downloads were turned
+    // on, and the *arr checks the client before it saves it.
+    if (!downloadsActive)
+      return `jack couldn't add its download client to ${destName} yet, because downloads were turned on after jack started. Restart the jack container: jack adds itself to ${destName} when it starts.`
+    return `jack couldn't add its download client to ${destName}${stepCause(outcome.downloadClient.error)} jack left the indexer as it was. ${registerAgainHint(destName)}`
+  }
   if (outcome.indexer.status === 'failed') {
     // Only an *arr that tests even a switched-off indexer gets here (see registerIndexer).
     if (outcome.indexer.error && isNoResultsFailure(outcome.indexer.error))
       return `${destName} won't add jack's indexer until your friends have something to share. jack tries again when you add or save a friend.`
-    return `jack couldn't add its indexer to ${destName} (${outcome.indexer.error}). Register again.`
+    return `jack couldn't add its indexer to ${destName}${stepCause(outcome.indexer.error)} ${registerAgainHint(destName)}`
   }
   return null
 }
@@ -167,11 +202,11 @@ function stepFailureMessage(destName: string, outcome: ManagedRegistrationOutcom
 // A failed test says more than a failed registration step, which says more than a
 // skip; the download client says more than the indexer. A paused indexer isn't a
 // message: the UI words it from `indexerPaused`.
-function summarize(state: DestinationState): string | null {
+function summarize(state: DestinationState, downloadsActive: boolean): string | null {
   const { name, outcome, client, indexer } = state
   const failed = [client, indexer].find(test => test.status === 'failed' && test.message)
   return failed?.message
-    ?? stepFailureMessage(name, outcome)
+    ?? stepFailureMessage(name, outcome, downloadsActive)
     ?? client.message
     ?? indexer.message
 }
@@ -283,6 +318,11 @@ export class RegistrationService implements RegistrationStatus {
 
   isRegistrable(dest: ArrServerConnector): boolean {
     return dest.enabled && dest.canDestination && dest.autoRegister.enable
+  }
+
+  /** Whether jack adds itself to any server, reachable or not: what downloads being off holds back. */
+  registersAnywhere(): boolean {
+    return this.deps.destinations().some(dest => this.isRegistrable(dest))
   }
 
   /** Drop the stored result, e.g. after auto-register was turned off for that server. */
@@ -591,7 +631,7 @@ export class RegistrationService implements RegistrationStatus {
       ...state.outcome,
       clientTest: state.client.status,
       indexerTest: state.indexer.status,
-      message: summarize(state),
+      message: summarize(state, this.deps.downloadsActive()),
       testErrors: { downloadClient: state.client.error, indexer: state.indexer.error },
       indexerPausedUntil: null,
       indexerPaused: state.paused,
@@ -725,8 +765,8 @@ export class RegistrationService implements RegistrationStatus {
   private async runTests(dest: ArrServerConnector, outcome: ManagedRegistrationOutcome, internalUrl: string, indexerKey: string | undefined): Promise<{ client: TestOutcome, indexer: TestOutcome }> {
     if (outcome.reason === 'downloads-off') {
       const message = outcome.indexer.disabledUnbound
-        ? `Downloads are off, so jack didn't add itself to ${dest.name}, and it turned off the Jack indexer it had added there before, which had no download client. Turn on Downloads in Settings.`
-        : `Downloads are off, so jack didn't add itself to ${dest.name}. Turn on Downloads in Settings.`
+        ? `Downloads are off, so jack didn't add itself to ${dest.name}, and it turned off the Jack indexer it had added there before, which had no download client. Turn on downloads under ${DOWNLOADS_SETTING}.`
+        : `Downloads are off, so jack didn't add itself to ${dest.name}. Turn on downloads under ${DOWNLOADS_SETTING}.`
       return { client: { ...SKIPPED, message }, indexer: SKIPPED }
     }
 
@@ -786,13 +826,13 @@ export class RegistrationService implements RegistrationStatus {
     if (result.status === 'ok')
       return PASSED
     if (result.status === 'missing')
-      return { status: 'failed', message: `${dest.name} has no Jack ${what} anymore. Register again.`, error: null }
+      return { status: 'failed', message: `${dest.name} has no Jack ${what} anymore. ${registerAgainHint(dest.name, 'To add it back')}`, error: null }
 
     const errors = result.failures.filter(failure => !failure.warning).map(formatArrValidationFailure)
     if (kind === 'indexer' && errors.every(isNoResultsFailure))
       return { ...PASSED, noResults: true }
     const error = errors.join('; ')
-    return { status: 'failed', message: explainArrTestFailure(error, { arrName: dest.name, internalUrl }), error, rejected: true }
+    return { status: 'failed', message: explainArrTestFailure(error, { arrName: dest.name, internalUrl, lanOnly: this.deps.arrApisLanOnly?.() ?? true }), error, rejected: true }
   }
 
   private logTests(dest: ArrServerConnector, result: DestinationRegistration): void {

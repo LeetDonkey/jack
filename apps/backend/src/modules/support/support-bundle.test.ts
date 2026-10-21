@@ -1,6 +1,6 @@
 import type { SupportBundleDeps } from './support-bundle'
 import { describe, expect, test } from 'bun:test'
-import { buildSupportBundle, configSecrets, redactForSupport, redactSupportText, SUPPORT_REDACTED, SUPPORT_WEBHOOK_REMOVED } from './support-bundle'
+import { buildSupportBundle, configSecrets, keepInSupportLog, redactForSupport, redactSupportText, SUPPORT_REDACTED, SUPPORT_WEBHOOK_REMOVED } from './support-bundle'
 
 describe('redactSupportText', () => {
   test('removes URL credentials but keeps the host and path', () => {
@@ -119,5 +119,31 @@ describe('buildSupportBundle', () => {
       { time: '2026-10-18T11:00:00.000Z', level: 'error', message: 'Notification failed', url: SUPPORT_REDACTED },
       { time: '2026-10-18T11:01:00.000Z', level: 'warn', message: 'Request failed', headers: SUPPORT_REDACTED, error: `proxy wants ${SUPPORT_REDACTED}` },
     ])
+  })
+
+  test('keeps warnings, errors and the line that says a connector is reachable again', async () => {
+    const records = [
+      { time: Date.parse('2026-10-18T11:00:00Z'), level: 50, message: 'Failed to initialize connector Bob: fetch failed' },
+      { time: Date.parse('2026-10-18T11:05:00Z'), level: 30, message: 'Retrying connector "Bob" that previously failed to initialize' },
+      { time: Date.parse('2026-10-18T11:05:01Z'), level: 30, message: 'Connector "Bob" is reachable again', recovered: true },
+      { time: Date.parse('2026-10-18T11:06:00Z'), level: 30, message: 'Initializing connector Carol' },
+    ]
+    const bundle = await buildSupportBundle({ ...deps, logs: async (lines, keep) => records.filter(keep).slice(-lines) })
+
+    expect(bundle.logs.map(line => [line.level, line.message])).toEqual([
+      ['error', 'Failed to initialize connector Bob: fetch failed'],
+      ['info', 'Connector "Bob" is reachable again'],
+    ])
+  })
+})
+
+describe('keepInSupportLog', () => {
+  test('takes warnings, errors and lines marked recovered', () => {
+    expect(keepInSupportLog({ level: 40 })).toBe(true)
+    expect(keepInSupportLog({ level: 50 })).toBe(true)
+    expect(keepInSupportLog({ level: 30, recovered: true })).toBe(true)
+    expect(keepInSupportLog({ level: 30 })).toBe(false)
+    expect(keepInSupportLog({ level: 30, recovered: 'yes' })).toBe(false)
+    expect(keepInSupportLog({ recovered: true })).toBe(false)
   })
 })

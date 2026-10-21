@@ -16,7 +16,7 @@ import { isSensitiveField } from '../../lib/redact'
 export const SUPPORT_REDACTED = '[redacted]'
 export const SUPPORT_WEBHOOK_REMOVED = '[webhook URL removed]'
 
-// Log lines in the bundle: the newest warnings and errors.
+// Log lines in the bundle: the newest that keepInSupportLog accepts.
 export const SUPPORT_LOG_LINES = 50
 const LOG_WARN_LEVEL = 40
 // A value shorter than this is too common to scrub wherever it appears.
@@ -40,6 +40,16 @@ const SECRET_QUERY = /([?&](?:api[_-]?key|key|token|access[_-]?token|auth|passwo
 const SECRET_HEADER_TEXT = /\b(x-api-key|x-management-key|authorization|proxy-authorization|cookie|set-cookie|cf-access-client-secret|cf-access-client-id)(["']?\s*[:=]\s*["']?)(?:bearer\s+|basic\s+)?[^\s"',;}]+/gi
 // jack keys (jack_<hex>, jack_managed_<hex>) and long hex strings such as *arr API keys.
 const KEY_LIKE = /\bjack_(?:managed_)?[\da-f]{16,}\b|\b[\da-f]{32,}\b/gi
+
+/**
+ * Whether a log record goes in the bundle: warnings, errors, and the info lines
+ * marked `recovered: true`, which say that something that failed works again
+ * (a connector that failed to initialize, see ServerConnector.init). Without
+ * them the bundle ends on an error that has since cleared.
+ */
+export function keepInSupportLog(record: LogRecord): boolean {
+  return typeof record.level === 'number' && (record.level >= LOG_WARN_LEVEL || record.recovered === true)
+}
 
 const REGEXP_SPECIAL = /[.*+?^${}()|[\]\\]/g
 const escapeRegExp = (value: string) => value.replace(REGEXP_SPECIAL, '\\$&')
@@ -159,8 +169,8 @@ export interface SupportBundleDeps {
   health?: Pick<PeerHealthMonitor, 'get'>
   apiKeys?: Pick<ApiKeysRepository, 'list'>
   keyMeta?: Pick<ApiKeyMeta, 'all'>
-  /** The newest log records at warn level or above, oldest first. */
-  logs: (lines: number, minLevel: number) => Promise<LogRecord[]>
+  /** The newest `lines` log records that `keep` accepts, oldest first. */
+  logs: (lines: number, keep: (record: LogRecord) => boolean) => Promise<LogRecord[]>
   /** Secret values to scrub from the bundle (see configSecrets). */
   secrets: () => string[]
   now?: () => Date
@@ -198,8 +208,8 @@ function logLine(record: LogRecord): Record<string, unknown> {
 /**
  * What a friend needs to help with a problem, without anything that lets
  * someone else in: builds, time zone, the internal URL's host, downloads,
- * restart, servers, peers, key names and the last warnings and errors. Every
- * string goes through redactForSupport.
+ * restart, servers, peers, key names and the last warnings and errors (see
+ * keepInSupportLog). Every string goes through redactForSupport.
  */
 export async function buildSupportBundle(deps: SupportBundleDeps) {
   const now = (deps.now ?? (() => new Date()))()
@@ -260,7 +270,7 @@ export async function buildSupportBundle(deps: SupportBundleDeps) {
       origin: metaByKey?.get(key.id)?.origin ?? null,
       linkedToPeer: Boolean(metaByKey?.get(key.id)?.peerId),
     })),
-    logs: (await deps.logs(SUPPORT_LOG_LINES, LOG_WARN_LEVEL).catch(() => [])).map(logLine),
+    logs: (await deps.logs(SUPPORT_LOG_LINES, keepInSupportLog).catch(() => [])).map(logLine),
   }
   const redacted = redactForSupport(bundle, deps.secrets())
   // Builds go in after redaction: a git revision looks like a key to it, and

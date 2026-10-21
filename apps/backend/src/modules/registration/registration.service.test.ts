@@ -134,7 +134,7 @@ describe('RegistrationService', () => {
       clientTest: 'skipped',
       indexerTest: 'skipped',
     })
-    expect(result.message).toContain('Turn on Downloads')
+    expect(result.message).toBe('Downloads are off, so jack didn\'t add itself to Radarr. Turn on downloads under Settings -> Radarr & Sonarr -> Downloads.')
   })
 
   test('skips the client test until a restart starts the qBittorrent API', async () => {
@@ -434,7 +434,7 @@ describe('RegistrationService', () => {
     const dest = stubDest({ disableUnboundIndexer: async () => true })
     const result = (await service([dest], { downloads: () => false }).register(dest))!
     expect(result.indexer).toEqual({ status: 'skipped', reason: 'downloads-off', disabledUnbound: true })
-    expect(result.message).toBe('Downloads are off, so jack didn\'t add itself to Radarr, and it turned off the Jack indexer it had added there before, which had no download client. Turn on Downloads in Settings.')
+    expect(result.message).toBe('Downloads are off, so jack didn\'t add itself to Radarr, and it turned off the Jack indexer it had added there before, which had no download client. Turn on downloads under Settings -> Radarr & Sonarr -> Downloads.')
   })
 
   test('a refused download client leaves the indexer alone and says so', async () => {
@@ -450,8 +450,65 @@ describe('RegistrationService', () => {
       indexer: { status: 'skipped', reason: 'client-failed' },
       clientTest: 'skipped',
       indexerTest: 'skipped',
-      message: 'jack couldn\'t add its download client to Radarr (Unauthorized), so it left the indexer as it was. Register again.',
+      message: 'jack couldn\'t add its download client to Radarr: Unauthorized. jack left the indexer as it was. To try again, use Register again on Radarr\'s card.',
     })
+  })
+
+  // Radarr's own text can end in a full stop inside its brackets.
+  test('adds no period after the *arr\'s text when it ends in one inside brackets', async () => {
+    const dest = stubDest({
+      registerDownloadClient: async () => {
+        throw new Error('Authentication Failure (Please verify your username and password.)')
+      },
+    })
+    const result = (await service([dest]).register(dest))!
+    expect(result.message).toBe('jack couldn\'t add its download client to Radarr: Authentication Failure (Please verify your username and password.) jack left the indexer as it was. To try again, use Register again on Radarr\'s card.')
+    expect(result.message).not.toContain('.).')
+  })
+
+  test('a removed Jack entry says how to add it back', async () => {
+    const dest = stubDest({ testDownloadClient: async (): Promise<ArrProviderTest> => ({ status: 'missing' }) })
+    const result = (await service([dest]).register(dest))!
+    expect(result.message).toBe('Radarr has no Jack download client anymore. To add it back, use Register again on Radarr\'s card.')
+  })
+
+  test('a refused test names the address while the Radarr/Sonarr APIs answer only the LAN', async () => {
+    const refused = failure('Authentication failure', 'Please verify your username and password.')
+    const dest = stubDest({ testDownloadClient: async () => refused })
+    expect((await service([dest]).register(dest))!.message).toContain('from outside your LAN')
+    expect((await service([dest], { arrApisLanOnly: () => false }).register(dest))!.message).toBe('jack rejected Radarr\'s key. To give Radarr a new one, use Register again on Radarr\'s card.')
+  })
+
+  // The result dialog after a save shows these too, and it has no Register again button.
+  test('a failed step quotes the *arr\'s sentence once, and says where Register again is', async () => {
+    const dest = stubDest({
+      registerIndexer: async () => {
+        throw new Error('Indexer category settings are wrong.')
+      },
+    })
+    const result = (await service([dest]).register(dest))!
+    expect(result.message).toBe('jack couldn\'t add its indexer to Radarr: Indexer category settings are wrong. To try again, use Register again on Radarr\'s card.')
+    expect(result.message).not.toContain('.)')
+  })
+
+  test('a refused download client before the restart that serves it asks for the restart', async () => {
+    const dest = stubDest({
+      registerDownloadClient: async () => {
+        throw new Error('Unable to connect to qBittorrent')
+      },
+    })
+    const result = (await service([dest], { downloadsActive: () => false }).register(dest))!
+    expect(result.downloadClient).toEqual({ status: 'failed', error: 'Unable to connect to qBittorrent' })
+    expect(result.message).toBe('jack couldn\'t add its download client to Radarr yet, because downloads were turned on after jack started. Restart the jack container: jack adds itself to Radarr when it starts.')
+  })
+
+  test('registersAnywhere: only servers jack adds itself to count', () => {
+    const shareOnly = stubDest({ canDestination: false })
+    const manual = stubDest({ autoRegister: { enable: false, priority: 1 } })
+    const disabled = stubDest({ enabled: false })
+    expect(service([]).registersAnywhere()).toBe(false)
+    expect(service([shareOnly, manual, disabled]).registersAnywhere()).toBe(false)
+    expect(service([shareOnly, stubDest({ isInitialized: false })]).registersAnywhere()).toBe(true)
   })
 
   test('follows config saves: a server, a new internal URL, downloads turned on', async () => {

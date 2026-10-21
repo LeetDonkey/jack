@@ -43,8 +43,12 @@ The usual causes:
   address. Typical causes: the *arr reaches jack over Tailscale (`100.x`
   addresses), from a VPS or another site, over a global IPv6 address, or
   `jack.internalUrl` is your public domain so the *arr goes through your
-  reverse proxy. Use a LAN address in `jack.internalUrl`, or add the *arr's
-  address under ***Settings -> Sharing -> Security -> Also allow***.
+  reverse proxy. The server's card then reads ***jack refused Radarr, probably
+  because Radarr reaches jack from outside your LAN***, and ***Register again***
+  doesn't fix it. Use a LAN address in `jack.internalUrl`, or add the *arr's
+  address under ***Settings -> Sharing -> Security -> Reverse proxy and
+  exceptions -> Radarr/Sonarr outside your LAN***. In ***Logs***, click the
+  line, then ***Open Security settings*** to go straight to that field.
 
 ## qBittorrent download client test fails / `Failed to register download client`
 
@@ -174,14 +178,16 @@ Two gotchas:
 ## `Downloads are off`, nothing registered
 
 ```
-Downloads are off, so jack did not add its indexer or download client to Radarr/Sonarr. Turn on Downloads in Settings, then restart the jack container.
+Downloads are off, so jack did not add its indexer or download client to Radarr/Sonarr. Turn on downloads under Settings -> Radarr & Sonarr -> Downloads, then restart the jack container.
 ```
 
-jack only registers itself in your *arr when a `downloads` block is present in
-your config (it needs `completedPath` to know where to write files). Without it,
-jack registers neither the qBittorrent download client nor the Torznab indexer:
-an indexer without jack's client would let *arr send jack's releases to another
-torrent client, where they never start.
+The warning shows at start while a Radarr or Sonarr has ***Auto-register jack
+in this Radarr*** on. jack only registers itself in your *arr when a
+`downloads` block is present in your config (it needs `completedPath` to know
+where to write files). Without it, jack registers neither the qBittorrent
+download client nor the Torznab indexer: an indexer without jack's client would
+let *arr send jack's releases to another torrent client, where they never
+start.
 
 If an earlier jack already added a Jack indexer with no download client bound,
 jack turns it off in that *arr (the `Turned off the Jack indexer` warning in
@@ -193,7 +199,8 @@ on downloads*** under ***Settings -> Radarr & Sonarr -> Downloads*** in the
 management UI, and restart jack. jack registers both when it starts again.
 Until the restart, the management UI names ***Downloads*** in a bar at the top
 of every page, and a Radarr/Sonarr that doesn't have jack's download client
-yet refuses it, so its card reads `indexer skipped · download client failed`.
+yet refuses it, so its card reads `indexer skipped · download client failed`
+and asks you to restart the jack container.
 
 If registration fails with `Failed to register indexer`, check that the
 destination server is reachable and its API key is correct. Registration logs

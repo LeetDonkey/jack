@@ -346,7 +346,7 @@ right away when edited in ***Settings -> Bandwidth***.
 
 Where jack sends notifications, and which. Optional; edited in
 ***Settings -> Notifications*** and applies right away. ***Send test*** posts
-a message to every webhook.
+a message to every saved webhook.
 
 - **`webhooks`**: a list of `{ type, url }`. `url` is a
   [`ConfigSecret`](#configsecret), since webhook URLs usually embed a token.
@@ -453,11 +453,14 @@ addresses are listed with a button to lift each ban. Applies right away.
 
 Every entry in `trustedProxies`, `neverBan` and `arrApiAlsoAllowed` must be an
 IPv4 or IPv6 address, or a range such as `172.18.0.0/16` or `fd00::/8`. A host
-or container name never matches. ***Settings -> Sharing -> Security*** refuses
-such an entry and names it. jack still starts with one already in the file: it
-ignores the entry and logs a warning, and a list with no valid entry left
-counts as unset. ***Settings -> Sharing -> Security*** lists the ignored
-entries, and the next save of that card removes them from the file.
+or container name never matches. The form refuses such an entry and names it.
+jack still starts with one already in the file: it ignores the entry and logs a
+warning, and a list with no valid entry left counts as unset.
+
+***Settings -> Sharing -> Security*** keeps these lists under ***Reverse proxy
+and exceptions***, where `arrApiAlsoAllowed` is called ***Radarr/Sonarr outside
+your LAN***. The card lists the ignored entries, and its next save removes them
+from the file.
 
 [`notifications.ipBanned`](#notifications) (default `true`) sends a
 notification when an address is banned.

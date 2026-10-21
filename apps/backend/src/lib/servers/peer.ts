@@ -20,6 +20,9 @@ import { isPeerVersionCompatible, MIN_PEER_PROTOCOL_VERSION } from '../version'
 import { ServerConnector } from './base'
 
 const PeerSearchResponse = z.object({ items: z.array(Release) })
+// A friend who doesn't introduce (the default) or an older jack answers the
+// introduction routes with 404: a normal state, logged at debug.
+const isNotFound = (status: number) => status === 404
 const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024 * 1024 // 100GB
 const DOWNLOAD_PROGRESS_INTERVAL_MS = 10_000
 const DOWNLOAD_PROGRESS_BYTES = 64 * 1024 * 1024
@@ -235,7 +238,7 @@ export class PeerConnector extends ServerConnector {
   @requiresInitialization
   async introProfile(): Promise<IntroProfile | null> {
     try {
-      return await this.fetch('/peer/intro/profile', { method: 'GET', schema: IntroProfile })
+      return await this.fetch('/peer/intro/profile', { method: 'GET', schema: IntroProfile, expectedFailure: isNotFound })
     }
     catch (err) {
       if (err instanceof FetchError && err.response.status === 404)
@@ -248,7 +251,7 @@ export class PeerConnector extends ServerConnector {
   @requiresInitialization
   async introDirectory(): Promise<IntroDirectory | null> {
     try {
-      return await this.fetch('/peer/intro/directory', { method: 'GET', schema: IntroDirectory })
+      return await this.fetch('/peer/intro/directory', { method: 'GET', schema: IntroDirectory, expectedFailure: isNotFound })
     }
     catch (err) {
       if (err instanceof FetchError && err.response.status === 404)

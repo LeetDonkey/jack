@@ -236,12 +236,13 @@ with the steps below. A step that needs you has a button to the right place in
    on it, in this browser, until a check passes. After changing a template,
    click ***Check again*** on the setup card, or ***Check folders*** under
    ***Settings -> Radarr & Sonarr -> Downloads***.
-4. ***Restart the jack container.*** The card shows this step only when a
-   saved setting waits for a restart, such as turning on downloads. A bar at
-   the top of every page names those settings, for example ***jack needs a
-   restart to apply: Downloads***. Restart jack from the Docker tab (jack ->
-   ***Restart***). Once jack is back, jack-ui shows ***jack restarted. New
-   settings are active.*** jack-ui itself never needs a restart.
+4. ***Restart the jack container.*** The card shows this step only when
+   turning on downloads or a new ***Completed folder*** waits for a restart.
+   A bar at the top of every page names every saved setting that waits for
+   one, for example ***jack needs a restart to apply: Downloads***. Restart
+   jack from the Docker tab (jack -> ***Restart***). Once jack is back, jack-ui
+   shows ***jack restarted. New settings are active.*** jack-ui itself never
+   needs a restart.
 
 > [!TIP]
 > **Radarr, Sonarr or a proxy with their own IP.** If a container runs on
@@ -284,17 +285,18 @@ In Nginx Proxy Manager, add a ***Proxy Host***:
 > believes the visitor's address that a proxy on a private address passes on,
 > such as Nginx Proxy Manager on Unraid. If your proxy runs on a VPS and
 > reaches your server over Tailscale, enter the VPS's Tailscale address under
-> ***Settings -> Sharing -> Security -> Trusted proxies*** and click ***Save
-> changes***. Otherwise every friend reaches jack from that one address, and
-> ten refused requests within ten minutes, from a friend with an old key or
-> from a scanner, ban it for an hour. Every friend then sees ***Is blocking
-> you***.
+> ***Settings -> Sharing -> Security -> Reverse proxy and exceptions ->
+> Trusted proxies*** and click ***Save changes***. Otherwise every friend
+> reaches jack from that one address, and ten refused requests within ten
+> minutes, from a friend with an old key or from a scanner, ban it for an
+> hour. Every friend then sees ***Is blocking you***.
 
 Your friends' jacks only use `/ping`, `/handshake` and `/peer/`, so you don't
 need to block anything in the proxy. The paths your own Radarr and Sonarr use
 answer only addresses on your LAN, also through the proxy. If your Radarr or
 Sonarr reaches jack from elsewhere, such as over Tailscale or from a VPS, add
-its address under ***Settings -> Sharing -> Security -> Also allow***.
+its address under ***Settings -> Sharing -> Security -> Reverse proxy and
+exceptions -> Radarr/Sonarr outside your LAN***.
 
 Then, in jack-ui, open ***Settings -> Sharing -> Your public address***: set
 ***Name friends see*** and ***Address friends use***
@@ -450,12 +452,13 @@ friends see*** and ***Address friends use*** from step 6.
   Tailscale or from a VPS counts as outside, and so does one that uses your
   public domain as jack's address. ***Logs*** shows
   `Refused the Radarr/Sonarr API to an address outside your LAN` with the
-  address. Radarr's card can read ***jack rejected Radarr's key***, and
-  ***Register again*** alone doesn't fix that. Add the address under
-  ***Settings -> Sharing -> Security -> Also allow*** (`100.64.0.0/10` for
-  Tailscale), or use your server's LAN IP in ***Address Radarr/Sonarr use to
-  reach jack***. Click ***Save changes***, then ***Register again*** on
-  Radarr's card to test again.
+  address. Radarr's card reads ***jack refused Radarr, probably because Radarr
+  reaches jack from outside your LAN***, and ***Register again*** alone
+  doesn't fix that. Add the address under ***Settings -> Sharing ->
+  Security -> Reverse proxy and exceptions -> Radarr/Sonarr outside your
+  LAN*** (`100.64.0.0/10` for Tailscale), or use your server's LAN IP in
+  ***Address Radarr/Sonarr use to reach jack***. Click ***Save changes***,
+  then ***Register again*** on Radarr's card to test again.
 - **No Jack indexer or download client in Radarr/Sonarr**: Radarr's card reads
   `jack in Radarr: skipped (downloads off)`. Click ***Turn on downloads***
   under ***Settings -> Radarr & Sonarr -> Downloads***, save, and restart the

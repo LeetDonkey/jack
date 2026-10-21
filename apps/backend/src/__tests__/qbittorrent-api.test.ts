@@ -6,6 +6,7 @@ import { runMigrations } from '../database/connection'
 import * as schema from '../database/schema'
 import { AppConfig, MIGRATIONS } from '../lib/config'
 import { generateManagedKey, hashKey } from '../lib/crypto'
+import { DOWNLOAD_CANCELLED_MESSAGE } from '../modules/downloads/download-state'
 import { DownloadsRepository } from '../modules/downloads/downloads.repository'
 import { deriveHash, qbCategoryForServer } from '../modules/qbittorrent/qbittorrent.mapper'
 import { createTorrentStub } from '../modules/torznab/torrent'
@@ -201,6 +202,52 @@ describe('qBittorrent torrent mapping', () => {
     const filesRes = await app.request(`/api/v2/torrents/files?hash=${hash}`, { headers: { cookie } })
     const files = await filesRes.json() as { name: string }[]
     expect(files[0]?.name).toBe('Big Buck Bunny (2008).mkv')
+  })
+
+  test('info reports a download cancelled in jack as paused, and a failed one as an error', async () => {
+    const created = seedDownload(repository, qbCategoryForServer('abc12345'))
+    const cookie = await loginCookie(app)
+    const state = async () => ((await (await app.request('/api/v2/torrents/info', { headers: { cookie } })).json() as any[])[0]).state
+
+    // As DownloadsService stores a cancel.
+    repository.markFailed(created.id, DOWNLOAD_CANCELLED_MESSAGE)
+    expect(await state()).toBe('pausedDL')
+    repository.markFailed(created.id, 'The socket connection was closed unexpectedly')
+    expect(await state()).toBe('error')
+  })
+
+  test('info reports the live phase, the pause and the speed of a running download', async () => {
+    const sqlite = new Database(':memory:')
+    const db = drizzle({ client: sqlite, schema })
+    runMigrations(db)
+    const downloadsRepository = new DownloadsRepository(db)
+    const config = AppConfig.parse({
+      version: MIGRATIONS.length,
+      jack: { internalUrl: 'http://jack:5225', apiKey: 'test-api-key' },
+      downloads: { completedPath: '/tmp/completed' },
+      servers: [],
+      peers: [],
+    })
+    const created = seedDownload(downloadsRepository, qbCategoryForServer('abc12345'))
+    let phase = 'transferring'
+    let paused = false
+    const downloadsService = {
+      phaseOf: (id: number) => (id === created.id ? { phase, retryAt: null } : null),
+      get isPaused() { return paused },
+    } as any
+    const transfersService = {
+      monitor: { list: () => [{ direction: 'download', downloadId: created.id, bytesPerSecond: 1_048_576, etaSeconds: 42 }] },
+    } as any
+    const app = getApp(envs, config, { servers: [fakeServer], peers: [] }, { downloadsRepository, downloadsService, transfersService, ...makeAuthRepos(db) })
+    const cookie = await loginCookie(app)
+    const info = async () => (await (await app.request('/api/v2/torrents/info', { headers: { cookie } })).json() as any[])[0]
+
+    expect(await info()).toMatchObject({ state: 'downloading', dlspeed: 1_048_576, eta: 42 })
+    phase = 'retry_wait'
+    expect(await info()).toMatchObject({ state: 'queuedDL', dlspeed: 0, eta: 8_640_000 })
+    paused = true
+    expect((await info()).state).toBe('pausedDL')
+    sqlite.close()
   })
 })
 

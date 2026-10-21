@@ -5,14 +5,19 @@ import { DownloadsConfig } from '../../lib/config'
  * - `downloads`: the downloads block was added (or removed). The qBittorrent API
  *   and the download queue only start with it.
  * - `downloads.completedPath`: the completed folder.
- * - `downloads.retries`: the retry, timeout and import-watcher knobs.
+ * - `downloads.retries`: the retry and timeout knobs.
+ * - `downloads.import`: the import watcher's knobs.
  * - `jack.tmdbApiKey`, `jack.apiKey`: the keys.
  */
-export const RESTART_REASONS = ['downloads', 'downloads.completedPath', 'downloads.retries', 'jack.tmdbApiKey', 'jack.apiKey'] as const
+export const RESTART_REASONS = ['downloads', 'downloads.completedPath', 'downloads.retries', 'downloads.import', 'jack.tmdbApiKey', 'jack.apiKey'] as const
 export type RestartReason = typeof RESTART_REASONS[number]
 
 // Downloads keys that apply without a restart.
-const LIVE_DOWNLOAD_KEYS = new Set(['unlinkImportedFiles', 'maxConcurrentDownloads', 'pausedUntil'])
+export const LIVE_DOWNLOAD_KEYS: ReadonlySet<string> = new Set(['unlinkImportedFiles', 'maxConcurrentDownloads', 'pausedUntil'])
+
+// The import watcher's downloads keys (`downloads.import`). Every other key read at
+// startup, apart from completedPath, is a retry or timeout knob (`downloads.retries`).
+export const IMPORT_DOWNLOAD_KEYS: ReadonlySet<string> = new Set(['importPollIntervalMs', 'maxManualImportAttempts', 'manualImportBackoffBaseMs', 'manualImportBackoffMaxMs'])
 
 interface RawConfigLike {
   jack?: { apiKey?: unknown, tmdbApiKey?: unknown } | null
@@ -57,11 +62,13 @@ export function pendingRestart(boot: RawConfigLike, current: RawConfigLike): Res
     if (stableStringify(before.completedPath) !== stableStringify(after.completedPath))
       reasons.push('downloads.completedPath')
     const keys = new Set([...Object.keys(before), ...Object.keys(after)])
-    const retriesChanged = [...keys].some(key => key !== 'completedPath'
+    const changed = [...keys].filter(key => key !== 'completedPath'
       && !LIVE_DOWNLOAD_KEYS.has(key)
       && stableStringify(before[key]) !== stableStringify(after[key]))
-    if (retriesChanged)
+    if (changed.some(key => !IMPORT_DOWNLOAD_KEYS.has(key)))
       reasons.push('downloads.retries')
+    if (changed.some(key => IMPORT_DOWNLOAD_KEYS.has(key)))
+      reasons.push('downloads.import')
   }
 
   if (stableStringify(boot.jack?.tmdbApiKey) !== stableStringify(current.jack?.tmdbApiKey))

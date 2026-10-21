@@ -75,7 +75,7 @@ export function getQbittorrentRouter(controller: QbittorrentController) {
   app.get('/torrents/info', describeRoute({
     tags: ['qBittorrent'],
     summary: 'List torrents',
-    description: '*arr polls this for download progress. Optional `category` and `hashes` (pipe-separated) filters.',
+    description: '*arr polls this for download progress. Optional `category` and `hashes` (pipe-separated) filters. `state` is `downloading` while bytes flow (with `dlspeed` and `eta`), `queuedDL` while the download waits for a slot or to retry, `pausedDL` while it waits and downloads are paused or after it was cancelled in jack, `pausedUP` once finished, and `error` when it failed.',
     ...qbAuth,
     parameters: [
       { name: 'category', in: 'query', schema: { type: 'string' }, description: 'Filter by category' },

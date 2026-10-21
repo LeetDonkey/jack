@@ -5,6 +5,9 @@
 export { isNoResultsFailure } from '../../lib/servers/arr/validation'
 
 const SETTING = 'Address Radarr/Sonarr use to reach jack'
+// The field in Settings that lets a Radarr/Sonarr outside the LAN in
+// (security.arrApiAlsoAllowed), as the UI labels the way there.
+const ARR_OUTSIDE_LAN = 'Settings -> Sharing -> Security -> Reverse proxy and exceptions -> Radarr/Sonarr outside your LAN'
 
 const NAME_RESOLUTION = /name or service not known|no such host|name does not resolve|could not resolve|temporary failure in name resolution|nodename nor servname|resource temporarily unavailable|no address associated/i
 const REFUSED = /connection refused|actively refused|econnrefused/i
@@ -12,6 +15,10 @@ const UNREACHABLE = /no route to host|network is unreachable|host is unreachable
 const TIMEOUT = /timed out|timeout|task was canceled|operation was canceled/i
 const TLS = /\bssl\b|\btls\b|certificate/i
 const AUTH = /authentication failure|unauthori[sz]ed|forbidden|invalid api ?key|\b401\b|\b403\b/i
+// How the *arr reports jack's 403 to an address outside the LAN (lanGuard): as
+// Forbidden from the Torznab API, as an authentication failure from the
+// qBittorrent login. A wrong key on the Torznab API gets 401 instead.
+const LAN_REFUSAL = /authentication failure|forbidden|\b403\b/i
 const NOT_FOUND = /\b404\b|not ?found/i
 
 function describeAddress(internalUrl: string): { host: string, hostPort: string } {
@@ -24,8 +31,14 @@ function describeAddress(internalUrl: string): { host: string, hostPort: string 
   }
 }
 
-/** What to tell the user when `arrName`'s test of jack failed with `text`. */
-export function explainArrTestFailure(text: string, { arrName, internalUrl }: { arrName: string, internalUrl: string }): string {
+/**
+ * What to tell the user when `arrName`'s test of jack failed with `text`.
+ * `lanOnly`: jack answers the Radarr/Sonarr APIs only to the LAN and the addresses
+ * under Radarr/Sonarr outside your LAN (security.lanOnlyArrApis). The test runs
+ * right after jack gave the *arr a new key, so a refusal then is more likely
+ * the *arr's address than its key, and Register again doesn't fix the address.
+ */
+export function explainArrTestFailure(text: string, { arrName, internalUrl, lanOnly }: { arrName: string, internalUrl: string, lanOnly: boolean }): string {
   const { host, hostPort } = describeAddress(internalUrl)
   if (NAME_RESOLUTION.test(text))
     return `${arrName} can't resolve ${host}. Use your server's IP in ${SETTING}.`
@@ -37,8 +50,10 @@ export function explainArrTestFailure(text: string, { arrName, internalUrl }: { 
     return `${arrName} got no answer from ${hostPort}. Check ${SETTING}. If ${arrName} runs on br0, turn on host access to custom networks in Unraid's Docker settings.`
   if (TLS.test(text))
     return `${arrName} couldn't set up HTTPS to ${hostPort}. Use http:// in ${SETTING}, unless a proxy with a valid certificate sits in front of jack.`
+  if (lanOnly && LAN_REFUSAL.test(text))
+    return `jack refused ${arrName}, probably because ${arrName} reaches jack from outside your LAN. Use your server's LAN IP in ${SETTING}, or add ${arrName}'s address under ${ARR_OUTSIDE_LAN}.`
   if (AUTH.test(text))
-    return `jack rejected ${arrName}'s key. Register again to give ${arrName} a new one.`
+    return `jack rejected ${arrName}'s key. To give ${arrName} a new one, use Register again on ${arrName}'s card.`
   if (NOT_FOUND.test(text))
     return `${arrName} reached ${hostPort}, but jack didn't answer there. Check ${SETTING}.`
   return `${arrName} couldn't use jack: ${text}`

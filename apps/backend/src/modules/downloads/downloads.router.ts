@@ -14,7 +14,7 @@ function numericId(raw: string): number {
   return id
 }
 
-function downloadsDoc(summary: string, description: string) {
+function downloadsDoc(summary: string, description: string, extraResponses: Record<number, { description: string }> = {}) {
   return describeRoute({
     tags: ['Downloads'],
     summary,
@@ -23,6 +23,7 @@ function downloadsDoc(summary: string, description: string) {
     responses: {
       200: { description: 'The updated download record', content: { 'application/json': {} } },
       400: { description: 'Id is not a positive integer' },
+      ...extraResponses,
     },
   })
 }
@@ -31,6 +32,7 @@ export function getDownloadsManagementRouter(controller: DownloadsManagementCont
   const app = new Hono()
   app.post('/:id/cancel', downloadsDoc('Cancel a download', 'Stops the active transfer and preserves its `.part` file for a later retry.'), async c => c.json(await controller.cancel(numericId(c.req.param('id')))))
   app.post('/:id/retry', downloadsDoc('Retry a download', 'Repeats the last failed operation; transfers resume from the partial file, failed imports retry without re-downloading.'), async c => c.json(await controller.retry(numericId(c.req.param('id')))))
+  app.post('/:id/retry-now', downloadsDoc('Retry a waiting download now', 'Ends the wait of a download that is waiting to retry after a failed attempt. The next attempt still waits for a download slot, ahead of new downloads, and doesn\'t start while downloads are paused.', { 409: { description: 'The download is not waiting to retry' } }), c => c.json(controller.retryNow(numericId(c.req.param('id')))))
   app.delete('/:id', downloadsDoc('Delete a download', 'Cancels any active work, removes the history row, and deletes its unshared partial or completed artifacts.'), async c => c.json(await controller.delete(numericId(c.req.param('id')))))
   return app
 }

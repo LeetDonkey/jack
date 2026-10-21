@@ -1,8 +1,10 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import { RadarrServerConnector } from '../lib/servers/arr/radarr'
+import { logger } from '../logger'
 import { PeerController } from '../modules/peer/peer.controller'
+import { keepInSupportLog } from '../modules/support/support-bundle'
 
 const HEX_KEY = 'a'.repeat(32)
 
@@ -101,6 +103,59 @@ describe('connector init() state machine', () => {
     radarr.init()
     await radarr.initialization
     expect(pings).toBe(3)
+  })
+
+  test('logs once that a connector which failed before is reachable again', async () => {
+    let healthy = false
+    server.use(
+      http.get('http://back.test/api/v3/system/status', () => healthy
+        ? HttpResponse.json({ appName: 'Radarr', version: '5.0' })
+        : new HttpResponse('down', { status: 503 })),
+    )
+    const radarr = makeRadarr('http://back.test')
+    const info = spyOn(logger, 'info')
+    const reachable = () => info.mock.calls.filter(([, message]) => message === 'Connector "radarr@http://back.test" is reachable again')
+    try {
+      radarr.init()
+      await expect(radarr.initialization).rejects.toThrow()
+      radarr.init()
+      await expect(radarr.initialization).rejects.toThrow()
+      expect(reachable()).toHaveLength(0)
+
+      healthy = true
+      radarr.init()
+      await radarr.initialization
+      expect(reachable()).toHaveLength(1)
+      expect(reachable()[0]?.[0]).toMatchObject({ connector: 'radarr@http://back.test', url: 'http://back.test', recovered: true })
+      expect((reachable()[0]?.[0] as { previousError?: string }).previousError).toBeString()
+      // The support bundle keeps only warnings and errors, and this line, so it
+      // doesn't end on the failure.
+      expect(keepInSupportLog({ level: 30, ...(reachable()[0]?.[0] as object) })).toBe(true)
+
+      // Initialized: further calls are no-ops and log nothing more.
+      radarr.init()
+      await radarr.initialization
+      expect(reachable()).toHaveLength(1)
+    }
+    finally {
+      info.mockRestore()
+    }
+  })
+
+  test('a connector that connects on its first try logs no recovery', async () => {
+    server.use(
+      http.get('http://first.test/api/v3/system/status', () => HttpResponse.json({ appName: 'Radarr', version: '5.0' })),
+    )
+    const radarr = makeRadarr('http://first.test')
+    const info = spyOn(logger, 'info')
+    try {
+      radarr.init()
+      await radarr.initialization
+      expect(info.mock.calls.some(([, message]) => String(message).endsWith('is reachable again'))).toBe(false)
+    }
+    finally {
+      info.mockRestore()
+    }
   })
 
   test('does not re-ping while an init is already in flight', async () => {

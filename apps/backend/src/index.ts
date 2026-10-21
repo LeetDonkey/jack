@@ -27,7 +27,7 @@ import { ManagedApiKeys } from './modules/managed-keys/managed-keys.service'
 import { buildDailySummary } from './modules/notifications/daily-summary'
 import { NotificationsService } from './modules/notifications/notifications.service'
 import { PieceHasher } from './modules/peer/piece-hasher'
-import { RegistrationService } from './modules/registration/registration.service'
+import { DOWNLOADS_SETTING, RegistrationService } from './modules/registration/registration.service'
 import { BanList } from './modules/security/ban-list'
 import { pendingRestart } from './modules/status/restart-pending'
 import { SystemNotices } from './modules/status/system-notices'
@@ -78,6 +78,10 @@ function currentInternalUrl(): string {
   return configService?.getInternalUrl() ?? config.jack.internalUrl
 }
 
+// The security block (fail2ban, the Radarr/Sonarr APIs only on the LAN), read
+// live from the config.
+const securityConfig = () => configService?.getSecurity() ?? SecurityConfig.parse(config.security ?? {})
+
 // Registers jack in every auto-register Radarr/Sonarr and asks them to test it.
 // Built before the public app, which reports each *arr's contact to it.
 const managedApiKeys = new ManagedApiKeys(managedKeysRepository)
@@ -88,6 +92,7 @@ const registrations = new RegistrationService({
   downloads: () => Boolean(configService ? configService.getRawDownloads() : config.downloads),
   // /api/v2 and the download queue exist only if downloads were set at boot.
   downloadsActive: () => Boolean(config.downloads),
+  arrApisLanOnly: () => securityConfig().lanOnlyArrApis,
 })
 // Re-register after a saved server (a changed priority or a newly added *arr),
 // a new internal URL, or downloads turned on, so none of them needs a restart.
@@ -129,8 +134,7 @@ configService?.subscribe(() => {
 const torznabConfig = () => configService?.getTorznab() ?? TorznabConfig.parse(config.torznab ?? {})
 const pieceHasher = new PieceHasher(database.sqlite)
 
-// fail2ban for the public port, read live from the config.
-const securityConfig = () => configService?.getSecurity() ?? SecurityConfig.parse(config.security ?? {})
+// fail2ban for the public port.
 const bans = new BanList(database.sqlite, securityConfig)
 
 // Notifications (webhooks) and peer reachability, read live from the config.
@@ -296,9 +300,11 @@ const managementServer = startManagementServer()
 // there are no peers / an empty catalog (see registerIndexer), so the Jack
 // indexer and client are always present and bound. They start returning results
 // as soon as peers come online. Without downloads nothing is registered (see
-// registerManagedForDestination).
-if (!config.downloads)
-  logger.warn('Downloads are off, so jack did not add its indexer or download client to Radarr/Sonarr. Turn on Downloads in Settings, then restart the jack container.')
+// registerManagedForDestination), which needs saying only where jack would add
+// itself: a share-only install has nothing to turn on. The Logs page links the
+// line to the guide by its start ("Downloads are off").
+if (!config.downloads && registrations.registersAnywhere())
+  logger.warn(`Downloads are off, so jack did not add its indexer or download client to Radarr/Sonarr. Turn on downloads under ${DOWNLOADS_SETTING}, then restart the jack container.`)
 
 // Keep managed keys only for destinations jack may register in, reachable or
 // not, so a stale key of any other server can't authenticate.

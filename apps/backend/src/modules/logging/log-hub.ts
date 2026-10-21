@@ -56,16 +56,18 @@ export class LogHub {
 
   /**
    * The most recent `lines` records, oldest→newest, optionally keeping only those
-   * at or above `minLevel` (pino numeric level). Reads the active file and, if it
-   * doesn't yet hold enough lines (e.g. just after a rotation), walks back through
-   * the rotated siblings `.1`, `.2`, … so retained history isn't silently dropped.
-   * Persists across restarts because the files live on a persistent volume.
+   * at or above `minLevel` (pino numeric level) and those `keep` accepts. Reads
+   * the active file and, if it doesn't yet hold enough lines (e.g. just after a
+   * rotation), walks back through the rotated siblings `.1`, `.2`, … so retained
+   * history isn't silently dropped. Persists across restarts because the files
+   * live on a persistent volume.
    */
-  async backfill({ lines, minLevel }: { lines: number, minLevel?: number }): Promise<LogRecord[]> {
+  async backfill({ lines, minLevel, keep }: { lines: number, minLevel?: number, keep?: (record: LogRecord) => boolean }): Promise<LogRecord[]> {
     // Fail closed: when a level floor is set, a record must carry a numeric level
     // at or above it — a missing/malformed level is excluded, not let through.
     const passesLevel = (record: LogRecord): boolean =>
-      minLevel == null || (typeof record.level === 'number' && record.level >= minLevel)
+      (minLevel == null || (typeof record.level === 'number' && record.level >= minLevel))
+      && (keep == null || keep(record))
 
     let collected: LogRecord[] = []
     // i = 0 is the active file; i > 0 are the successively older rotated files.

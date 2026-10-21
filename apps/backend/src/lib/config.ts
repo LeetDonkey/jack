@@ -703,7 +703,7 @@ export async function createDefaultAppConfig(path: string, options: DefaultAppCo
     return null
   const config = await buildDefaultAppConfig(options)
   await fs.writeFile(path, jsonc.stringify(config, { space: 2 }))
-  logger.info({ internalUrl: config.jack.internalUrl, completedPath: config.downloads?.completedPath ?? null }, 'Wrote the default config')
+  logger.info({ internalUrl: config.jack.internalUrl, completedPath: config.downloads?.completedPath ?? null }, `Created a default config at ${path}`)
   return config
 }
 
@@ -713,8 +713,9 @@ export async function getAppConfig(
 ): Promise<{ appConfig: AppConfig, raw: z.input<typeof AppConfig> }> {
   const configFileExists = await fs.exists(APP_CONFIG_PATH)
 
+  // No config file yet is a normal first start: createDefaultAppConfig writes one
+  // and logs it at info.
   if (!configFileExists) {
-    logger.warn(`Config file not found at ${APP_CONFIG_PATH}. Creating default config file...`)
     const defaults = await createDefaultAppConfig(APP_CONFIG_PATH, { internalUrl: JACK_INTERNAL_URL, downloadsPath })
       ?? await buildDefaultAppConfig({ internalUrl: JACK_INTERNAL_URL, downloadsPath })
 

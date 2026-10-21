@@ -125,6 +125,21 @@ describe('LogHub backfill', () => {
     expect(out.map(r => r.message)).toEqual(['x', 'y'])
   })
 
+  test('keeps only the records keep accepts, and counts only those towards lines', async () => {
+    await writeFile(path, ndjson([
+      { level: 50, message: 'old error' },
+      { level: 30, message: 'info' },
+      { level: 30, message: 'back', recovered: true },
+      { level: 40, message: 'warn' },
+      { level: 30, message: 'info again' },
+    ]))
+    const hub = new LogHub(path)
+
+    const out = await hub.backfill({ lines: 2, keep: r => (r.level ?? 0) >= 40 || r.recovered === true })
+
+    expect(out.map(r => r.message)).toEqual(['back', 'warn'])
+  })
+
   test('fails closed: a record without a numeric level is excluded under a level floor', async () => {
     await writeFile(path, `${[
       { level: 30, message: 'info' },

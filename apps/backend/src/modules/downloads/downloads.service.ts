@@ -50,8 +50,12 @@ class DownloadCancelledError extends Error {
   }
 }
 
+function isCancelled(signal: AbortSignal): boolean {
+  return signal.aborted && signal.reason instanceof DownloadCancelledError
+}
+
 function failureMessage(err: unknown, signal: AbortSignal): string {
-  if (signal.aborted && signal.reason instanceof DownloadCancelledError)
+  if (isCancelled(signal))
     return DOWNLOAD_CANCELLED_MESSAGE
   return err instanceof Error ? err.message : String(err)
 }
@@ -72,6 +76,8 @@ export class DownloadsService {
   private readonly coordinator?: DownloadOperationCoordinator
   private readonly failedListeners = new Set<(record: DownloadRecord, error: string) => void>()
   private readonly phases = new Map<number, DownloadPhaseState>()
+  // Ends the backoff of a download waiting to retry (see retryNow).
+  private readonly retryWakers = new Map<number, () => void>()
   private readonly phaseSubscribers = new Set<() => void>()
   private readonly now: () => number
 
@@ -415,6 +421,47 @@ export class DownloadsService {
     return repo.get(id) ?? record
   }
 
+  /**
+   * Start the next attempt of a download that is waiting to retry, instead of at
+   * its `retryAt`. The attempt still waits for a download slot, ahead of new
+   * downloads, and doesn't start while downloads are paused.
+   */
+  retryNow(id: number): DownloadRecord {
+    const repo = this.requireRepository()
+    const record = repo.get(id)
+    if (!record)
+      throw new NotFoundError(`Download ${id} not found`)
+    const wake = this.retryWakers.get(id)
+    if (record.status !== 'downloading' || this.phases.get(id)?.phase !== 'retry_wait' || !wake)
+      throw new ConflictError(`Download ${id} is not waiting to retry`)
+    wake()
+    return repo.get(id) ?? record
+  }
+
+  /**
+   * The wait before the next attempt. It ends early on a cancel (retry() then
+   * throws the cancel) or when retryNow() wakes it.
+   */
+  private backoff(id: number, ms: number, signal: AbortSignal): Promise<void> {
+    return new Promise<void>((resolve) => {
+      if (signal.aborted) {
+        resolve()
+        return
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const finish = () => {
+        clearTimeout(timer)
+        signal.removeEventListener('abort', finish)
+        if (this.retryWakers.get(id) === finish)
+          this.retryWakers.delete(id)
+        resolve()
+      }
+      timer = setTimeout(finish, ms)
+      signal.addEventListener('abort', finish, { once: true })
+      this.retryWakers.set(id, finish)
+    })
+  }
+
   async delete(id: number): Promise<void> {
     const repo = this.requireRepository()
     const record = repo.get(id)
@@ -596,6 +643,7 @@ export class DownloadsService {
           this.setPhase(record.id, 'retry_wait', new Date(retryAt).toISOString())
           repo?.setError(record.id, `${RETRY_WAIT_PREFIX} ${retryTimeFormat.format(retryAt)}: ${message}`)
         },
+        sleep: ms => this.backoff(record.id, ms, signal),
         signal,
       })
 
@@ -608,10 +656,15 @@ export class DownloadsService {
       // The .part file is preserved by downloadFile on failure, so a later
       // restart re-enqueue can resume from it.
       repo?.markFailed(record.id, message)
+      // A cancel is the user's own doing: no error, no stack, no announcement.
+      if (isCancelled(signal)) {
+        logger.info({ torrentFilename: record.torrentFilename, filename: record.filename }, DOWNLOAD_CANCELLED_MESSAGE)
+        return
+      }
       // The stack is what pins down an unexpected error (e.g. a RangeError from a dependency).
       const stack = err instanceof Error ? err.stack : undefined
       logger.error({ torrentFilename: record.torrentFilename, filename: record.filename, error: message, stack }, 'Download failed')
-      // A cancel is the user's own doing; only real failures are announced.
+      // Only real failures are announced.
       if (!signal.aborted) {
         for (const listener of this.failedListeners) {
           try {

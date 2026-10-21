@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { chmod, mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { jsonc } from 'jsonc'
 import { createDefaultAppConfig, getAppConfig, internalUrlFromEnv, MIGRATIONS } from '../lib/config'
+import { logger } from '../logger'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -68,6 +69,22 @@ describe('createDefaultAppConfig', () => {
     await createDefaultAppConfig(path, { downloadsPath })
     await chmod(downloadsPath, 0o755)
     expect((await readConfig(path)).downloads).toBeUndefined()
+  })
+
+  test('a first start logs the new config at info, not as a warning', async () => {
+    const dir = await tempDir()
+    const path = join(dir, 'config.jsonc')
+    const warn = spyOn(logger, 'warn')
+    const info = spyOn(logger, 'info')
+    try {
+      await getAppConfig({ APP_CONFIG_PATH: path }, { downloadsPath: join(dir, 'missing') })
+      expect(warn).not.toHaveBeenCalled()
+      expect(info.mock.calls.map(call => call.at(-1))).toContain(`Created a default config at ${path}`)
+    }
+    finally {
+      warn.mockRestore()
+      info.mockRestore()
+    }
   })
 
   test('never touches an existing config file', async () => {
