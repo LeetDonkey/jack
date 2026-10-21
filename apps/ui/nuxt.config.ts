@@ -8,6 +8,26 @@ export default defineNuxtConfig({
 
   css: ['~/assets/css/main.css'],
 
+  // Icons ship with jack-ui. Without SSR, @nuxt/icon would fetch each one from
+  // api.iconify.design in the browser, so a blocked or offline host left every
+  // icon-only button blank. The scan bundles every icon named in the app's own
+  // files (app.config.ts and utils included, which the default scan skips), and
+  // app/icons.test.ts checks that each one is in Phosphor. Nothing is fetched at
+  // run time: `none` stops the browser's requests and leaves out the 4.5 MB
+  // server bundle, and `serverBundle` only tells the client that `ph` is bundled.
+  // server/middleware/icon-api.ts closes the module's server route.
+  icon: {
+    provider: 'none',
+    fallbackToApi: false,
+    serverBundle: { collections: ['ph'] },
+    clientBundle: {
+      scan: {
+        globInclude: ['app/**/*.{vue,ts}'],
+        globExclude: ['**/*.test.ts'],
+      },
+    },
+  },
+
   // Old pages, kept working for links and bookmarks. Friends have their own page,
   // Radarr/Sonarr live on the first Settings tab, and the former Connectors page
   // became Settings. Old /settings#<section> links are moved to their tab by the

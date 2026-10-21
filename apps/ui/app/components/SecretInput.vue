@@ -116,13 +116,15 @@ watch(() => [mode.value, values[mode.value]] as const, ([m, raw]) => {
     <p v-if="cleared" class="text-xs text-warning">
       {{ clearedHint }}
     </p>
+    <!-- Wraps in a narrow column, such as a header row's value on a phone. -->
     <UButton
       v-if="!showSource"
       variant="link"
       color="neutral"
       size="xs"
       label="Use a container variable or file instead"
-      class="px-0"
+      class="max-w-full px-0"
+      :ui="{ label: 'whitespace-normal text-left' }"
       @click="unfoldSource"
     />
   </div>

@@ -3,6 +3,7 @@ import {
   canRetryNow,
   dashboardDownloadCounts,
   downloadActionsFor,
+  downloadErrorDetail,
   downloadsEmptyState,
   downloadState,
   isCancelledDownload,
@@ -120,7 +121,14 @@ describe('downloadState', () => {
 
   test('a known failure reads in plain words and keeps jack\'s text as the detail', () => {
     const raw = 'The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()'
-    expect(downloadState(item({ error: raw }))).toEqual({ label: 'Failed', color: 'error', note: 'The connection to Peer dropped.', noteTone: 'error', detail: raw })
+    expect(downloadState(item({ error: raw }))).toEqual({ label: 'Failed', color: 'error', note: 'The connection to Peer dropped.', noteTone: 'error', detail: 'The socket connection was closed unexpectedly.' })
+  })
+
+  test('jack\'s own sentence about a missing file shows once, in the plain words', () => {
+    const raw = 'Waiting to retry at 14:32: Bob can\'t find this file on disk right now (404). It may be moving or upgrading it, or a mount is missing there.'
+    const state = downloadState(running({ phase: 'retry_wait', attempts: 2, peerName: 'Bob', error: raw }))
+    expect(state.note).toBe('Attempt 2 failed. Bob can\'t find this file right now. Their Radarr/Sonarr may be moving or upgrading it, or a folder is missing in their jack.')
+    expect(state.detail).toBeNull()
   })
 
   test('labels the finished states', () => {
@@ -167,6 +175,29 @@ describe('plainDownloadError', () => {
     expect(failure('Unsafe release filename from peer: ../x.mkv')).toBeNull()
     expect(failure('connect ECONNREFUSED 192.168.0.5:7878', { lastOperation: 'import' })).toBeNull()
     expect(plainDownloadError(item({ error: null }))).toBeNull()
+  })
+})
+
+describe('downloadErrorDetail', () => {
+  const detail = (error: string | null, overrides: Record<string, unknown> = {}) => downloadErrorDetail(item({ error, peerName: 'Bob', ...overrides }))
+
+  test('is jack\'s text behind the plain words, without the retry prefix', () => {
+    expect(detail('Waiting to retry at 14:32: Failed to download file from peer: Service Unavailable'))
+      .toBe('Failed to download file from peer: Service Unavailable')
+    expect(detail('Failed to download file from peer: Not Found')).toBe('Failed to download file from peer: Not Found')
+    expect(detail('read ECONNRESET')).toBe('read ECONNRESET')
+  })
+
+  test('leaves off Bun\'s hint for developers', () => {
+    expect(detail('Waiting to retry at 14:32: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()'))
+      .toBe('The socket connection was closed unexpectedly.')
+  })
+
+  test('is null where the plain words already say it, or where there are none', () => {
+    expect(detail('Bob can\'t find this file on disk right now (404). It may be moving or upgrading it, or a mount is missing there.')).toBeNull()
+    expect(detail('Unsafe release filename from peer: ../x.mkv')).toBeNull()
+    expect(detail('connect ECONNREFUSED 192.168.0.5:7878', { lastOperation: 'import' })).toBeNull()
+    expect(detail(null)).toBeNull()
   })
 })
 

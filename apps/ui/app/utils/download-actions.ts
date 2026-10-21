@@ -76,12 +76,17 @@ export function retryNowFailure(answer: { status: number | undefined, code: stri
   return 'error'
 }
 
+const MISSING_FILE = (friend: string) => `${friend} can't find this file right now. Their Radarr/Sonarr may be moving or upgrading it, or a folder is missing in their jack.`
+
 // Failures jack knows, in plain words. A row carries jack's error text and no
 // code, so these match that text: Bun's and the system's messages and codes,
 // and jack's own errors. `friend` is the friend the file comes from.
-const PLAIN_FAILURES: ReadonlyArray<{ match: RegExp, text: (friend: string) => string }> = [
+// `restates` marks jack's own sentence, which the plain words only reword: the
+// row then leaves jack's text out instead of showing the same thing twice.
+const PLAIN_FAILURES: ReadonlyArray<{ match: RegExp, text: (friend: string) => string, restates?: true }> = [
   { match: /ENOSPC|no space left/i, text: () => 'The disk where jack saves downloads is full. Free up space, then retry.' },
-  { match: /can't find this file on disk|: Not Found$/i, text: friend => `${friend} can't find this file right now. Their Radarr/Sonarr may be moving or upgrading it, or a folder is missing in their jack.` },
+  { match: /can't find this file on disk/i, text: MISSING_FILE, restates: true },
+  { match: /: Not Found$/i, text: MISSING_FILE },
   // A friend's jack answers 503 while its upload slots are full or sharing is
   // paused, and 429 once its daily limit for you is used up. jack keeps only
   // the status text.
@@ -100,11 +105,30 @@ const PLAIN_FAILURES: ReadonlyArray<{ match: RegExp, text: (friend: string) => s
  * and keep their own text.
  */
 export function plainDownloadError(download: Pick<DownloadItem, 'error' | 'peerName' | 'lastOperation'>): string | null {
+  const known = knownFailure(download)
+  return known ? known.text(download.peerName || 'your friend') : null
+}
+
+function knownFailure(download: Pick<DownloadItem, 'error' | 'lastOperation'>) {
   if (!download.error || download.lastOperation !== 'transfer')
     return null
   const reason = download.error.replace(RETRY_WAIT, '')
-  const known = PLAIN_FAILURES.find(failure => failure.match.test(reason))
-  return known ? known.text(download.peerName || 'your friend') : null
+  return PLAIN_FAILURES.find(failure => failure.match.test(reason)) ?? null
+}
+
+// Bun's advice to developers at the end of a fetch error.
+const BUN_VERBOSE_HINT = /\s*For more information, pass `verbose: true` in the second argument to fetch\(\)\.?$/
+
+/**
+ * jack's own text for a failure the plain words describe, for a tooltip or a
+ * Details toggle: null when there is none, or when it says the same as the
+ * plain words. Bun's hint for developers is left off.
+ */
+export function downloadErrorDetail(download: DownloadRow): string | null {
+  const known = knownFailure(download)
+  if (!known || known.restates)
+    return null
+  return retryReason(download)?.replace(BUN_VERBOSE_HINT, '') || null
 }
 
 const SENTENCE_END = /[.!?]$/
@@ -120,8 +144,8 @@ export interface DownloadState {
   // A line under the file name: what went wrong, or what the row waits for.
   note: string | null
   noteTone: 'error' | 'warning' | 'muted'
-  // jack's own error text when the note puts it in plain words: for a tooltip,
-  // and shown on phones, where there is no hover.
+  // jack's own error text when the note puts it in plain words and it adds
+  // something (downloadErrorDetail): a tooltip, and a Details toggle on phones.
   detail: string | null
 }
 
@@ -132,7 +156,7 @@ export interface DownloadState {
  */
 export function downloadState(download: DownloadRow, { downloadsPaused = false } = {}): DownloadState {
   const plain = plainDownloadError(download)
-  const detail = plain ? retryReason(download) : null
+  const detail = downloadErrorDetail(download)
   switch (download.status) {
     case 'downloading': {
       if (isRetryWait(download)) {

@@ -42,14 +42,17 @@ const openedWith = JSON.stringify(state)
 const dirty = computed(() => JSON.stringify(state) !== openedWith)
 watch(dirty, value => emit('dirty', value), { immediate: true })
 
-// jack's own verdict on a field goes onto that field. Its next edit validates it again.
+// jack's own verdict on a field goes onto that field, until the field changes.
+const serverErrors = useServerFieldErrors(form, name => valueAtPath(state, name))
 watch(() => props.fieldError, async (fieldError) => {
-  if (!fieldError)
+  if (!fieldError) {
+    serverErrors.clear()
     return
+  }
   // The date has its own field only while "Custom date…" is picked.
   const name = fieldError.name === 'expiresAt' ? (state.preset === 'custom' ? 'customAt' : 'preset') : fieldError.name
   await nextTick()
-  form.value?.setErrors([{ name, message: fieldError.message }], name)
+  serverErrors.show([{ name, message: fieldError.message }])
   void onError()
 }, { immediate: true })
 

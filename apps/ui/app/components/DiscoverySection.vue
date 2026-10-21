@@ -24,6 +24,7 @@ function blankState() {
 }
 
 const state = reactive(blankState())
+const serverErrors = useServerFieldErrors(form, name => valueAtPath(state, name))
 const baseline = ref(JSON.stringify(blankState()))
 // The separate name stays behind its link until someone asks for it or one is saved.
 const showOverride = ref(false)
@@ -68,6 +69,7 @@ async function save() {
   saving.value = true
   saveError.value = null
   saved.value = false
+  serverErrors.clear()
   const patch: DiscoveryConfigPatch = {
     publicName: state.publicName.trim() || null,
     discoverable: state.discoverable,
@@ -87,7 +89,7 @@ async function save() {
         showOverride.value = true
         await nextTick()
       }
-      form.value?.setErrors([field], field.name)
+      serverErrors.show([field])
       void onError()
     }
     else {
@@ -101,6 +103,7 @@ async function save() {
 
 function revert() {
   seed(discovery.value ?? null)
+  serverErrors.clear()
   form.value?.clear()
   saveError.value = null
   saved.value = false

@@ -1,9 +1,11 @@
 import type { MaybeRefOrGetter } from 'vue'
+import { computed, nextTick, ref, toValue, watch } from 'vue'
 
 // What this needs from a UForm template ref.
 interface FormHandle {
   $el?: unknown
   getErrors?: () => readonly unknown[]
+  loading?: boolean
 }
 
 /**
@@ -26,6 +28,23 @@ export function useFormErrorFocus(form: MaybeRefOrGetter<unknown>) {
 
   const showFixHint = computed(() => failed.value && errorCount.value > 0)
 
+  // jack's refusal arrives while UForm still runs the submit, and UForm keeps
+  // every input disabled until the submit returns. A disabled input can't take
+  // the focus.
+  async function untilSubmitted() {
+    if (!handle()?.loading)
+      return
+    await new Promise<void>((resolve) => {
+      const stop = watch(() => handle()?.loading, (loading) => {
+        if (loading)
+          return
+        stop()
+        resolve()
+      })
+    })
+    await nextTick()
+  }
+
   async function onError() {
     failed.value = true
     await nextTick()
@@ -39,6 +58,7 @@ export function useFormErrorFocus(form: MaybeRefOrGetter<unknown>) {
     if (!(field instanceof HTMLElement))
       return
     field.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    await untilSubmitted()
     field.querySelector<HTMLElement>('input, textarea, button')?.focus({ preventScroll: true })
   }
 

@@ -24,6 +24,7 @@ function stateFrom(external: ExternalJackConfig | null | undefined) {
 }
 
 const state = reactive(stateFrom(null))
+const serverErrors = useServerFieldErrors(form, name => valueAtPath(state, name))
 const baseline = ref(JSON.stringify(state))
 // HeadersEditor keeps its own rows, seeded once, so a new baseline remounts it.
 const headersRevision = ref(0)
@@ -36,6 +37,7 @@ function seed(external: ExternalJackConfig | null | undefined) {
   Object.assign(state, stateFrom(external))
   baseline.value = JSON.stringify(state)
   headersRevision.value++
+  serverErrors.clear()
   form.value?.clear()
 }
 
@@ -107,6 +109,7 @@ async function onSubmit() {
   saving.value = true
   saveError.value = null
   saved.value = false
+  serverErrors.clear()
   const external: ExternalJackConfig = {
     instanceName: state.instanceName.trim(),
     url: state.url.trim(),
@@ -123,7 +126,7 @@ async function onSubmit() {
   catch (err) {
     const errors = fieldErrors(err)
     if (errors.length) {
-      form.value?.setErrors(errors)
+      serverErrors.show(errors)
       void onError()
     }
     else {

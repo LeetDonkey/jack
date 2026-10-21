@@ -323,6 +323,10 @@ const unlinkedOpen = ref(false)
   <UDashboardPanel id="friends">
     <template #header>
       <UDashboardNavbar title="Friends">
+        <!-- The title keeps its room on narrow phones: below 640 px Check now is
+             its icon alone, below 400 px Invite loses "a friend", and below
+             360 px Add loses its label. Check now stays, since nothing else on
+             the page checks again. -->
         <template #right>
           <UButton
             v-if="!noFriends"
@@ -336,12 +340,15 @@ const unlinkedOpen = ref(false)
           >
             <span class="hidden sm:inline">Check now</span>
           </UButton>
-          <!-- On a phone "Add" keeps a label next to Invite a friend. -->
+          <!-- From 360 px "Add" keeps a label next to Invite. -->
           <UButton icon="i-ph-user-plus" size="sm" color="neutral" variant="outline" aria-label="Add a friend" @click="openAdd()">
-            <span class="sm:hidden">Add</span>
+            <span class="hidden min-[360px]:max-sm:inline">Add</span>
             <span class="hidden sm:inline">Add a friend</span>
           </UButton>
-          <UButton icon="i-ph-link" size="sm" label="Invite a friend" @click="openInvite()" />
+          <UButton icon="i-ph-link" size="sm" aria-label="Invite a friend" @click="openInvite()">
+            <span class="min-[400px]:hidden">Invite</span>
+            <span class="hidden min-[400px]:inline">Invite a friend</span>
+          </UButton>
         </template>
       </UDashboardNavbar>
     </template>

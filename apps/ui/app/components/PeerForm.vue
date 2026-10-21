@@ -55,15 +55,18 @@ watch(state, () => {
     emit('dismissError')
 }, { deep: true })
 
-// jack's own verdict on a field goes onto that field, like a check of our own.
-// The field's next edit validates it again, which clears it.
+// jack's own verdict on a field goes onto that field, like a check of our own,
+// and stays until the field changes.
+const serverErrors = useServerFieldErrors(form, name => valueAtPath(state, name))
 watch(() => props.fieldError, async (fieldError) => {
-  if (!fieldError)
+  if (!fieldError) {
+    serverErrors.clear()
     return
+  }
   if (fieldError.name === 'headers')
     advancedOpen.value = true
   await nextTick()
-  form.value?.setErrors([fieldError], fieldError.name)
+  serverErrors.show([fieldError])
   void onError()
 }, { immediate: true })
 

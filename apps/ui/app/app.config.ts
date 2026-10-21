@@ -3,6 +3,15 @@ export default defineAppConfig({
     colors: {
       primary: 'indigo',
     },
+    // Light mode's darker primary (600, main.css) kept a disabled solid button at
+    // Nuxt UI's 75% opacity looking clickable, e.g. every Settings card's Save
+    // changes before an edit. Half opacity reads as disabled; dark mode keeps 75%.
+    button: {
+      compoundVariants: [{
+        variant: 'solid',
+        class: 'disabled:opacity-50 aria-disabled:opacity-50 dark:disabled:opacity-75 dark:aria-disabled:opacity-75',
+      }],
+    },
     // Side gutters: 16px on phones (so the navbar toggle and content aren't pushed
     // in from the edge), 32px from sm up where there's room to breathe. The toolbar
     // under a navbar (Settings tabs, library filters, pause buttons) lines up too.

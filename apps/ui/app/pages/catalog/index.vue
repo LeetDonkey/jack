@@ -247,7 +247,8 @@ async function onConfirm(payload: CatalogRequestPayload) {
     <template #header>
       <UDashboardNavbar title="Friends' library">
         <template #right>
-          <span v-if="updatedAgo && !noFriends" class="text-xs whitespace-nowrap text-muted">Updated {{ updatedAgo }} ago</span>
+          <!-- Below 360 px "Updated" would cut off the title. -->
+          <span v-if="updatedAgo && !noFriends" class="text-xs whitespace-nowrap text-muted"><span class="hidden min-[360px]:inline">Updated </span>{{ updatedAgo }} ago</span>
           <UInput
             v-if="!noFriends"
             v-model="search"

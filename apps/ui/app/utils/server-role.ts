@@ -203,8 +203,18 @@ export function stepUnderHeadline(step: RegistrationStep, headline: string): Reg
 }
 
 // The backend ends a message with where Register again is ("To try again, use
-// Register again on Radarr's card."), for the result dialog after a save.
+// Register again on Radarr's card."). Next to that button, on the card and in the
+// toast after a press of it, the sentence is left out.
 const REGISTER_AGAIN_HINT = /\s*\bTo [^.!?]+, use Register again on [^.!?]+'s card\.$/
+
+/**
+ * A registration message without its closing sentence about Register again, for
+ * the server's own card, where that button sits right above the message.
+ */
+export function withoutRegisterAgainHint(message: string): string {
+  const hintAt = message.search(REGISTER_AGAIN_HINT)
+  return hintAt > 0 ? message.slice(0, hintAt) : message
+}
 
 /**
  * The headline of a registration, as the result after a save and the toast after

@@ -20,6 +20,7 @@ function blankState() {
 }
 
 const state = reactive(blankState())
+const serverErrors = useServerFieldErrors(form, name => valueAtPath(state, name))
 const baseline = ref(JSON.stringify(blankState()))
 
 function seed(config: TorznabConfig | null | undefined) {
@@ -47,6 +48,7 @@ async function save() {
   saving.value = true
   saveError.value = null
   saved.value = false
+  serverErrors.clear()
   const patch: TorznabConfigPatch = { rssMaxAgeDays: state.rssMaxAgeDays, rssMaxItems: state.rssMaxItems }
   try {
     await request('config/torznab', { method: 'PATCH', body: patch })
@@ -57,7 +59,7 @@ async function save() {
     // jack's verdict on one field goes on that field, without its config name.
     const field = extractFieldError(err)
     if (field && field.name in DEFAULTS) {
-      form.value?.setErrors([field], field.name)
+      serverErrors.show([field])
       void onError()
     }
     else {
@@ -71,6 +73,7 @@ async function save() {
 
 function revert() {
   seed(torznab.value ?? null)
+  serverErrors.clear()
   form.value?.clear()
   saveError.value = null
   saved.value = false

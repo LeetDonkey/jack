@@ -47,6 +47,7 @@ function blankState() {
 }
 
 const state = reactive(blankState())
+const serverErrors = useServerFieldErrors(form, name => valueAtPath(state, name))
 // Stored entries jack ignores, per field. Any save of the security settings drops
 // all of them from config.jsonc, so each field's note says so, and Save stays
 // available while there are any (securityCanSave).
@@ -143,17 +144,34 @@ onBeforeUnmount(stopAfterEach)
 
 // The group's fields stay mounted while it is closed (unmount-on-hide off), so
 // the form keeps errors set on them. Reka only shows the content a render or two
-// after `open` changes, though, and an error can't be scrolled to or focused
-// before that.
+// after `open` changes, though, and then grows it from nothing. An error can't be
+// focused while the content is hidden, and scrolling to it while the content
+// grows leaves it below the fold, so this waits for the open animation as well.
 const exceptions = useTemplateRef<ComponentPublicInstance>('exceptions')
 async function showExceptions() {
+  const wasOpen = exceptionsOpen.value
   exceptionsOpen.value = true
+  let content: Element | null = null
   for (let tick = 0; tick < 10; tick++) {
     const root = exceptions.value?.$el
-    const content = root instanceof HTMLElement ? root.querySelector('[data-slot="content"]') : null
-    if (!content?.hasAttribute('hidden'))
-      return
+    content = root instanceof HTMLElement ? root.querySelector('[data-slot="content"]') : null
+    if (content && !content.hasAttribute('hidden'))
+      break
     await nextTick()
+  }
+  if (!wasOpen && content)
+    await untilAnimated(content)
+}
+
+// Reka measures the content a tick after showing it and starts the animation
+// again, so this waits a frame before collecting the running animations.
+async function untilAnimated(element: Element) {
+  for (let round = 0; round < 3; round++) {
+    await new Promise(resolve => requestAnimationFrame(resolve))
+    const running = element.getAnimations()
+    if (!running.length)
+      return
+    await Promise.allSettled(running.map(animation => animation.finished))
   }
 }
 
@@ -180,7 +198,7 @@ async function showSaveError(err: unknown, patch: SecurityConfigPatch) {
   const sent = { trustedProxies: patch.trustedProxies, neverBan: patch.neverBan, arrApiAlsoAllowed: patch.arrApiAlsoAllowed }
   const onScreen = securityFieldErrors(issues, sent, visibleFields(state))
   if (onScreen.length) {
-    form.value?.setErrors(onScreen)
+    serverErrors.show(onScreen)
     // Closed, the group would hide the error.
     if (hasListError(onScreen))
       await showExceptions()
@@ -197,6 +215,7 @@ async function save() {
   saving.value = true
   saveError.value = null
   saved.value = false
+  serverErrors.clear()
   const patch: SecurityConfigPatch = {
     banEnabled: state.banEnabled,
     lanOnlyArrApis: state.lanOnlyArrApis,
@@ -208,21 +227,27 @@ async function save() {
     trustedProxies: list(state.trustedProxies),
     neverBan: list(state.neverBan),
   }
+  let refused: { err: unknown } | null = null
   try {
     await request('config/security', { method: 'PATCH', body: patch })
     await refresh()
     saved.value = true
   }
   catch (err) {
-    await showSaveError(err, patch)
+    refused = { err }
   }
   finally {
     saving.value = false
   }
+  // After `saving`: the fields are disabled until then, and a disabled field
+  // can't take the focus.
+  if (refused)
+    await showSaveError(refused.err, patch)
 }
 
 function revert() {
   seed(security.value ?? null)
+  serverErrors.clear()
   form.value?.clear()
   saveError.value = null
   saved.value = false

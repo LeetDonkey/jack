@@ -89,7 +89,7 @@ const placeholder = computed(() =>
     :label="label"
     :description="description"
     :hint="hint"
-    :ui="{ hint: 'font-mono text-xs text-dimmed' }"
+    :ui="{ hint: 'shrink-0 font-mono text-xs whitespace-nowrap text-dimmed' }"
   >
     <div class="relative">
       <!-- Counts snap to whole numbers. Durations in a display unit take fractions

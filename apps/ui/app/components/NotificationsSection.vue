@@ -58,6 +58,7 @@ function blankState() {
 type State = ReturnType<typeof blankState>
 
 const state = reactive(blankState())
+const serverErrors = useServerFieldErrors(form, name => valueAtPath(state, name))
 const baseline = ref(JSON.stringify(blankState()))
 // One key per webhook row, outside `state` so it doesn't count as an edit.
 // SecretInput copies its value once, so rows keyed by index would show a removed
@@ -141,6 +142,7 @@ async function save() {
   saving.value = true
   saveError.value = null
   saved.value = false
+  serverErrors.clear()
   try {
     await request('config/notifications', {
       method: 'PATCH',
@@ -162,7 +164,7 @@ async function save() {
     const field = extractFieldError(err)
     const name = field && formField(field.name)
     if (field && name) {
-      form.value?.setErrors([{ name, message: field.message }], name)
+      serverErrors.show([{ name, message: field.message }])
       void onError()
     }
     else {
@@ -176,6 +178,7 @@ async function save() {
 
 function revert() {
   seed(notifications.value ?? null)
+  serverErrors.clear()
   form.value?.clear()
   saveError.value = null
   saved.value = false

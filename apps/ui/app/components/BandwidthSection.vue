@@ -52,6 +52,15 @@ function blankState() {
 type State = ReturnType<typeof blankState>
 
 const state = reactive(blankState())
+// A period's start and end share the field `schedule.<i>.time`.
+const PERIOD_TIME = /^(schedule\.\d+)\.time$/
+const serverErrors = useServerFieldErrors(form, (name) => {
+  const time = PERIOD_TIME.exec(name)
+  if (!time)
+    return valueAtPath(state, name)
+  const period = valueAtPath(state, time[1]!) as PeriodState | undefined
+  return [period?.start, period?.end]
+})
 const baseline = ref(JSON.stringify(blankState()))
 
 function seed(config: BandwidthConfig | null | undefined) {
@@ -149,6 +158,7 @@ async function save() {
   saving.value = true
   saveError.value = null
   saved.value = false
+  serverErrors.clear()
   // The form saves every field, so limits the user didn't touch go out as loaded.
   const loaded = bandwidth.value
   const patch: BandwidthConfigPatch = {
@@ -181,7 +191,7 @@ async function save() {
     const field = extractFieldError(err)
     const name = field && bandwidthFormField(field.name)
     if (field && name) {
-      form.value?.setErrors([{ name, message: field.message }], name)
+      serverErrors.show([{ name, message: field.message }])
       void onError()
     }
     else {
@@ -195,6 +205,7 @@ async function save() {
 
 function revert() {
   seed(bandwidth.value ?? null)
+  serverErrors.clear()
   form.value?.clear()
   saveError.value = null
   saved.value = false

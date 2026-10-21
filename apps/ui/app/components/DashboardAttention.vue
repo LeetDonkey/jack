@@ -71,7 +71,10 @@ const failed = computed(() => props.overview.downloads.failed)
 const failedCount = computed(() => props.overview.downloads.byStatus.failed ?? 0)
 function failureTitle(download: ActivityDownload): string | undefined {
   const plain = plainDownloadError(download)
-  return plain && download.error ? `${plain}\n${download.error}` : download.error ?? undefined
+  if (!plain)
+    return download.error ?? undefined
+  const detail = downloadErrorDetail(download)
+  return detail ? `${plain}\n${detail}` : plain
 }
 const queuedCount = computed(() => props.overview.downloads.byStatus.import_queued ?? 0)
 // The usual cause: the *arr sees jack's Completed folder under another path.
@@ -289,15 +292,17 @@ function plural(n: number, word: string) {
                   {{ plural(failedCount, 'download') }} failed
                 </p>
                 <!-- The failure in plain words where jack knows it; the hover shows
-                     the whole line and jack's own text. -->
+                     the whole line and jack's own text. On a phone the reason gets
+                     lines of its own, since a cut-off reason can't be hovered. -->
                 <p
                   v-for="d in failed.slice(0, PREVIEW)"
                   :key="d.id"
-                  class="mt-1 truncate text-xs text-muted"
+                  class="mt-1 text-xs text-muted sm:truncate"
                   :title="failureTitle(d)"
                 >
-                  <span class="text-toned">{{ d.filename }}</span>
-                  · {{ plainDownloadError(d) ?? d.error ?? 'unknown error' }}
+                  <span class="block truncate text-toned sm:inline">{{ d.filename }}</span>
+                  <span class="hidden sm:inline"> · </span>
+                  <span class="line-clamp-2 break-words sm:inline">{{ plainDownloadError(d) ?? d.error ?? 'unknown error' }}</span>
                 </p>
                 <p v-if="failedCount > PREVIEW" class="mt-1 text-xs text-dimmed">
                   and {{ failedCount - PREVIEW }} more

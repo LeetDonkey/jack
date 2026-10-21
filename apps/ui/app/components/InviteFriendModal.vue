@@ -28,6 +28,7 @@ const external = ref<ExternalJackConfig | null>(null)
 const addressForm = useTemplateRef<Form<FormSchema>>('addressForm')
 const { onError: onAddressError, showFixHint: showAddressFixHint } = useFormErrorFocus(addressForm)
 const address = reactive({ instanceName: '', url: '' })
+const addressServerErrors = useServerFieldErrors(addressForm, name => valueAtPath(address, name))
 const savingAddress = ref(false)
 const addressError = ref<string | null>(null)
 const addressGuide = docsUrl('unraid', '6-open-jack-to-your-friends')
@@ -59,6 +60,7 @@ async function saveAddress() {
     return
   savingAddress.value = true
   addressError.value = null
+  addressServerErrors.clear()
   // PATCH replaces the whole profile, so headers set under Settings are sent back.
   const body: ExternalJackConfig = { instanceName: address.instanceName.trim(), url: address.url.trim() }
   if (external.value?.headers && Object.keys(external.value.headers).length)
@@ -76,7 +78,7 @@ async function saveAddress() {
     const field = extractFieldError(err)
     const name = field?.name.split('.').pop()
     if (field && (name === 'url' || name === 'instanceName'))
-      addressForm.value?.setErrors([{ name, message: field.message }], name)
+      addressServerErrors.show([{ name, message: field.message }])
     else
       addressError.value = extractError(err, 'Could not save your address.')
   }
@@ -89,6 +91,7 @@ async function saveAddress() {
 const linkForm = useTemplateRef<Form<FormSchema>>('linkForm')
 const { onError, showFixHint } = useFormErrorFocus(linkForm)
 const state = reactive({ keyName: '', peerName: '', keyDescription: '' })
+const linkServerErrors = useServerFieldErrors(linkForm, name => valueAtPath(state, name))
 const editingPeerName = ref(false)
 const moreOpen = ref(false)
 const creating = ref(false)
@@ -168,6 +171,7 @@ async function create() {
     return
   creating.value = true
   createError.value = null
+  linkServerErrors.clear()
   try {
     const input: QuickLinkInput = {
       peerName: state.peerName.trim(),
@@ -189,7 +193,7 @@ async function create() {
   catch (err) {
     const field = extractFieldError(err)
     if (field?.name === 'keyName' || field?.name === 'peerName')
-      linkForm.value?.setErrors([field], field.name)
+      linkServerErrors.show([field])
     else
       createError.value = extractError(err, 'Could not create the invite link.')
   }

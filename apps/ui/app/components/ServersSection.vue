@@ -216,7 +216,8 @@ function registrationView(server: ServerItem) {
     parts: summary?.parts ?? null,
     // Radarr/Sonarr skip jack's indexer for now, after failures.
     pause: indexerPauseText(server, registration, now.value),
-    message: registration?.message ?? null,
+    // Register again is right above the message, so it leaves out where that is.
+    message: registration?.message ? withoutRegisterAgainHint(registration.message) : null,
     messageClass: summary && summary.tone !== 'ok' ? TONE_CLASS[summary.tone] : 'text-muted',
     fix: registration ? registrationFix(registration) : null,
     contact: arrContact(server, now.value),

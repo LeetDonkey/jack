@@ -456,7 +456,7 @@ const columns: TableColumn<ActivityDownload>[] = [
                   v-if="stateOf(row.original).note"
                   class="text-xs wrap-anywhere"
                   :class="NOTE_CLASS[stateOf(row.original).noteTone]"
-                  :title="row.original.error ?? undefined"
+                  :title="stateOf(row.original).detail ?? undefined"
                 >
                   {{ stateOf(row.original).note }}
                 </p>
@@ -541,14 +541,19 @@ const columns: TableColumn<ActivityDownload>[] = [
                   <span class="min-w-0 truncate">from {{ d.peerName }}</span>
                 </div>
                 <template v-if="stateOf(d).note">
-                  <p class="text-xs break-words" :class="NOTE_CLASS[stateOf(d).noteTone]" :title="d.error ?? undefined">
+                  <p class="text-xs break-words" :class="NOTE_CLASS[stateOf(d).noteTone]">
                     {{ stateOf(d).note }}
                   </p>
-                  <!-- jack's own error text, which the note puts in plain words. Phones
-                       have no hover for the tooltip, so it shows here. -->
-                  <p v-if="stateOf(d).detail" class="font-mono text-xs break-words text-dimmed">
-                    {{ stateOf(d).detail }}
-                  </p>
+                  <!-- jack's own error text behind the plain words, where it adds
+                       something: the table's tooltip, as a toggle for phones. -->
+                  <details v-if="stateOf(d).detail" class="text-xs text-dimmed">
+                    <summary class="w-fit cursor-pointer select-none">
+                      Details
+                    </summary>
+                    <p class="mt-0.5 font-mono break-words">
+                      {{ stateOf(d).detail }}
+                    </p>
+                  </details>
                 </template>
                 <p v-else-if="d.expectedBytesMismatch" class="text-xs text-warning">
                   size mismatch

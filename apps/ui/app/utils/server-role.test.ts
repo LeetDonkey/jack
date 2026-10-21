@@ -1,6 +1,6 @@
 import type { DestinationRegistration } from '~/types/management'
 import { describe, expect, test } from 'bun:test'
-import { ARR_CONTACT_GRACE_MS, arrContact, arrMedia, arrName, formatPauseEnd, formatTimeAgo, indexerPause, indexerPausedUntil, indexerPauseText, registersJack, registrationFix, registrationHeadline, registrationStepDetail, registrationStepTone, registrationSummary, serverRoleLabel, stepUnderHeadline } from './server-role'
+import { ARR_CONTACT_GRACE_MS, arrContact, arrMedia, arrName, formatPauseEnd, formatTimeAgo, indexerPause, indexerPausedUntil, indexerPauseText, registersJack, registrationFix, registrationHeadline, registrationStepDetail, registrationStepTone, registrationSummary, serverRoleLabel, stepUnderHeadline, withoutRegisterAgainHint } from './server-role'
 
 function registration(overrides: Partial<DestinationRegistration> = {}): DestinationRegistration {
   return {
@@ -366,5 +366,19 @@ describe('registrationHeadline', () => {
 describe('an indexer added but not tested', () => {
   test('reads as added, not as waiting for a restart', () => {
     expect(registrationSummary(registration({ indexerTest: 'skipped' }), NOW).parts[0]).toEqual({ text: 'indexer added', tone: 'ok' })
+  })
+})
+
+describe('withoutRegisterAgainHint', () => {
+  test('leaves out where Register again is, for the card that has the button', () => {
+    expect(withoutRegisterAgainHint('jack couldn\'t add its download client to Radarr 4K: Authentication Failure (Please verify your username and password.) jack left the indexer as it was. To try again, use Register again on Radarr 4K\'s card.'))
+      .toBe('jack couldn\'t add its download client to Radarr 4K: Authentication Failure (Please verify your username and password.) jack left the indexer as it was.')
+    expect(withoutRegisterAgainHint('Radarr has no Jack indexer anymore. To add it back, use Register again on Radarr\'s card.'))
+      .toBe('Radarr has no Jack indexer anymore.')
+  })
+
+  test('keeps a message without that sentence as it is', () => {
+    const message = 'jack couldn\'t reach Radarr. Check the address in Address Radarr/Sonarr use to reach jack.'
+    expect(withoutRegisterAgainHint(message)).toBe(message)
   })
 })

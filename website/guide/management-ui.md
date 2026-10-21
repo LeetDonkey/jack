@@ -155,8 +155,8 @@ Each row shows its status:
 - ***Cancelled***: you cancelled it. It doesn't count as failed.
 
 Common errors read in plain words, such as ***The connection to Alice
-dropped.*** jack's own error text shows when you hover the line, and under it
-on narrower screens.
+dropped.*** jack's own error text shows when you hover the line, and under
+***Details*** on narrower screens, unless it says the same as the plain words.
 
 While downloads are paused and the list shows a running or waiting download,
 the top of the page says until when, for example ***Downloads paused until
