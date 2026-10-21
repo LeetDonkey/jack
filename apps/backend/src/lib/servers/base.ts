@@ -27,6 +27,20 @@ export function generateId(url: string): string {
   return hash.slice(0, 8)
 }
 
+/**
+ * A URL path as people read it: "/peer/items/e861452b:movie:3/pieces" rather
+ * than "/peer/items/e861452b%3Amovie%3A3/pieces". For log messages only; the
+ * request and the `url` log field keep the encoded form.
+ */
+export function readablePath(pathname: string): string {
+  try {
+    return decodeURIComponent(pathname)
+  }
+  catch {
+    return pathname
+  }
+}
+
 function truncateBody(body: string) {
   if (body.length <= MAX_ERROR_BODY_BYTES)
     return body
@@ -187,7 +201,7 @@ export abstract class ServerConnector {
         setSpanAttribute(span, 'http.response.body', redactBody(body))
         const level = init.quiet || init.expectedFailure?.(response.status, body) ? 'debug' : 'warn'
         // Says who answered what, as in "Radarr answered 401 for /api/v3/indexer".
-        logger[level]({ connector: this.name, method, url: url.toString(), status: response.status, body: truncateBody(body) }, `${this.name} answered ${response.status} for ${url.pathname}`)
+        logger[level]({ connector: this.name, method, url: url.toString(), status: response.status, body: truncateBody(body) }, `${this.name} answered ${response.status} for ${readablePath(url.pathname)}`)
         throw new FetchError(`Failed to fetch url: ${response.statusText}`, response, { body, method: init.method, headers: initWithAuth.headers })
       }
 
@@ -215,7 +229,7 @@ export abstract class ServerConnector {
           'schema.validation.error': prettyError,
         })
         logger.warn({ connector: this.name, method, url: url.pathname, error: prettyError }, 'Response failed schema validation')
-        throw new FetchError(`Invalid response from ${this.name} when fetching ${init.method ?? 'GET'} ${url.pathname}: ${prettyError}`, response, { body: JSON.stringify(body), method: init.method })
+        throw new FetchError(`Invalid response from ${this.name} when fetching ${init.method ?? 'GET'} ${readablePath(url.pathname)}: ${prettyError}`, response, { body: JSON.stringify(body), method: init.method })
       }
 
       setSpanAttribute(span, 'schema.validation.success', true)

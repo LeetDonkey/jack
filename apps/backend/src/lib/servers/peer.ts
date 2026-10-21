@@ -48,8 +48,12 @@ export interface PeerDownloadOptions {
   onProgress?: (event: PeerDownloadProgressEvent) => void | Promise<void>
   /**
    * Called with the size of every chunk after it is written to the .part file.
-   * The read loop awaits it, so a rate limiter here paces the transfer (TCP
-   * backpressure slows the peer). It runs outside the idle timer.
+   * The read loop awaits it, outside the idle timer. A rate limiter here paces
+   * how fast jack reads the body, not the network: Bun's fetch keeps receiving
+   * and buffers what the reader hasn't taken (see DOWNLOAD_WINDOW_BYTES). A
+   * window, or a whole file no larger than one, can arrive at line speed, even
+   * as a single chunk; the limit then holds only as an average across windows,
+   * because the next Range request waits for this window to be read.
    */
   onChunk?: (bytes: number) => void | Promise<void>
   /** Size of each Range request for a file larger than this. Defaults to DOWNLOAD_WINDOW_BYTES. */
@@ -90,6 +94,21 @@ function parseContentRange(value: string | null): { start: number, end: number, 
   if (![start, end, total].every(Number.isSafeInteger))
     return null
   return { start, end, total }
+}
+
+/**
+ * Release a body reader, ignoring errors. Bun 1.3 throws "TypeError: undefined
+ * is not a function" from releaseLock() when the body finished arriving between
+ * the first read of `response.body` and getReader(): the stream then hands over
+ * the whole body as one chunk, and its source lacks the method releaseLock()
+ * calls. The body is read or cancelled by then, so nothing is lost. Let through,
+ * the error made a finished download look like a network failure and resume.
+ */
+function releaseReader(reader: ReadableStreamDefaultReader<Uint8Array>): void {
+  try {
+    reader.releaseLock()
+  }
+  catch {}
 }
 
 /**
@@ -564,7 +583,7 @@ export class PeerConnector extends ServerConnector {
           }
           if (done && windowed && ranged && downloadedBytes < expectedBytes) {
             // This window is written; ask for the next one.
-            reader.releaseLock()
+            releaseReader(reader)
             const next = await doFetch(downloadedBytes)
             const cr = parseContentRange(next.headers.get('Content-Range'))
             if (next.status !== 206 || !next.body || cr == null || cr.start !== downloadedBytes || cr.total !== expectedBytes) {
@@ -608,7 +627,7 @@ export class PeerConnector extends ServerConnector {
         // IncompleteDownloadError path (which is the one that gets retried).
         if (downloadedBytes !== expectedBytes)
           throw new IncompleteDownloadError(`Incomplete file download: got ${downloadedBytes} bytes, expected ${expectedBytes}`)
-        reader.releaseLock()
+        releaseReader(reader)
 
         signal.throwIfAborted()
         await options.beforeFinalize?.()
@@ -628,10 +647,7 @@ export class PeerConnector extends ServerConnector {
         // Cancel the reader so the remote stream is torn down (not left to GC),
         // then release. Leave the .part in place so the next attempt resumes.
         await reader.cancel().catch(() => {})
-        try {
-          reader.releaseLock()
-        }
-        catch {}
+        releaseReader(reader)
         if (isIdleAbort())
           throw idleTimeout()
         throw err

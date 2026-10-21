@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { openDatabase } from '../database/connection'
 import { FetchError } from '../lib/errors/FetchError'
+import { logger } from '../logger'
 import { DownloadOperationCoordinator } from '../modules/downloads/download-operation-coordinator'
 import { DownloadsRepository } from '../modules/downloads/downloads.repository'
 import { DownloadsService } from '../modules/downloads/downloads.service'
@@ -497,6 +498,38 @@ describe('DownloadsService download progress persistence', () => {
     expect(calls).toBe(6)
     expect(repository.list()[0]?.status).toBe('import_queued')
     handle.close()
+  })
+
+  test('an interruption after progress logs the stack of what threw', async () => {
+    const handle = await openDatabase({ appConfigPath: join(tempDir, 'config.jsonc') })
+    const repository = new DownloadsRepository(handle.db)
+    const warn = spyOn(logger, 'warn')
+    const thrown = new TypeError('undefined is not a function')
+    let calls = 0
+    const peer = fakePeer({
+      downloadFile: async (_itemId: string, _destPath: string, options: any) => {
+        calls++
+        if (calls === 1) {
+          await Bun.write(options.partPath, new Uint8Array(4))
+          throw thrown
+        }
+        await options.onProgress({ type: 'completed', downloadedBytes: 10, expectedBytes: 10 })
+      },
+    })
+    const service = new DownloadsService(downloadsConfig(), { peers: [peer as any] }, repository)
+
+    try {
+      await service.startQbDownload({ peerId: 'peer-1', itemId: 'movie:1', qbCategory: 'jack-x', qbSourceServer: 'My Radarr', sourceServerId: 'radarr-1' })
+      await waitForStatus(repository, 'import_queued')
+
+      const resumed = warn.mock.calls.find(([, message]) => message === 'Peer download interrupted after progress; resuming')
+      expect(resumed?.[0]).toMatchObject({ error: 'undefined is not a function', stack: thrown.stack })
+      expect(repository.list()[0]?.status).toBe('import_queued')
+    }
+    finally {
+      warn.mockRestore()
+      handle.close()
+    }
   })
 
   test('interruptions without progress still exhaust retry attempts', async () => {

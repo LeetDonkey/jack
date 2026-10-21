@@ -622,7 +622,10 @@ export class DownloadsService {
                 throw err
               lastProgressAt = this.now()
               const message = err instanceof Error ? err.message : String(err)
-              logger.warn({ torrentFilename: record.torrentFilename, error: message }, 'Peer download interrupted after progress; resuming')
+              // The stack names the thrower when the message alone doesn't, as with
+              // a bare TypeError, which counts as transient.
+              const stack = err instanceof Error ? err.stack : undefined
+              logger.warn({ torrentFilename: record.torrentFilename, error: message, stack }, 'Peer download interrupted after progress; resuming')
             }
             finally {
               transfer?.end()

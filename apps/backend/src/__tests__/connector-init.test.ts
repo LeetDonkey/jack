@@ -2,6 +2,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from 'b
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import { RadarrServerConnector } from '../lib/servers/arr/radarr'
+import { readablePath } from '../lib/servers/base'
+import { PeerConnector } from '../lib/servers/peer'
 import { logger } from '../logger'
 import { PeerController } from '../modules/peer/peer.controller'
 import { keepInSupportLog } from '../modules/support/support-bundle'
@@ -254,5 +256,41 @@ describe('fetch timeout', () => {
     await expect(call).rejects.toThrow()
     // It must give up around the timeout, well before the 2s the server waits.
     expect(Date.now() - start).toBeLessThan(1000)
+  })
+})
+
+describe('failure log line', () => {
+  test('shows the path decoded and leaves the request encoded', async () => {
+    let requestedPath: string | undefined
+    server.use(
+      http.get('http://bob.test/peer/items/:itemId/pieces', ({ request }) => {
+        requestedPath = new URL(request.url).pathname
+        return HttpResponse.json({ error: 'File not found' }, { status: 404 })
+      }),
+    )
+    const bob = new PeerConnector({ url: 'http://bob.test', apiKey: 'peer-api-key', name: 'Bob' })
+    const warn = spyOn(logger, 'warn')
+    try {
+      // Skip the handshake: getPieces waits for an initialized connector.
+      const c = bob as any
+      c._isInitialized = true
+      c._initState = 'initialized'
+      c._initialization.resolve()
+
+      expect(await bob.getPieces('e861452b:movie:3')).toBeNull()
+
+      expect(requestedPath).toBe('/peer/items/e861452b%3Amovie%3A3/pieces')
+      const answered = warn.mock.calls.find(([, message]) => String(message).startsWith('Bob answered 404'))
+      expect(answered?.[1]).toBe('Bob answered 404 for /peer/items/e861452b:movie:3/pieces')
+      expect(answered?.[0]).toMatchObject({ url: 'http://bob.test/peer/items/e861452b%3Amovie%3A3/pieces' })
+    }
+    finally {
+      warn.mockRestore()
+    }
+  })
+
+  test('readablePath keeps a path it cannot decode', () => {
+    expect(readablePath('/api/v3/movie/%E0%A4%A')).toBe('/api/v3/movie/%E0%A4%A')
+    expect(readablePath('/peer/items/a%2Fb')).toBe('/peer/items/a/b')
   })
 })
