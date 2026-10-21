@@ -2,7 +2,7 @@ import type { ApiKey, DownloadsConfig, JackConfig, Overview, RestartReason, Serv
 import type { InternalUrlStep, ServerStep, SetupStepState } from '~/utils/setup-steps'
 import { folderSummary } from '~/utils/folder-check'
 import { addressFailures, serverStepWithAddressFailures, withAddressFailures } from '~/utils/setup-address'
-import { isSetupStepDone, setupDownloadsStep, setupInternalUrlStep, setupServerStep, shareOnlyOfferStep } from '~/utils/setup-steps'
+import { isSetupStepDone, setupDownloadsStep, setupInternalUrlStep, setupRestartStep, setupServerStep, shareOnlyOfferStep } from '~/utils/setup-steps'
 
 /**
  * State of the dashboard's setup checklist, decided only from data jack serves
@@ -139,8 +139,9 @@ export function useSetupStatus(overview: Readonly<Ref<Overview | undefined>>) {
 
   // Settings saved since jack started that wait for a restart of the jack container.
   const restartReasons = computed<RestartReason[]>(() => overview.value?.system?.restartPending ?? [])
-  // Shown only while something waits for the restart, so it is never done.
-  const restartStep = computed<SetupStepState | null>(() => restartReasons.value.length ? 'open' : null)
+  // Shown only while turning on downloads or a new completed folder waits for the
+  // restart, so it is never done. Other settings are left to the banner.
+  const restartStep = computed<SetupStepState | null>(() => setupRestartStep(restartReasons.value))
 
   const setupStates = computed(() => [internalUrlStep.value.state, downloadsStep.value, serversStep.value.state])
   const requiredStates = computed(() => restartStep.value ? [...setupStates.value, restartStep.value] : setupStates.value)
@@ -160,13 +161,14 @@ export function useSetupStatus(overview: Readonly<Ref<Overview | undefined>>) {
   // Every step done and no known problem: the card says "jack is set up".
   const setupComplete = computed(() => requiredComplete.value && !folderFailed.value)
 
-  // The dashboard shows its green all-clear only for `done`.
+  // The dashboard shows its green all-clear only for `done`. Any setting that waits
+  // for a restart holds it back, also one that has no step on the card.
   const requiredState = computed<SetupRequiredState>(() => {
     if (!ready.value)
       return 'unknown'
     if (setupStates.value.some(s => s === 'open' || s === 'check') || folderFailed.value)
       return 'open'
-    if (restartStep.value)
+    if (restartReasons.value.length)
       return 'restart'
     return requiredComplete.value ? 'done' : 'pending'
   })

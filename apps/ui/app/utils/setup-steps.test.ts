@@ -1,6 +1,6 @@
 import type { DestinationRegistration, OverviewServerItem } from '~/types/management'
 import { describe, expect, test } from 'bun:test'
-import { sameInternalUrl, setupDownloadsStep, setupInternalUrlStep, setupServerStep, shareOnlyOfferStep } from './setup-steps'
+import { sameInternalUrl, setupDownloadsStep, setupInternalUrlStep, setupRestartStep, setupServerStep, shareOnlyOfferStep } from './setup-steps'
 
 function registration(overrides: Partial<DestinationRegistration> = {}): DestinationRegistration {
   return {
@@ -159,6 +159,19 @@ describe('setupServerStep', () => {
     expect(setupServerStep({ ...base, shareOnly: true, servers: [sharer] })).toMatchObject({ state: 'done', names: ['Radarr'] })
     expect(setupServerStep({ ...base, shareOnly: true, servers: [server({ source: false, destination: false, registration: null })] }))
       .toMatchObject({ state: 'open', reason: 'no-source' })
+  })
+})
+
+describe('setupRestartStep', () => {
+  test('open while turning on downloads or a new completed folder waits for the restart', () => {
+    expect(setupRestartStep(['downloads'])).toBe('open')
+    expect(setupRestartStep(['downloads.completedPath', 'downloads.retries'])).toBe('open')
+  })
+
+  test('hidden for other settings, which the banner names', () => {
+    expect(setupRestartStep([])).toBeNull()
+    expect(setupRestartStep(['downloads.retries'])).toBeNull()
+    expect(setupRestartStep(['downloads.import', 'jack.tmdbApiKey', 'jack.apiKey'])).toBeNull()
   })
 })
 

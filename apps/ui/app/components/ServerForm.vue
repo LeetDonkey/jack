@@ -14,6 +14,8 @@ const editing = computed(() => Boolean(props.initial))
 
 const form = useTemplateRef<Form<FormSchema>>('form')
 const { onError, showFixHint } = useFormErrorFocus(form)
+const headersEditor = useTemplateRef<{ errors: FormError[] }>('headersEditor')
+const headerErrors = computed(() => headersEditor.value?.errors ?? [])
 
 // `null` means the config has no downloads block, so jack adds nothing to
 // Radarr/Sonarr until downloads are turned on.
@@ -51,7 +53,9 @@ const state = reactive({
 
 // The form as it opened; any difference counts as an edit.
 const baseline = JSON.stringify(state)
-const dirty = computed(() => JSON.stringify(state) !== baseline)
+// A header row with only a name or only a value isn't in `state`, but it is an
+// edit too.
+const dirty = computed(() => JSON.stringify(state) !== baseline || headerErrors.value.length > 0)
 watch(dirty, isDirty => emit('dirty', isDirty), { immediate: true })
 
 // Copy names the type picked above ("this Radarr"), not a generic *arr.
@@ -100,8 +104,18 @@ function validate(s: typeof state): FormError[] {
     errors.push({ name: 'autoPriority', message: 'Pick a priority from 1 to 50.' })
   if (s.destination && s.upgradeMode === 'capped' && !(s.upgradeMaxGiB != null && s.upgradeMaxGiB > 0))
     errors.push({ name: 'upgradeMaxGiB', message: 'Enter the largest upgrade to fetch, in GB.' })
+  // A header row with only a name or only a value waits for the rest, or to be removed.
+  errors.push(...headerErrors.value)
   return errors
 }
+
+// A header row's error goes as soon as the row is complete or removed.
+const HEADER_ROW = /^headers\.\d+(?:\.name)?$/
+watch(headerErrors, (current) => {
+  const shown = form.value?.getErrors(HEADER_ROW) ?? []
+  if (shown.length)
+    form.value?.setErrors(current.filter(e => shown.some(s => s.name === e.name)), HEADER_ROW)
+})
 
 function onSubmit() {
   const input: ServerInput = {
@@ -213,7 +227,7 @@ function onSubmit() {
     </template>
 
     <UFormField label="Headers" hint="Optional">
-      <HeadersEditor v-model="state.headers" />
+      <HeadersEditor ref="headersEditor" v-model="state.headers" />
     </UFormField>
 
     <UAlert v-if="error" color="error" variant="soft" icon="i-ph-warning" :title="error" />

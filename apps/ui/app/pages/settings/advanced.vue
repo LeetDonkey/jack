@@ -13,7 +13,7 @@
     <SettingsSection
       id="about"
       title="About"
-      description="Which build of jack this is, and the data it relies on."
+      description="Which build of jack this is, and info to send when you ask for help."
     >
       <AboutCard />
     </SettingsSection>

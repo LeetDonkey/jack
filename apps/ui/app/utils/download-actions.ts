@@ -42,6 +42,76 @@ export function retryReason(download: DownloadRow): string | null {
   return reason || null
 }
 
+/**
+ * A running download that waits: for a free slot (or for downloads to be
+ * resumed), or for its next attempt after a failed one.
+ */
+export function isWaitingDownload(download: DownloadRow): boolean {
+  return download.status === 'downloading' && (download.phase === 'queued' || isRetryWait(download))
+}
+
+/**
+ * Whether Retry now can start a row waiting to retry early. Not while downloads
+ * are paused: the attempt would only wait for the resume.
+ */
+export function canRetryNow(download: DownloadRow, { downloadsPaused = false } = {}): boolean {
+  return !downloadsPaused && isRetryWait(download)
+}
+
+/**
+ * Why a Retry now failed, from the answer's status and jack's error code:
+ * - `stale`: the row stopped waiting (409), or jack no longer has it (jack's own
+ *   404, code `NOT_FOUND`).
+ * - `unsupported`: a 404 without jack's error code. The route is missing, so
+ *   jack is older than jack-ui (the two containers update one at a time).
+ * - `error`: any other failure.
+ */
+export type RetryNowFailure = 'stale' | 'unsupported' | 'error'
+
+export function retryNowFailure(answer: { status: number | undefined, code: string | null }): RetryNowFailure {
+  if (answer.status === 409)
+    return 'stale'
+  if (answer.status === 404)
+    return answer.code === 'NOT_FOUND' ? 'stale' : 'unsupported'
+  return 'error'
+}
+
+// Failures jack knows, in plain words. A row carries jack's error text and no
+// code, so these match that text: Bun's and the system's messages and codes,
+// and jack's own errors. `friend` is the friend the file comes from.
+const PLAIN_FAILURES: ReadonlyArray<{ match: RegExp, text: (friend: string) => string }> = [
+  { match: /ENOSPC|no space left/i, text: () => 'The disk where jack saves downloads is full. Free up space, then retry.' },
+  { match: /can't find this file on disk|: Not Found$/i, text: friend => `${friend} can't find this file right now. Their Radarr/Sonarr may be moving or upgrading it, or a folder is missing in their jack.` },
+  // A friend's jack answers 503 while its upload slots are full or sharing is
+  // paused, and 429 once its daily limit for you is used up. jack keeps only
+  // the status text.
+  { match: /: (?:503 )?Service Unavailable$/i, text: friend => `${friend}'s jack is busy or has paused sharing.` },
+  { match: /: (?:429 )?Too Many Requests$/i, text: friend => `You've downloaded as much from ${friend} today as they allow.` },
+  { match: /ECONNRESET|socket connection was closed|ConnectionClosed|EPIPE/i, text: friend => `The connection to ${friend} dropped.` },
+  { match: /stalled: no data received/i, text: friend => `No data came from ${friend} for a while.` },
+  { match: /timed out|TimeoutError|ETIMEDOUT/i, text: friend => `${friend}'s jack took too long to answer.` },
+  { match: /ECONNREFUSED|ConnectionRefused|Unable to connect|FailedToOpenSocket|typo in the url or port|EHOSTUNREACH|ENETUNREACH|EHOSTDOWN|ENOTFOUND|EAI_AGAIN|DNSException/i, text: friend => `Can't reach ${friend}'s jack.` },
+  { match: /The value of "length" is out of range/, text: () => 'jack ran into an internal error with this file. Retry continues from the partial file.' },
+]
+
+/**
+ * A transfer failure in plain words, or null when jack's text is not one of the
+ * known ones (show it as it is then). Import failures come from Radarr/Sonarr
+ * and keep their own text.
+ */
+export function plainDownloadError(download: Pick<DownloadItem, 'error' | 'peerName' | 'lastOperation'>): string | null {
+  if (!download.error || download.lastOperation !== 'transfer')
+    return null
+  const reason = download.error.replace(RETRY_WAIT, '')
+  const known = PLAIN_FAILURES.find(failure => failure.match.test(reason))
+  return known ? known.text(download.peerName || 'your friend') : null
+}
+
+const SENTENCE_END = /[.!?]$/
+function asSentence(text: string): string {
+  return SENTENCE_END.test(text) ? text : `${text}.`
+}
+
 export type DownloadTone = 'primary' | 'neutral' | 'warning' | 'success' | 'error'
 
 export interface DownloadState {
@@ -50,48 +120,57 @@ export interface DownloadState {
   // A line under the file name: what went wrong, or what the row waits for.
   note: string | null
   noteTone: 'error' | 'warning' | 'muted'
+  // jack's own error text when the note puts it in plain words: for a tooltip,
+  // and shown on phones, where there is no hover.
+  detail: string | null
 }
 
 /**
  * What a download row is doing, in words. Waiting rows (for a slot, for a retry)
  * look different from transferring ones, and a cancel is not a failure.
- * `downloadsPaused` comes from Live traffic; queued rows wait for the resume then.
+ * `downloadsPaused` comes from Live traffic; waiting rows wait for the resume then.
  */
 export function downloadState(download: DownloadRow, { downloadsPaused = false } = {}): DownloadState {
+  const plain = plainDownloadError(download)
+  const detail = plain ? retryReason(download) : null
   switch (download.status) {
     case 'downloading': {
       if (isRetryWait(download)) {
-        const at = formatClockTime(download.retryAt) || RETRY_WAIT.exec(download.error ?? '')?.[1] || ''
         const reason = retryReason(download)
-        return {
-          label: at ? `Retrying at ${at}` : 'Retrying soon',
-          color: 'warning',
-          note: reason ? `Attempt ${download.attempts} failed: ${reason}` : null,
-          noteTone: 'muted',
+        let failure: string | null = null
+        if (plain)
+          failure = `Attempt ${download.attempts} failed. ${plain}`
+        else if (reason)
+          failure = `Attempt ${download.attempts} failed: ${reason}`
+        if (downloadsPaused) {
+          const waits = 'Downloads are paused. This one retries after you resume them.'
+          return { label: 'Paused', color: 'neutral', note: failure ? `${waits} ${asSentence(failure)}` : waits, noteTone: 'muted', detail }
         }
+        const at = formatClockTime(download.retryAt) || RETRY_WAIT.exec(download.error ?? '')?.[1] || ''
+        return { label: at ? `Retrying at ${at}` : 'Retrying soon', color: 'warning', note: failure, noteTone: 'muted', detail }
       }
       if (download.phase === 'queued') {
         return downloadsPaused
-          ? { label: 'Paused', color: 'neutral', note: 'Downloads are paused. This one starts when you resume them.', noteTone: 'muted' }
-          : { label: 'Waiting for a free slot', color: 'neutral', note: null, noteTone: 'muted' }
+          ? { label: 'Paused', color: 'neutral', note: 'Downloads are paused. This one starts when you resume them.', noteTone: 'muted', detail: null }
+          : { label: 'Waiting for a free slot', color: 'neutral', note: null, noteTone: 'muted', detail: null }
       }
-      return { label: 'Downloading', color: 'primary', note: download.error, noteTone: 'warning' }
+      return { label: 'Downloading', color: 'primary', note: plain ?? download.error, noteTone: 'warning', detail }
     }
     case 'import_queued':
-      return { label: 'Import queued', color: 'warning', note: download.error, noteTone: 'warning' }
+      return { label: 'Import queued', color: 'warning', note: download.error, noteTone: 'warning', detail: null }
     case 'imported':
-      return { label: 'Imported', color: 'success', note: null, noteTone: 'muted' }
+      return { label: 'Imported', color: 'success', note: null, noteTone: 'muted', detail: null }
     case 'failed':
       if (isCancelledDownload(download))
-        return { label: 'Cancelled', color: 'neutral', note: 'You cancelled it. Retry continues from the partial file.', noteTone: 'muted' }
-      return { label: 'Failed', color: 'error', note: download.error ?? 'Unknown error', noteTone: 'error' }
+        return { label: 'Cancelled', color: 'neutral', note: 'You cancelled it. Retry continues from the partial file.', noteTone: 'muted', detail: null }
+      return { label: 'Failed', color: 'error', note: plain ?? download.error ?? 'Unknown error', noteTone: 'error', detail }
     default:
-      return { label: String(download.status), color: 'neutral', note: download.error, noteTone: 'muted' }
+      return { label: String(download.status), color: 'neutral', note: download.error, noteTone: 'muted', detail: null }
   }
 }
 
 /** The filter chips on the Downloads page, in order. `active` is the default. */
-export const DOWNLOAD_FILTERS = ['active', 'downloading', 'import_queued', 'failed', 'cancelled', 'imported', 'all'] as const
+export const DOWNLOAD_FILTERS = ['active', 'downloading', 'waiting', 'import_queued', 'failed', 'cancelled', 'imported', 'all'] as const
 export type DownloadFilter = typeof DOWNLOAD_FILTERS[number]
 
 /** A filter from the address bar (`/downloads?status=failed`), or null when it names none. */
@@ -107,6 +186,12 @@ export function matchesDownloadFilter(download: DownloadRow, filter: DownloadFil
     case 'active':
       return download.status === 'downloading' || download.status === 'import_queued'
         || (download.status === 'failed' && !isCancelledDownload(download))
+    // The Dashboard's split: Waiting is a running download without a slot, or one
+    // waiting to retry; Downloading is the rest of the running ones.
+    case 'downloading':
+      return download.status === 'downloading' && !isWaitingDownload(download)
+    case 'waiting':
+      return isWaitingDownload(download)
     case 'failed':
       return download.status === 'failed' && !isCancelledDownload(download)
     case 'cancelled':

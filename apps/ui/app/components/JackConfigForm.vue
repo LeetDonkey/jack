@@ -44,6 +44,17 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(hostname) && !hostname.sta
   ? `http://${hostname}:5225`
   : null
 const isDefaultUrl = computed(() => isDefaultInternalUrl(state.internalUrl))
+
+// Only a Radarr/Sonarr that receives downloads uses this address, and jack adds
+// itself to one only while downloads are on. With downloads off and none that
+// receives, the default does no harm yet, so the note stays muted. Anything not
+// loaded yet counts as using it.
+const { data: downloadsConfig } = useDownloadsConfig()
+const { settings } = useSettings()
+const addressUnused = computed(() => downloadsConfig.value === null
+  && settings.value != null
+  && !settings.value.servers.some(server => server.destination))
+
 function applySuggestedUrl() {
   if (suggestedUrl)
     state.internalUrl = suggestedUrl
@@ -86,7 +97,11 @@ function onSubmit() {
       <UInput v-model="state.internalUrl" :disabled="submitting" placeholder="http://192.168.1.10:5225" class="w-full" />
       <template v-if="isDefaultUrl" #help>
         <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <span class="flex items-center gap-1.5 text-warning">
+          <span v-if="addressUnused" class="flex items-center gap-1.5 text-muted">
+            <UIcon name="i-ph-info" class="size-4 shrink-0" />
+            Still the default. Nothing uses it while downloads are off.
+          </span>
+          <span v-else class="flex items-center gap-1.5 text-warning">
             <UIcon name="i-ph-warning" class="size-4 shrink-0" />
             Still the default. Change it unless Radarr and Sonarr are on the jack Docker network.
           </span>
@@ -94,7 +109,7 @@ function onSubmit() {
             v-if="suggestedUrl"
             :label="`Use ${suggestedUrl} (if you kept port 5225)`"
             size="xs"
-            color="warning"
+            :color="addressUnused ? 'neutral' : 'warning'"
             variant="soft"
             :disabled="submitting"
             :ui="{ base: 'max-w-full', label: 'whitespace-normal text-left' }"

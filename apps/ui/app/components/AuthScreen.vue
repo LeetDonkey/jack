@@ -65,10 +65,23 @@ function scheduleRetry() {
   }, AUTH_CHECK_EVERY_MS)
 }
 watch(retriesByItself, scheduleRetry)
-onMounted(scheduleRetry)
+
+// The first check gets a moment before "Connecting to jack…" shows, so a page that
+// opens at once doesn't flash the card (authScreenShows).
+const waited = ref(false)
+const shows = computed(() => authScreenShows(state.value, waited.value))
+let connectingTimer: ReturnType<typeof setTimeout> | undefined
+
+onMounted(() => {
+  scheduleRetry()
+  connectingTimer = setTimeout(() => {
+    waited.value = true
+  }, AUTH_CONNECTING_AFTER_MS)
+})
 onBeforeUnmount(() => {
   unmounted = true
   clearTimeout(retryTimer)
+  clearTimeout(connectingTimer)
 })
 
 function actions(color: 'warning' | 'error'): ButtonProps[] {
@@ -123,7 +136,7 @@ const unreachable = computed<{ lead: string, suffix?: string, checks: string[] }
 </script>
 
 <template>
-  <div class="flex min-h-screen items-center justify-center p-4">
+  <div v-if="shows" class="flex min-h-screen items-center justify-center p-4">
     <div class="w-full max-w-md space-y-6">
       <div class="flex flex-col items-center gap-2 text-center">
         <UIcon name="i-ph-plugs-connected" class="size-9 text-primary" />

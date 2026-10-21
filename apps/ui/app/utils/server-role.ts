@@ -190,11 +190,30 @@ export function registrationStepDetail(kind: RegistrationKind, step: Registratio
 }
 
 /**
+ * A step as a row under the result's headline shows it: the backend's message about
+ * a failed step quotes the error, so the row then leaves it out and the *arr's text
+ * shows once.
+ */
+export function stepUnderHeadline(step: RegistrationStep, headline: string): RegistrationStep {
+  const error = step.error?.trim()
+  if (step.status !== 'failed' || !error || !headline.includes(error))
+    return step
+  const { error: _quoted, ...rest } = step
+  return rest
+}
+
+// The backend ends a message with where Register again is ("To try again, use
+// Register again on Radarr's card."), for the result dialog after a save.
+const REGISTER_AGAIN_HINT = /\s*\bTo [^.!?]+, use Register again on [^.!?]+'s card\.$/
+
+/**
  * The headline of a registration, as the result after a save and the toast after
  * Register again word it: set up, the *arr skipping jack's indexer for now, or the
- * backend's message about what failed or still needs doing.
+ * backend's message about what failed or still needs doing. `hint` is the
+ * message's closing sentence about Register again, split off: the dialog after a
+ * save shows it, the toast right after a press of Register again doesn't.
  */
-export function registrationHeadline(registration: DestinationRegistration, server: { name: string, type: string }, now = Date.now()): { tone: RegistrationTone, title: string, description?: string } {
+export function registrationHeadline(registration: DestinationRegistration, server: { name: string, type: string }, now = Date.now()): { tone: RegistrationTone, title: string, description?: string, hint?: string } {
   const { name } = server
   const { tone } = registrationSummary(registration, now)
   const pause = indexerPauseText(server, registration, now)
@@ -204,11 +223,12 @@ export function registrationHeadline(registration: DestinationRegistration, serv
   }
   if (pause && !registration.message && tone === 'warning')
     return { tone, title: pause.title, description: pause.detail }
-  return {
-    tone,
-    title: registration.message ?? `jack couldn't finish setting itself up in ${name}.`,
-    description: pause ? `${pause.title} ${pause.detail}` : undefined,
-  }
+  const message = registration.message ?? `jack couldn't finish setting itself up in ${name}.`
+  const description = pause ? `${pause.title} ${pause.detail}` : undefined
+  const hintAt = message.search(REGISTER_AGAIN_HINT)
+  if (hintAt <= 0)
+    return { tone, title: message, description }
+  return { tone, title: message.slice(0, hintAt), description, hint: message.slice(hintAt).trim() }
 }
 
 // The backend's messages name the setting to change ("…in Address Radarr/Sonarr use

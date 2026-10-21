@@ -1,6 +1,6 @@
 import type { AuthState } from '~/composables/useAuth'
 import { describe, expect, test } from 'bun:test'
-import { authScreenChecksAgain } from './auth-screen'
+import { authScreenChecksAgain, authScreenShows } from './auth-screen'
 
 describe('authScreenChecksAgain', () => {
   test('the screens a restart clears up check again', () => {
@@ -29,5 +29,22 @@ describe('authScreenChecksAgain', () => {
   test('nothing to check while loading or signed in', () => {
     expect(authScreenChecksAgain({ status: 'loading', mode: null })).toBe(false)
     expect(authScreenChecksAgain({ status: 'ok', mode: 'env' })).toBe(false)
+  })
+})
+
+describe('authScreenShows', () => {
+  test('the first check shows "Connecting to jack…" only once it has taken a while', () => {
+    expect(authScreenShows({ status: 'loading', mode: null }, false)).toBe(false)
+    expect(authScreenShows({ status: 'loading', mode: null }, true)).toBe(true)
+  })
+
+  test('an answer shows at once', () => {
+    const states: AuthState[] = [
+      { status: 'disabled', mode: 'env', reason: 'timeout', url: 'http://jack:5226' },
+      { status: 'needs-key', mode: 'cookie' },
+      { status: 'error', mode: null, message: 'Could not reach the UI server.' },
+    ]
+    for (const state of states)
+      expect(authScreenShows(state, false)).toBe(true)
   })
 })

@@ -1,5 +1,6 @@
 import type { SystemNotice } from '~/types/management'
 import { describe, expect, test } from 'bun:test'
+import { opensExceptions } from './security-form'
 import { changedSettingLine, noticesToShow } from './upgrade-notice'
 
 describe('changedSettingLine', () => {
@@ -14,10 +15,14 @@ describe('changedSettingLine', () => {
       detail: 'Your LAN is never banned.',
       to: '/settings/sharing#security-bans',
     })
-    expect(changedSettingLine({ setting: 'security.lanOnlyArrApis', now: true })).toMatchObject({
+    // Lands on the field that lets a Radarr/Sonarr outside the LAN in, which the
+    // Security section opens for this link.
+    expect(changedSettingLine({ setting: 'security.lanOnlyArrApis', now: true })).toEqual({
       text: 'The Radarr/Sonarr APIs now only answer your LAN.',
-      to: '/settings/sharing#security-apis',
+      detail: 'If your Radarr or Sonarr reaches jack over Tailscale or from a VPS, add its address under Settings -> Sharing -> Security -> Reverse proxy and exceptions -> Radarr/Sonarr outside your LAN.',
+      to: '/settings/sharing#security-arr-outside-lan',
     })
+    expect(opensExceptions(new URL(changedSettingLine({ setting: 'security.lanOnlyArrApis', now: true }).to, 'http://x').hash)).toBe(true)
     expect(changedSettingLine({ setting: 'security.publicOpenApi', now: false })).toEqual({
       text: 'The public API description (/openapi.json) is no longer served.',
       detail: null,
@@ -28,7 +33,7 @@ describe('changedSettingLine', () => {
   test('reads the other way round too', () => {
     expect(changedSettingLine({ setting: 'discovery.introduce', now: true }).text).toBe('Introducing your friends to each other is now on.')
     expect(changedSettingLine({ setting: 'security.banEnabled', now: false }).text).toBe('Addresses that keep failing a key are no longer banned.')
-    expect(changedSettingLine({ setting: 'security.lanOnlyArrApis', now: false }).detail).toBeNull()
+    expect(changedSettingLine({ setting: 'security.lanOnlyArrApis', now: false })).toMatchObject({ detail: null, to: '/settings/sharing#security-apis' })
   })
 
   test('shows a setting from a newer jack as jack names it', () => {

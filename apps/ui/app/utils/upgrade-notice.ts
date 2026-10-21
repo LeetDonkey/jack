@@ -1,4 +1,5 @@
 import type { SystemNotice } from '~/types/management'
+import { securityLink } from './security-form'
 import { settingsLink } from './settings-links'
 
 // The notice an update leaves for installs that existed before it
@@ -9,14 +10,9 @@ export interface ChangedSettingLine {
   text: string
   /** What it means for the user, or null. */
   detail: string | null
-  /** The switch in Settings. */
+  /** Where to change it in Settings: the switch, or the field `detail` names. */
   to: string
 }
-
-// The Security section's cards carry these ids (SecuritySection.vue).
-const SHARING_PATH = settingsLink('security').split('#')[0]
-const BANS = `${SHARING_PATH}#security-bans`
-const APIS = `${SHARING_PATH}#security-apis`
 
 /** One changed setting in words. A setting this UI doesn't know yet (a newer jack) shows as jack names it. */
 export function changedSettingLine(change: { setting: string, now: boolean }): ChangedSettingLine {
@@ -32,19 +28,20 @@ export function changedSettingLine(change: { setting: string, now: boolean }): C
       return {
         text: now ? 'Addresses that keep failing a key are now banned for a while.' : 'Addresses that keep failing a key are no longer banned.',
         detail: now ? 'Your LAN is never banned.' : null,
-        to: BANS,
+        to: securityLink('bans'),
       }
     case 'security.lanOnlyArrApis':
       return {
         text: now ? 'The Radarr/Sonarr APIs now only answer your LAN.' : 'The Radarr/Sonarr APIs now answer every address.',
-        detail: now ? 'If your Radarr or Sonarr reaches jack over Tailscale or from a VPS, add its address under Also allow.' : null,
-        to: APIS,
+        detail: now ? 'If your Radarr or Sonarr reaches jack over Tailscale or from a VPS, add its address under Settings -> Sharing -> Security -> Reverse proxy and exceptions -> Radarr/Sonarr outside your LAN.' : null,
+        // The link opens the folded group at that field. The switch is in the card above it.
+        to: now ? securityLink('arrOutsideLan') : securityLink('apis'),
       }
     case 'security.publicOpenApi':
       return {
         text: now ? 'The public API description (/openapi.json) is now served.' : 'The public API description (/openapi.json) is no longer served.',
         detail: null,
-        to: APIS,
+        to: securityLink('apis'),
       }
     default:
       return {

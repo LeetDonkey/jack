@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import type { Form, FormError, FormSchema } from '@nuxt/ui'
+import type { Form, FormError, FormErrorEvent, FormSchema } from '@nuxt/ui'
+import type { ComponentPublicInstance } from 'vue'
 import type { BansSnapshot, SecurityConfig, SecurityConfigPatch, SecurityConfigResponse } from '~/types/management'
 import type { SecurityListField } from '~/utils/security-form'
+import { isNavigationFailure, NavigationFailureType } from 'vue-router'
 import { addressListError, splitAddressList } from '~/utils/address-list'
-import { ignoredOnField, securityCanSave, securityFieldErrors } from '~/utils/security-form'
+import { customListCount, hasListError, ignoredOnField, opensExceptions, SECURITY_ANCHORS, SECURITY_LIST_FIELDS, securityCanSave, securityFieldErrors } from '~/utils/security-form'
 
 const { request, extractError, errorInfo } = useManagement()
 const form = useTemplateRef<Form<FormSchema>>('form')
@@ -27,6 +29,8 @@ onJackBack(() => {
 })
 
 const DEFAULTS = { maxFailures: 10, windowMinutes: 10, banMinutes: 60 }
+// jack refuses more (security in apps/backend/src/lib/config.ts).
+const MAX = { maxFailures: 1000, windowMinutes: 1440, banMinutes: 525_600 }
 
 function blankState() {
   return {
@@ -46,8 +50,7 @@ const state = reactive(blankState())
 // Stored entries jack ignores, per field. Any save of the security settings drops
 // all of them from config.jsonc, so each field's note says so, and Save stays
 // available while there are any (securityCanSave).
-const LIST_FIELDS: SecurityListField[] = ['trustedProxies', 'neverBan', 'arrApiAlsoAllowed']
-const ignored = computed(() => Object.fromEntries(LIST_FIELDS.map(field => [field, ignoredOnField(security.value?.ignoredEntries, field)])) as Record<SecurityListField, string[]>)
+const ignored = computed(() => Object.fromEntries(SECURITY_LIST_FIELDS.map(field => [field, ignoredOnField(security.value?.ignoredEntries, field)])) as Record<SecurityListField, string[]>)
 const baseline = ref(JSON.stringify(blankState()))
 const orDefault = (value: number, fallback: number) => (value === fallback ? null : value)
 
@@ -106,16 +109,64 @@ function visibleFields(s: State): Set<string> {
 // be saved and then match nothing. Hidden lists are left to jack's own check.
 function validate(s: State): FormError[] {
   const visible = visibleFields(s)
-  return LIST_FIELDS.flatMap((name) => {
+  return SECURITY_LIST_FIELDS.flatMap((name) => {
     const message = visible.has(name) ? addressListError(s[name]) : null
     return message ? [{ name, message }] : []
   })
 }
 
+// The address lists only matter for things outside the LAN, so they stay folded
+// away. They open by themselves for entries jack ignores, for an error on one of
+// them and for a link to them, since a closed group would hide what those are
+// about.
+const exceptionsOpen = ref(false)
+watch(() => security.value?.ignoredEntries?.length, (count) => {
+  if (count)
+    exceptionsOpen.value = true
+}, { immediate: true })
+const customLists = computed(() => customListCount(state, visibleFields(state)))
+
+// A link into the group (the update notice, the Logs page) opens it, and
+// settings.vue scrolls to the target. A link to the hash already in the URL
+// leaves route.hash alone, but afterEach still sees it.
+const route = useRoute()
+function openForLink(hash: string) {
+  if (opensExceptions(hash))
+    exceptionsOpen.value = true
+}
+openForLink(route.hash)
+const stopAfterEach = useRouter().afterEach((to, _from, failure) => {
+  if (!isNavigationFailure(failure, NavigationFailureType.aborted | NavigationFailureType.cancelled))
+    openForLink(to.hash)
+})
+onBeforeUnmount(stopAfterEach)
+
+// The group's fields stay mounted while it is closed (unmount-on-hide off), so
+// the form keeps errors set on them. Reka only shows the content a render or two
+// after `open` changes, though, and an error can't be scrolled to or focused
+// before that.
+const exceptions = useTemplateRef<ComponentPublicInstance>('exceptions')
+async function showExceptions() {
+  exceptionsOpen.value = true
+  for (let tick = 0; tick < 10; tick++) {
+    const root = exceptions.value?.$el
+    const content = root instanceof HTMLElement ? root.querySelector('[data-slot="content"]') : null
+    if (!content?.hasAttribute('hidden'))
+      return
+    await nextTick()
+  }
+}
+
+async function onFormError(event: FormErrorEvent) {
+  if (hasListError(event.errors))
+    await showExceptions()
+  void onError()
+}
+
 const FIELD_LABELS: Record<string, string> = {
   trustedProxies: 'Trusted proxies',
   neverBan: 'Never ban',
-  arrApiAlsoAllowed: 'Also allow',
+  arrApiAlsoAllowed: 'Radarr/Sonarr outside your LAN',
   maxFailures: 'Failures',
   windowMinutes: 'Within (minutes)',
   banMinutes: 'Ban for (minutes)',
@@ -123,13 +174,16 @@ const FIELD_LABELS: Record<string, string> = {
 
 // A refused save: jack's errors on the fields they name, or one message above
 // Save for a field that isn't on screen.
-function showSaveError(err: unknown, patch: SecurityConfigPatch) {
+async function showSaveError(err: unknown, patch: SecurityConfigPatch) {
   const info = errorInfo(err)
   const issues = info.issues.length ? info.issues : info.field && info.message ? [{ field: info.field, message: info.message }] : []
   const sent = { trustedProxies: patch.trustedProxies, neverBan: patch.neverBan, arrApiAlsoAllowed: patch.arrApiAlsoAllowed }
   const onScreen = securityFieldErrors(issues, sent, visibleFields(state))
   if (onScreen.length) {
     form.value?.setErrors(onScreen)
+    // Closed, the group would hide the error.
+    if (hasListError(onScreen))
+      await showExceptions()
     void onError()
     return
   }
@@ -160,7 +214,7 @@ async function save() {
     saved.value = true
   }
   catch (err) {
-    showSaveError(err, patch)
+    await showSaveError(err, patch)
   }
   finally {
     saving.value = false
@@ -191,7 +245,7 @@ async function unban(ip: string) {
   <SettingsSection
     id="security"
     title="Security"
-    description="How jack's public port protects itself. Everything here is on by default."
+    description="How jack's public port protects itself. The safest choices are the defaults."
   >
     <LoadErrorAlert v-if="loadError" :error="loadError" :retry="refresh" what="the security settings" />
 
@@ -200,9 +254,9 @@ async function unban(ip: string) {
       Loading…
     </p>
 
-    <UForm v-else ref="form" :state="state" :validate="validate" class="space-y-3" @submit="save" @error="onError">
-      <!-- The ids are link targets for the update notice (UpgradeNotice). -->
-      <UCard id="security-bans" variant="subtle" class="scroll-mt-6" :ui="{ body: 'space-y-4' }">
+    <UForm v-else ref="form" :state="state" :validate="validate" class="space-y-3" @submit="save" @error="onFormError">
+      <!-- Link targets for the update notice and the Logs page (securityLink()). -->
+      <UCard :id="SECURITY_ANCHORS.bans" variant="subtle" class="scroll-mt-6" :ui="{ body: 'space-y-4' }">
         <UFormField
           name="banEnabled"
           label="Ban repeated failures"
@@ -212,37 +266,13 @@ async function unban(ip: string) {
         </UFormField>
 
         <div v-if="state.banEnabled" class="grid gap-4 sm:grid-cols-3">
-          <ConfigNumberField v-model="state.maxFailures" :disabled="saving" name="maxFailures" label="Failures" description="Refusals that trigger a ban." :default-value="DEFAULTS.maxFailures" :min="1" />
-          <ConfigNumberField v-model="state.windowMinutes" :disabled="saving" name="windowMinutes" label="Within (minutes)" description="Window the failures are counted in." :default-value="DEFAULTS.windowMinutes" :min="1" />
-          <ConfigNumberField v-model="state.banMinutes" :disabled="saving" name="banMinutes" label="Ban for (minutes)" description="How long the address is refused." :default-value="DEFAULTS.banMinutes" :min="1" />
+          <ConfigNumberField v-model="state.maxFailures" :disabled="saving" name="maxFailures" label="Failures" description="Refusals that trigger a ban." :default-value="DEFAULTS.maxFailures" :min="1" :max="MAX.maxFailures" />
+          <ConfigNumberField v-model="state.windowMinutes" :disabled="saving" name="windowMinutes" label="Within (minutes)" description="Window the failures are counted in." :default-value="DEFAULTS.windowMinutes" :min="1" :max="MAX.windowMinutes" />
+          <ConfigNumberField v-model="state.banMinutes" :disabled="saving" name="banMinutes" label="Ban for (minutes)" description="How long the address is refused." :default-value="DEFAULTS.banMinutes" :min="1" :max="MAX.banMinutes" />
         </div>
-
-        <UFormField
-          name="trustedProxies"
-          label="Trusted proxies"
-          description="The reverse proxy in front of jack, as IP addresses or ranges such as 172.18.0.0/16. Only requests from these may tell jack the visitor's real address. Empty trusts every private address, which covers a proxy on Unraid or elsewhere on your LAN. A list without your proxy's address stops bans for everything that comes through it."
-        >
-          <UInput v-model="state.trustedProxies" :disabled="saving" placeholder="Every private address" class="w-full font-mono" />
-          <SecurityIgnoredEntries :values="ignored.trustedProxies" class="mt-1.5" />
-        </UFormField>
-        <!-- A hidden list still says what jack ignores in it. -->
-        <UFormField
-          v-if="state.banEnabled"
-          name="neverBan"
-          label="Never ban"
-          description="Addresses outside your LAN that are never banned, as IP addresses or ranges, e.g. 100.64.0.0/10 for Tailscale. Your LAN is always exempt."
-        >
-          <UInput v-model="state.neverBan" :disabled="saving" placeholder="Nothing else" class="w-full font-mono" />
-          <SecurityIgnoredEntries :values="ignored.neverBan" class="mt-1.5" />
-        </UFormField>
-        <SecurityIgnoredEntries
-          v-else
-          label="Never ban (shown while Ban repeated failures is on)"
-          :values="ignored.neverBan"
-        />
       </UCard>
 
-      <UCard id="security-apis" variant="subtle" class="scroll-mt-6" :ui="{ body: 'space-y-4' }">
+      <UCard :id="SECURITY_ANCHORS.apis" variant="subtle" class="scroll-mt-6" :ui="{ body: 'space-y-4' }">
         <UFormField
           name="lanOnlyArrApis"
           label="Radarr/Sonarr APIs only on your LAN"
@@ -251,20 +281,6 @@ async function unban(ip: string) {
           <USwitch v-model="state.lanOnlyArrApis" :disabled="saving" />
         </UFormField>
         <UFormField
-          v-if="state.lanOnlyArrApis"
-          name="arrApiAlsoAllowed"
-          label="Also allow"
-          description="Addresses allowed on top of your LAN, for a Radarr or Sonarr that reaches jack from elsewhere: e.g. 100.64.0.0/10 for Tailscale, or your VPS's IP address."
-        >
-          <UInput v-model="state.arrApiAlsoAllowed" :disabled="saving" placeholder="Nothing else" class="w-full font-mono" />
-          <SecurityIgnoredEntries :values="ignored.arrApiAlsoAllowed" class="mt-1.5" />
-        </UFormField>
-        <SecurityIgnoredEntries
-          v-else
-          label="Also allow (shown while Radarr/Sonarr APIs only on your LAN is on)"
-          :values="ignored.arrApiAlsoAllowed"
-        />
-        <UFormField
           name="publicOpenApi"
           label="Publish the API description"
           description="Answer /openapi.json on the public port. It lists jack's routes, no keys or settings. Off by default; the description is also in the docs."
@@ -272,6 +288,71 @@ async function unban(ip: string) {
           <USwitch v-model="state.publicOpenApi" :disabled="saving" />
         </UFormField>
       </UCard>
+
+      <UCollapsible :id="SECURITY_ANCHORS.exceptions" ref="exceptions" v-model:open="exceptionsOpen" :unmount-on-hide="false" class="scroll-mt-6">
+        <UButton
+          color="neutral"
+          variant="subtle"
+          block
+          :ui="{ label: 'flex-1 text-left' }"
+          label="Reverse proxy and exceptions"
+          :icon="exceptionsOpen ? 'i-ph-caret-down' : 'i-ph-caret-right'"
+        >
+          <template #trailing>
+            <span v-if="customLists" class="text-xs text-muted">{{ customLists }} custom</span>
+          </template>
+        </UButton>
+
+        <template #content>
+          <UCard variant="subtle" class="mt-2" :ui="{ body: 'space-y-4' }">
+            <p class="text-xs text-muted">
+              Leave these empty unless something of yours reaches jack from outside your LAN, e.g. a
+              reverse proxy on a VPS or Radarr over Tailscale.
+            </p>
+            <UFormField
+              name="trustedProxies"
+              label="Trusted proxies"
+              description="The reverse proxy in front of jack, as IP addresses or ranges such as 172.18.0.0/16. Only requests from these may tell jack the visitor's real address. Empty trusts every private address, which covers a proxy on Unraid or elsewhere on your LAN. A list without your proxy's address stops bans for everything that comes through it."
+            >
+              <UInput v-model="state.trustedProxies" :disabled="saving" placeholder="Every private address" class="w-full font-mono" />
+              <SecurityIgnoredEntries :values="ignored.trustedProxies" class="mt-1.5" />
+            </UFormField>
+            <!-- A hidden list still says what jack ignores in it. -->
+            <UFormField
+              v-if="state.banEnabled"
+              name="neverBan"
+              label="Never ban"
+              description="Addresses outside your LAN that are never banned, as IP addresses or ranges, e.g. 100.64.0.0/10 for Tailscale. Your LAN is always exempt."
+            >
+              <UInput v-model="state.neverBan" :disabled="saving" placeholder="Nothing else" class="w-full font-mono" />
+              <SecurityIgnoredEntries :values="ignored.neverBan" class="mt-1.5" />
+            </UFormField>
+            <SecurityIgnoredEntries
+              v-else
+              label="Never ban (shown while Ban repeated failures is on)"
+              :values="ignored.neverBan"
+            />
+            <UFormField
+              v-if="state.lanOnlyArrApis"
+              :id="SECURITY_ANCHORS.arrOutsideLan"
+              name="arrApiAlsoAllowed"
+              label="Radarr/Sonarr outside your LAN"
+              description="Lets a Radarr or Sonarr outside your LAN use the Radarr/Sonarr APIs too. Enter its IP address or range, e.g. 100.64.0.0/10 for Tailscale, or your VPS's IP address."
+              class="scroll-mt-6"
+            >
+              <UInput v-model="state.arrApiAlsoAllowed" :disabled="saving" placeholder="None" class="w-full font-mono" />
+              <SecurityIgnoredEntries :values="ignored.arrApiAlsoAllowed" class="mt-1.5" />
+            </UFormField>
+            <SecurityIgnoredEntries
+              v-else
+              :id="SECURITY_ANCHORS.arrOutsideLan"
+              label="Radarr/Sonarr outside your LAN (shown while Radarr/Sonarr APIs only on your LAN is on)"
+              :values="ignored.arrApiAlsoAllowed"
+              class="scroll-mt-6"
+            />
+          </UCard>
+        </template>
+      </UCollapsible>
 
       <UAlert v-if="saveError" color="error" variant="soft" icon="i-ph-warning" :title="saveError" />
       <UAlert v-else-if="saved" color="success" variant="soft" icon="i-ph-check-circle" title="Saved." description="Applies right away." />

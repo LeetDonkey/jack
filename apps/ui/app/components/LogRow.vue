@@ -73,9 +73,10 @@ async function copyRaw() {
 
 <template>
   <div class="border-l-2" :class="level.rail">
+    <!-- Rows are 40px tall on phones, for a finger; compact from sm up. -->
     <button
       type="button"
-      class="flex w-full items-start gap-3 py-1 pl-2.5 pr-3 text-left hover:bg-elevated"
+      class="flex w-full items-start gap-3 py-3 pl-2.5 pr-3 text-left hover:bg-elevated sm:py-1"
       @click="emit('toggle')"
     >
       <!-- Timestamp: HH:MM:SS on phones, milliseconds from sm up. -->

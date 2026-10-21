@@ -2,9 +2,16 @@
 import type { ButtonProps } from '@nuxt/ui'
 import type { IntroductionsOverview, IntroPerson, IntroThread } from '~/types/management'
 
+const props = defineProps<{
+  // Show the section only while it has requests or messages, e.g. with no friends
+  // yet: nobody can be met then, but an earlier conversation stays reachable.
+  onlyWithThreads?: boolean
+}>()
+
 const { request, extractError } = useManagement()
 
 const { data, error, refresh } = useLazyAsyncData('introductions', () => request<IntroductionsOverview>('introductions'))
+const shown = computed(() => !props.onlyWithThreads || (data.value?.threads.length ?? 0) > 0)
 
 const timer = ref<ReturnType<typeof setInterval>>()
 onMounted(() => {
@@ -128,7 +135,7 @@ const setup = computed(() => {
 </script>
 
 <template>
-  <section class="space-y-3">
+  <section v-if="shown" class="space-y-3">
     <div class="flex flex-wrap items-baseline justify-between gap-2">
       <h2 class="text-sm font-medium text-highlighted">
         Friends of friends
@@ -209,7 +216,7 @@ const setup = computed(() => {
       </UCard>
 
       <p v-if="data.people.length === 0" class="text-sm text-muted">
-        Nobody to meet yet. People appear here when one of your friends introduces and their friends chose to be found.
+        Nobody to meet yet. Once a friend introduces you to their friends, the ones who chose to be found show up here.
       </p>
       <UCard v-for="person in data.people" :key="person.id" variant="subtle" :ui="{ body: 'p-3' }">
         <div class="flex flex-wrap items-center justify-between gap-2">

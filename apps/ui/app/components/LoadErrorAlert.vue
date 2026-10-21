@@ -3,9 +3,10 @@
 // jack is usually restarting, so it tries again on a timer, and at once when the
 // overview stream reaches jack again, instead of leaving a dead end.
 //
-// While the layout says jack isn't answering (JackDownNotice), that notice already
-// gives the cause, so this shows a quiet "Waiting for jack…" line rather than
-// repeating it in red.
+// While the overview stream has lost jack (jackAway, from the moment it closes),
+// the load most likely failed because jack is gone, and the layout soon says so
+// (JackDownNotice). So this shows a quiet "Waiting for jack…" line then rather
+// than an error in red. With the stream connected, a failure shows as one.
 const props = withDefaults(defineProps<{
   error: unknown
   retry: () => unknown
@@ -16,7 +17,7 @@ const props = withDefaults(defineProps<{
 }>(), { intervalMs: 5_000 })
 
 const { errorInfo } = useManagement()
-const { jackDown } = useJackStatus()
+const { jackAway, jackDown } = useJackStatus()
 
 const text = computed(() => loadErrorText(errorInfo(props.error), props.what))
 
@@ -50,11 +51,12 @@ onBeforeUnmount(() => {
   clearInterval(timer)
 })
 
-// Quiet from the moment jack counts as down until the try that jack's return
+// Quiet from the moment the stream loses jack until the try that jack's return
 // starts has answered, so the red alert doesn't flash up in between.
+const away = computed(() => jackAway.value || jackDown.value)
 const waitingForJack = ref(false)
-watch(jackDown, (down) => {
-  if (down)
+watch(away, (isAway) => {
+  if (isAway)
     waitingForJack.value = true
 }, { immediate: true })
 
@@ -73,7 +75,7 @@ onJackBack(async () => {
 </script>
 
 <template>
-  <p v-if="jackDown || waitingForJack" role="status" class="flex items-center gap-2 text-sm text-muted">
+  <p v-if="away || waitingForJack" role="status" class="flex items-center gap-2 text-sm text-muted">
     <UIcon name="i-ph-circle-notch" class="size-4 shrink-0 animate-spin" />
     Waiting for jack…
   </p>

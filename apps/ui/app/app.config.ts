@@ -4,8 +4,14 @@ export default defineAppConfig({
       primary: 'indigo',
     },
     // Side gutters: 16px on phones (so the navbar toggle and content aren't pushed
-    // in from the edge), 32px from sm up where there's room to breathe.
+    // in from the edge), 32px from sm up where there's room to breathe. The toolbar
+    // under a navbar (Settings tabs, library filters, pause buttons) lines up too.
     dashboardNavbar: {
+      slots: {
+        root: 'px-4 sm:px-8',
+      },
+    },
+    dashboardToolbar: {
       slots: {
         root: 'px-4 sm:px-8',
       },

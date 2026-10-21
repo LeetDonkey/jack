@@ -13,3 +13,19 @@ export const AUTH_CHECK_EVERY_MS = 5_000
 export function authScreenChecksAgain(state: AuthState): boolean {
   return state.status === 'disabled' || state.status === 'error'
 }
+
+/**
+ * How long a fresh page load gives /api/ping before it shows "Connecting to
+ * jack…". jack usually answers sooner, and the page then opens without the card
+ * flashing by.
+ */
+export const AUTH_CONNECTING_AFTER_MS = 400
+
+/**
+ * Whether the auth screen shows anything yet. Every answer shows at once; while
+ * the first check is still on its way, the screen stays empty until `waited`
+ * (AUTH_CONNECTING_AFTER_MS have passed) and then says it is connecting.
+ */
+export function authScreenShows(state: AuthState, waited: boolean): boolean {
+  return state.status !== 'loading' || waited
+}

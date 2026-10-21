@@ -103,3 +103,58 @@ describe('createJackDownTracker', () => {
     expect(changes).toEqual([])
   })
 })
+
+describe('createJackDownTracker away', () => {
+  function trackAway() {
+    const away: boolean[] = []
+    const down: boolean[] = []
+    const tracker = createJackDownTracker(d => down.push(d), { onAway: a => away.push(a) })
+    return { tracker, away, down }
+  }
+
+  test('jack is away as soon as the stream closes, before it counts as down', () => {
+    const { tracker, away, down } = trackAway()
+    tracker.update(true, true)
+    expect(away).toEqual([])
+    tracker.update(false, true)
+    expect(away).toEqual([true])
+    expect(down).toEqual([])
+
+    jest.advanceTimersByTime(JACK_DOWN_AFTER_MS)
+    expect(down).toEqual([true])
+    // Still away while down.
+    expect(away).toEqual([true])
+
+    tracker.update(true, true)
+    expect(away).toEqual([true, false])
+    expect(down).toEqual([true, false])
+  })
+
+  test('a stream that never connected is not jack being away', () => {
+    const { tracker, away } = trackAway()
+    tracker.update(false, true)
+    tracker.update(false, true)
+    expect(away).toEqual([])
+  })
+
+  test('a hidden tab is not away, and a tab shown again during an outage is', () => {
+    const { tracker, away } = trackAway()
+    tracker.update(true, true)
+    tracker.update(false, true)
+    tracker.update(false, false)
+    expect(away).toEqual([true, false])
+    tracker.update(false, true)
+    expect(away).toEqual([true, false, true])
+  })
+
+  test('reset ends away', () => {
+    const { tracker, away } = trackAway()
+    tracker.update(true, true)
+    tracker.update(false, true)
+    tracker.reset()
+    expect(away).toEqual([true, false])
+    // Nothing to end the second time.
+    tracker.reset()
+    expect(away).toEqual([true, false])
+  })
+})

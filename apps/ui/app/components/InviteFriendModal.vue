@@ -66,8 +66,9 @@ async function saveAddress() {
   try {
     await request('config/jack/external', { method: 'PATCH', body })
     external.value = body
-    // Settings keeps its own copy of config.jack under this key.
-    void refreshNuxtData('jack-config')
+    // Settings keeps its own copy of config.jack under this key, and Friends of
+    // friends asks for the name and address until it hears they are set.
+    void refreshNuxtData(['jack-config', 'introductions'])
     resetForm()
     step.value = 'form'
   }

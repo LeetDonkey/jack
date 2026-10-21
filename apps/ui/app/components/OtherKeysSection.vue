@@ -177,8 +177,8 @@ const keyName = (key: ApiKey) => key.name?.trim() || `Key #${key.id}`
     <UCard v-else-if="keys.length === 0" variant="subtle">
       <p class="text-sm text-muted">
         No other keys. Keys you give friends show on their cards on the
-        <ULink to="/friends" class="underline">
-          Friends page
+        <ULink to="/friends">
+          <span class="underline">Friends page</span>
         </ULink>.
       </p>
     </UCard>

@@ -1,8 +1,61 @@
 // Settings -> Sharing -> Security: which server validation errors belong on which
-// field of the form.
+// field of the form, and the links into the section.
+import { splitAddressList } from './address-list'
+import { settingsLink } from './settings-links'
 
 /** The fields that hold a list of addresses, as the PATCH body names them. */
 export type SecurityListField = 'trustedProxies' | 'neverBan' | 'arrApiAlsoAllowed'
+
+/** The address lists, in the order the form shows them under Reverse proxy and exceptions. */
+export const SECURITY_LIST_FIELDS: readonly SecurityListField[] = ['trustedProxies', 'neverBan', 'arrApiAlsoAllowed']
+
+/**
+ * Link targets in the Security section (element ids in SecuritySection.vue).
+ * `exceptions` is the Reverse proxy and exceptions group, and `arrOutsideLan` the
+ * field in it for a Radarr/Sonarr outside the LAN (`arrApiAlsoAllowed`).
+ */
+export const SECURITY_ANCHORS = {
+  bans: 'security-bans',
+  apis: 'security-apis',
+  exceptions: 'security-exceptions',
+  arrOutsideLan: 'security-arr-outside-lan',
+} as const
+
+export type SecurityAnchor = keyof typeof SECURITY_ANCHORS
+
+/** A link to one part of the Security section, e.g. `/settings/sharing#security-arr-outside-lan`. */
+export function securityLink(anchor: SecurityAnchor): string {
+  return `${settingsLink('security').split('#')[0]}#${SECURITY_ANCHORS[anchor]}`
+}
+
+const IN_EXCEPTIONS = new Set<string>([SECURITY_ANCHORS.exceptions, SECURITY_ANCHORS.arrOutsideLan])
+const LEADING_HASH = /^#/
+
+/**
+ * Whether a route hash points into Reverse proxy and exceptions. The group starts
+ * closed, so the section opens it for such a link, or the field would be hidden.
+ */
+export function opensExceptions(hash: string): boolean {
+  try {
+    return IN_EXCEPTIONS.has(decodeURIComponent(hash.replace(LEADING_HASH, '')))
+  }
+  catch {
+    return false
+  }
+}
+
+/**
+ * How many address lists hold an entry, for the "N custom" count on Reverse proxy
+ * and exceptions. A list hidden because its switch is off doesn't count.
+ */
+export function customListCount(lists: Readonly<Record<SecurityListField, string>>, fields: ReadonlySet<string>): number {
+  return SECURITY_LIST_FIELDS.filter(field => fields.has(field) && splitAddressList(lists[field]).length > 0).length
+}
+
+/** Whether one of these form errors is on an address list, which is folded away until opened. */
+export function hasListError(errors: readonly { name?: string }[]): boolean {
+  return errors.some(error => (SECURITY_LIST_FIELDS as readonly (string | undefined)[]).includes(error.name))
+}
 
 // Whether a message mentions the entry as a word of its own, quoted or not.
 const NOT_ADDRESS_CHARS = /[^\w.:/-]+/

@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import type { Form, FormError, FormSchema } from '@nuxt/ui'
 import type { BandwidthConfig, BandwidthConfigPatch, Weekday } from '~/types/management'
-import { kibToSave, limitError, mbFromKib } from '~/utils/bandwidth-limits'
+import { bandwidthFormField, kibToSave, limitError, mbFromKib } from '~/utils/bandwidth-limits'
 
-const { request, extractError } = useManagement()
+const { request, extractError, extractFieldError } = useManagement()
 const form = useTemplateRef<Form<FormSchema>>('form')
 const { onError, showFixHint } = useFormErrorFocus(form)
 
@@ -177,7 +177,16 @@ async function save() {
     saved.value = true
   }
   catch (err) {
-    saveFailed(err, extractError(err, 'Could not save the bandwidth settings.'))
+    // jack's verdict on one field goes on that field, without its config name.
+    const field = extractFieldError(err)
+    const name = field && bandwidthFormField(field.name)
+    if (field && name) {
+      form.value?.setErrors([{ name, message: field.message }], name)
+      void onError()
+    }
+    else {
+      saveFailed(err, extractError(err, 'Could not save the bandwidth settings.'))
+    }
   }
   finally {
     saving.value = false

@@ -71,9 +71,10 @@ function selectAll(event: FocusEvent) {
 </script>
 
 <template>
+  <!-- Not the lifebuoy: on Logs that marks a line with a known fix. -->
   <UButton
     label="Copy support info"
-    icon="i-ph-lifebuoy"
+    icon="i-ph-clipboard-text"
     color="neutral"
     variant="outline"
     v-bind="$attrs"

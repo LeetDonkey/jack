@@ -36,3 +36,36 @@ export function limitError(mb: number | null | undefined, direction: 'download' 
   const pause = direction === 'upload' ? 'To stop uploads, use Pause sharing.' : 'To stop downloads, use Pause downloads.'
   return `Must be more than 0. ${empty} ${pause}`
 }
+
+// The form's name for each field of the PATCH body. Limits are edited in MB/s.
+const FORM_FIELDS: Record<string, string> = {
+  downloadLimitKiBps: 'downloadMb',
+  uploadLimitKiBps: 'uploadMb',
+  maxConcurrentUploads: 'maxConcurrentUploads',
+  maxConcurrentUploadsPerPeer: 'maxConcurrentUploadsPerPeer',
+  dailyUploadLimitGiBPerPeer: 'dailyUploadLimitGiBPerPeer',
+}
+
+// The same within a schedule period, whose start and end share one field.
+const PERIOD_FIELDS: Record<string, string> = {
+  days: 'days',
+  start: 'time',
+  end: 'time',
+  downloadLimitKiBps: 'downloadMb',
+  uploadLimitKiBps: 'uploadMb',
+}
+
+const PERIOD_FIELD = /^schedule\.(\d+)\.(\w+)/
+
+/**
+ * The form field for a field jack names in a refused save (`schedule.0.end`), so
+ * the message shows there. Null when the form has no field for it.
+ */
+export function bandwidthFormField(field: string): string | null {
+  const period = PERIOD_FIELD.exec(field)
+  if (period) {
+    const name = PERIOD_FIELDS[period[2]!]
+    return name ? `schedule.${period[1]}.${name}` : null
+  }
+  return FORM_FIELDS[field] ?? null
+}

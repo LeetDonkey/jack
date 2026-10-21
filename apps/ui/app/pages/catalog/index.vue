@@ -135,6 +135,9 @@ const emptyKind = computed<EmptyKind | null>(() => {
     return (catalog.unavailable?.length ?? 0) > 0 ? 'unreachable' : 'no-friends'
   return 'nothing-shared'
 })
+// With no friends there is nothing to search, filter, sort or date: the empty
+// state's Add a friend is the page.
+const noFriends = computed(() => emptyKind.value === 'no-friends')
 const unreachableCopy = computed(() => unavailable.value.length === 1
   ? `${unavailable.value[0]!.name}'s jack can't be reached right now.`
   : 'Your friends\' jacks can\'t be reached right now.')
@@ -244,8 +247,9 @@ async function onConfirm(payload: CatalogRequestPayload) {
     <template #header>
       <UDashboardNavbar title="Friends' library">
         <template #right>
-          <span v-if="updatedAgo" class="hidden text-xs text-muted md:inline">Updated {{ updatedAgo }} ago</span>
+          <span v-if="updatedAgo && !noFriends" class="text-xs whitespace-nowrap text-muted">Updated {{ updatedAgo }} ago</span>
           <UInput
+            v-if="!noFriends"
             v-model="search"
             type="search"
             icon="i-ph-magnifying-glass"
@@ -258,7 +262,7 @@ async function onConfirm(payload: CatalogRequestPayload) {
         </template>
       </UDashboardNavbar>
 
-      <UDashboardToolbar>
+      <UDashboardToolbar v-if="!noFriends">
         <div class="flex w-full flex-wrap items-center gap-2 py-2">
           <!-- On a phone the search gets a row of its own. -->
           <UInput
@@ -367,7 +371,7 @@ async function onConfirm(payload: CatalogRequestPayload) {
               <p class="text-sm text-muted">
                 Your friends' movies and shows appear here once you've added a friend.
               </p>
-              <UButton label="Add a friend" icon="i-ph-plus" to="/friends?action=add" />
+              <UButton label="Add a friend" icon="i-ph-user-plus" to="/friends?action=add" />
             </template>
             <template v-else-if="emptyKind === 'unreachable'">
               <UIcon name="i-ph-wifi-slash" class="size-8 text-dimmed" />

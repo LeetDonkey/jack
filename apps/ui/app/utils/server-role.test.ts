@@ -1,6 +1,6 @@
 import type { DestinationRegistration } from '~/types/management'
 import { describe, expect, test } from 'bun:test'
-import { ARR_CONTACT_GRACE_MS, arrContact, arrMedia, arrName, formatPauseEnd, formatTimeAgo, indexerPause, indexerPausedUntil, indexerPauseText, registersJack, registrationFix, registrationHeadline, registrationStepDetail, registrationStepTone, registrationSummary, serverRoleLabel } from './server-role'
+import { ARR_CONTACT_GRACE_MS, arrContact, arrMedia, arrName, formatPauseEnd, formatTimeAgo, indexerPause, indexerPausedUntil, indexerPauseText, registersJack, registrationFix, registrationHeadline, registrationStepDetail, registrationStepTone, registrationSummary, serverRoleLabel, stepUnderHeadline } from './server-role'
 
 function registration(overrides: Partial<DestinationRegistration> = {}): DestinationRegistration {
   return {
@@ -112,6 +112,23 @@ describe('registrationStepDetail', () => {
     expect(registrationStepDetail('indexer', { status: 'ok' }, 'ok', 'Radarr', 'for a while')).toBe('Added, but Radarr is skipping it for a while.')
     // The pause is the indexer's alone.
     expect(registrationStepDetail('downloadClient', { status: 'ok' }, 'ok', 'Radarr', 'until 17:36')).toBe('Added. Radarr\'s test passed.')
+  })
+})
+
+describe('stepUnderHeadline', () => {
+  // The result dialog showed Radarr's sentence in the headline and again in the row.
+  test('leaves out an error the headline already quotes', () => {
+    const error = 'Query successful, but no results in the configured categories were returned from your indexer.'
+    const step = { status: 'failed' as const, error }
+    const headline = `jack couldn't add its indexer to Radarr: ${error} To try again, use Register again on Radarr's card.`
+    expect(stepUnderHeadline(step, headline)).toEqual({ status: 'failed' })
+    expect(registrationStepDetail('indexer', stepUnderHeadline(step, headline), 'skipped', 'Radarr')).toBe('jack couldn\'t add it.')
+  })
+
+  test('keeps an error the headline doesn\'t quote', () => {
+    const step = { status: 'failed' as const, error: 'Unable to connect to qBittorrent' }
+    expect(stepUnderHeadline(step, 'jack couldn\'t add its download client to Radarr yet, because downloads were turned on after jack started.')).toBe(step)
+    expect(stepUnderHeadline({ status: 'ok' }, 'anything')).toEqual({ status: 'ok' })
   })
 })
 
@@ -328,6 +345,21 @@ describe('registrationHeadline', () => {
       title: 'jack couldn\'t finish setting itself up in Radarr.',
       description: undefined,
     })
+  })
+
+  // The toast right after Register again mustn't ask for Register again; the
+  // dialog after a save, which has no such button, adds the hint back.
+  test('splits off the closing sentence about Register again', () => {
+    const message = 'jack couldn\'t add its download client to Radarr: Authentication Failure (Please verify your username and password.) jack left the indexer as it was. To try again, use Register again on Radarr\'s card.'
+    expect(registrationHeadline(registration({ clientTest: 'failed', message }), RADARR, NOW)).toEqual({
+      tone: 'error',
+      title: 'jack couldn\'t add its download client to Radarr: Authentication Failure (Please verify your username and password.) jack left the indexer as it was.',
+      description: undefined,
+      hint: 'To try again, use Register again on Radarr\'s card.',
+    })
+    const removed = registrationHeadline(registration({ clientTest: 'failed', message: 'Radarr has no Jack indexer anymore. To add it back, use Register again on Radarr\'s card.' }), RADARR, NOW)
+    expect(removed).toMatchObject({ title: 'Radarr has no Jack indexer anymore.', hint: 'To add it back, use Register again on Radarr\'s card.' })
+    expect(registrationHeadline(registration({ clientTest: 'failed', message: 'Radarr can\'t resolve jack.' }), RADARR, NOW)).not.toHaveProperty('hint')
   })
 })
 

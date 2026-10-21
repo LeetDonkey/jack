@@ -1,7 +1,10 @@
 <script setup lang="ts">
+import type { Form, FormSchema } from '@nuxt/ui'
 import type { TorznabConfig, TorznabConfigPatch } from '~/types/management'
 
-const { request, extractError } = useManagement()
+const { request, extractError, extractFieldError } = useManagement()
+const form = useTemplateRef<Form<FormSchema>>('form')
+const { onError, showFixHint } = useFormErrorFocus(form)
 
 const { data: torznab, pending, error: loadError, refresh } = useLazyAsyncData(
   'torznab-config',
@@ -51,7 +54,15 @@ async function save() {
     saved.value = true
   }
   catch (err) {
-    saveFailed(err, extractError(err, 'Could not save the RSS feed settings.'))
+    // jack's verdict on one field goes on that field, without its config name.
+    const field = extractFieldError(err)
+    if (field && field.name in DEFAULTS) {
+      form.value?.setErrors([field], field.name)
+      void onError()
+    }
+    else {
+      saveFailed(err, extractError(err, 'Could not save the RSS feed settings.'))
+    }
   }
   finally {
     saving.value = false
@@ -60,6 +71,7 @@ async function save() {
 
 function revert() {
   seed(torznab.value ?? null)
+  form.value?.clear()
   saveError.value = null
   saved.value = false
 }
@@ -78,14 +90,14 @@ function revert() {
       Loading…
     </p>
 
-    <UForm v-else :state="state" class="space-y-3" @submit="save">
+    <UForm v-else ref="form" :state="state" class="space-y-3" @submit="save">
       <UCard variant="subtle" :ui="{ body: 'space-y-4' }">
         <ConfigNumberField
           v-model="state.rssMaxAgeDays"
           :disabled="saving"
           name="rssMaxAgeDays"
-          label="Newest releases only"
-          description="Days back a friend's file may have been added and still appear in the feed. A feed of every friend's whole library lets Radarr/Sonarr grab every possible upgrade in one sync."
+          label="Days a new release stays in the feed"
+          description="Counted from when your friend added the file. Without this limit, every friend's whole library is in the feed and Radarr/Sonarr grab every upgrade at once."
           :default-value="DEFAULTS.rssMaxAgeDays"
           :min="1"
         />
@@ -104,7 +116,10 @@ function revert() {
       <UAlert v-else-if="saved" color="success" variant="soft" icon="i-ph-check-circle" title="Saved." description="The next RSS sync uses these settings." />
 
       <div class="flex flex-wrap items-center justify-end gap-2 pt-1">
-        <p class="mr-auto text-xs text-muted">
+        <p v-if="showFixHint" class="mr-auto text-xs text-error">
+          Fix the highlighted fields to save.
+        </p>
+        <p v-else class="mr-auto text-xs text-muted">
           Clear a field to use jack's default.
         </p>
         <UButton v-if="dirty" label="Revert" color="neutral" variant="ghost" :disabled="saving" @click="revert" />

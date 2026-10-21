@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { docsUrl } from './docs'
-import { clockTime, logDateTime, logDayBreaks, logDayLabel, logHelp, logIsoTime, logRuns, logSegmentBreaks } from './logFormat'
-import { settingsLink } from './settings-links'
+import { clockTime, logDateTime, logDayBreaks, logDayLabel, logFilterText, logHelp, logIsoTime, logRuns, logSegmentBreaks } from './logFormat'
+import { opensExceptions } from './security-form'
 
 const troubleshooting = docsUrl('unraid', 'troubleshooting')
 
@@ -18,9 +18,11 @@ describe('logHelp', () => {
     expect(logHelp({ message })).toEqual({ label: 'Troubleshooting guide', to: troubleshooting, external: true })
   })
 
-  test('links a refused *arr address to the Security settings', () => {
-    const message = 'Refused the Radarr/Sonarr API to an address outside your LAN. If it is your own Radarr or Sonarr, add it under Settings -> Sharing -> Security -> Also allow.'
-    expect(logHelp({ message })).toEqual({ label: 'Open Security settings', to: settingsLink('security'), external: false })
+  test('links a refused *arr address to the field that lets it in', () => {
+    const message = 'Refused the Radarr/Sonarr API to an address outside your LAN. If it is your own Radarr or Sonarr, add it under Settings -> Sharing -> Security -> Reverse proxy and exceptions -> Radarr/Sonarr outside your LAN.'
+    expect(logHelp({ message })).toEqual({ label: 'Open Security settings', to: '/settings/sharing#security-arr-outside-lan', external: false })
+    // The link opens Reverse proxy and exceptions, where the field is folded away.
+    expect(opensExceptions(new URL(logHelp({ message })!.to, 'http://x').hash)).toBe(true)
   })
 
   test('leaves other lines alone', () => {
@@ -129,12 +131,11 @@ describe('logRuns', () => {
 
   test('marks the first start the list holds, from its first line', () => {
     const rows = [
-      log(0, 'Config file not found at /config/config.jsonc. Creating default config file...'),
-      log(4, 'Wrote the default config'),
+      log(0, 'Created a default config at /config/config.jsonc'),
       log(169, 'Server listening'),
       log(174, 'Management API listening'),
     ]
-    expect(logRuns(rows)).toEqual([1, 1, 1, 1])
+    expect(logRuns(rows)).toEqual([1, 1, 1])
   })
 
   test('counts the wait for Radarr and Sonarr as part of the start', () => {
@@ -185,5 +186,34 @@ describe('logSegmentBreaks', () => {
     expect(logSegmentBreaks([0, 0, 1, 1, 2])).toEqual([false, false, true, false, true])
     expect(logSegmentBreaks([1, 1, 2])).toEqual([true, false, true])
     expect(logSegmentBreaks([])).toEqual([])
+  })
+})
+
+describe('logFilterText', () => {
+  test('holds who failed and the status, which the row shows in its message only', () => {
+    const text = logFilterText({ level: 40, message: 'Radarr answered 401 for /api/v3/indexer', connector: 'Radarr', method: 'GET', status: 401 })
+    expect(text).toContain('radarr')
+    expect(text).toContain('401')
+    expect(text).toContain('warn')
+  })
+
+  test('holds the Radarr/Sonarr that registration and imports name outside the message', () => {
+    expect(logFilterText({ level: 50, message: 'Registration failed', destination: 'Radarr' })).toContain('radarr')
+    expect(logFilterText({ level: 40, message: 'Manual import command failed', server: 'Sonarr 4K' })).toContain('sonarr 4k')
+  })
+
+  test('holds the friend a line is about', () => {
+    expect(logFilterText({ level: 30, message: 'Back online', peer: 'Alice' })).toContain('alice')
+  })
+
+  test('holds a request\'s method, path and status', () => {
+    const text = logFilterText({ level: 10, message: 'request completed', http: { request: { method: 'POST', path: '/api/v2/torrents/add' }, response: { status: 200 } } })
+    expect(text).toContain('post')
+    expect(text).toContain('/api/v2/torrents/add')
+    expect(text).toContain('200')
+  })
+
+  test('leaves out fields that aren\'t text or numbers', () => {
+    expect(logFilterText({ level: 30, message: 'x', connector: { name: 'Radarr' }, server: { name: 'Sonarr' }, destination: undefined, peer: null })).toBe('x info')
   })
 })

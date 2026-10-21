@@ -25,6 +25,8 @@ const editing = computed(() => props.updating || Boolean(props.initial && 'id' i
 
 const form = useTemplateRef<Form<FormSchema>>('form')
 const { onError, showFixHint } = useFormErrorFocus(form)
+const headersEditor = useTemplateRef<{ errors: FormError[] }>('headersEditor')
+const headerErrors = computed(() => headersEditor.value?.errors ?? [])
 
 const guideUrl = docsUrl('unraid', '7-connect-to-a-friend')
 
@@ -36,7 +38,9 @@ const state = reactive({
 })
 
 const baseline = JSON.stringify(state)
-const dirty = computed(() => JSON.stringify(state) !== baseline)
+// A header row with only a name or only a value isn't in `state`, but it is an
+// edit too.
+const dirty = computed(() => JSON.stringify(state) !== baseline || headerErrors.value.length > 0)
 watch(dirty, isDirty => emit('dirty', isDirty), { immediate: true })
 
 // Headers are rare, so they stay folded away unless this friend already has some
@@ -84,8 +88,18 @@ function validate(s: typeof state): FormError[] {
     errors.push({ name: 'url', message: 'Start the address with http:// or https://, for example https://jack.example.com.' })
   if (!s.apiKey)
     errors.push({ name: 'apiKey', message: 'Paste the key your friend created for you.' })
+  // A header row with only a name or only a value waits for the rest, or to be removed.
+  errors.push(...headerErrors.value)
   return errors
 }
+
+// A header row's error goes as soon as the row is complete or removed.
+const HEADER_ROW = /^headers\.\d+(?:\.name)?$/
+watch(headerErrors, (current) => {
+  const shown = form.value?.getErrors(HEADER_ROW) ?? []
+  if (shown.length)
+    form.value?.setErrors(current.filter(e => shown.some(s => s.name === e.name)), HEADER_ROW)
+})
 
 function input(): PeerInput {
   const peer: PeerInput = { name: state.name.trim(), url: state.url.trim(), apiKey: state.apiKey! }
@@ -136,7 +150,7 @@ function saveAnyway() {
           description="Only if their reverse proxy needs extra headers (e.g. Cloudflare Access)."
           class="pt-2"
         >
-          <HeadersEditor v-model="state.headers" />
+          <HeadersEditor ref="headersEditor" v-model="state.headers" />
         </UFormField>
       </template>
     </UCollapsible>

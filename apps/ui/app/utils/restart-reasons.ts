@@ -8,8 +8,8 @@ export const RESTART_STEPS = 'Docker tab -> jack -> Restart'
 const RESTART_REASON_LABELS: Record<RestartReason, string> = {
   'downloads': 'Downloads',
   'downloads.completedPath': 'Completed folder',
-  // jack reports the retry and the import-watcher keys as one reason.
-  'downloads.retries': 'Download retries and Handing files to Radarr/Sonarr',
+  'downloads.retries': 'Download retries',
+  'downloads.import': 'Handing files to Radarr/Sonarr',
   'jack.tmdbApiKey': 'TMDB key (config file)',
   'jack.apiKey': 'Main API key (config file)',
 }

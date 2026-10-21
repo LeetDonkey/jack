@@ -9,7 +9,8 @@ let consumers = 0
 let unsubscribe: (() => void) | undefined
 // The first consumer's listener, so the last one to unmount can remove it.
 let visibilityListener: (() => void) | undefined
-// Sets `jackDown` for the whole app, from the first mount to the last unmount.
+// Sets `jackDown` and `jackAway` for the whole app, from the first mount to the
+// last unmount.
 let downTracker: JackDownTracker | undefined
 // Bumped by every stream snapshot. A GET that started before one must not
 // overwrite it with what may be older data.
@@ -29,7 +30,9 @@ let inflight: Promise<void> | undefined
  * one "jack isn't answering" state: true once the stream, which connected since
  * sign-in, has been closed for JACK_DOWN_AFTER_MS of visible time, and false again
  * as soon as it reopens (createJackDownTracker). The layout's notice and the pages
- * read it, so they change together.
+ * read it, so they change together. `jackAway` comes first: true as soon as that
+ * stream closes (visible time), so a load that fails early in an outage waits for
+ * jack instead of showing its error.
  *
  * `refresh()` fetches GET /overview and never rejects; a failure lands in `error`.
  * `whenLoaded()` settles once the first load is done, for pages that hold their
@@ -43,6 +46,7 @@ export function useOverview() {
   const connected = useState('overview:connected', () => false)
   const hasConnectedOnce = useState('overview:has-connected-once', () => false)
   const jackDown = useState('overview:jack-down', () => false)
+  const jackAway = useState('overview:jack-away', () => false)
 
   function refresh(): Promise<void> {
     const seq = ++fetchSeq
@@ -120,6 +124,10 @@ export function useOverview() {
       return
     downTracker = createJackDownTracker((down) => {
       jackDown.value = down
+    }, {
+      onAway: (away) => {
+        jackAway.value = away
+      },
     })
     visibilityListener = onVisibilityChange
     document.addEventListener('visibilitychange', visibilityListener)
@@ -143,6 +151,7 @@ export function useOverview() {
     connected.value = false
     hasConnectedOnce.value = false
     jackDown.value = false
+    jackAway.value = false
     // Nothing keeps the snapshot live any more (signed out), so drop it rather than
     // show it stale on the next mount. A GET still on its way is dropped too.
     fetchSeq++
@@ -152,7 +161,7 @@ export function useOverview() {
     error.value = undefined
   })
 
-  return { overview, connected, hasConnectedOnce, jackDown, pending, error, refresh, whenLoaded }
+  return { overview, connected, hasConnectedOnce, jackDown, jackAway, pending, error, refresh, whenLoaded }
 }
 
 /**
@@ -164,6 +173,7 @@ export function useJackStatus() {
   return {
     connected: readonly(useState('overview:connected', () => false)),
     jackDown: readonly(useState('overview:jack-down', () => false)),
+    jackAway: readonly(useState('overview:jack-away', () => false)),
   }
 }
 

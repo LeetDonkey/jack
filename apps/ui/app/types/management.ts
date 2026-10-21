@@ -101,7 +101,7 @@ export interface ServerItem extends ConnectorBase, ServerRegistrationFields {
 export type OverviewServerItem = Omit<ServerItem, 'autoregister' | 'upgrades'>
 
 // Settings saved since jack started that only apply after a restart of the jack container.
-export type RestartReason = 'downloads' | 'downloads.completedPath' | 'downloads.retries' | 'jack.tmdbApiKey' | 'jack.apiKey'
+export type RestartReason = 'downloads' | 'downloads.completedPath' | 'downloads.retries' | 'downloads.import' | 'jack.tmdbApiKey' | 'jack.apiKey'
 
 export interface SystemStatus {
   // When this jack process started. A new value means jack restarted.

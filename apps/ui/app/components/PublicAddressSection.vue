@@ -27,6 +27,10 @@ const state = reactive(stateFrom(null))
 const baseline = ref(JSON.stringify(state))
 // HeadersEditor keeps its own rows, seeded once, so a new baseline remounts it.
 const headersRevision = ref(0)
+// A header row with only a name or only a value isn't in `state`. It still
+// counts as an edit, and saving waits until the row is complete or removed.
+const headersEditor = useTemplateRef<{ errors: FormError[] }>('headersEditor')
+const headerErrors = computed(() => headersEditor.value?.errors ?? [])
 
 function seed(external: ExternalJackConfig | null | undefined) {
   Object.assign(state, stateFrom(external))
@@ -35,7 +39,7 @@ function seed(external: ExternalJackConfig | null | undefined) {
   form.value?.clear()
 }
 
-const dirty = computed(() => JSON.stringify(state) !== baseline.value)
+const dirty = computed(() => JSON.stringify(state) !== baseline.value || headerErrors.value.length > 0)
 useUnsavedGuard().track('Your public address', dirty)
 
 // The first load seeds the form. A later read never overwrites edits in progress.
@@ -75,8 +79,17 @@ function validate(s: typeof state): FormError[] {
       errors.push({ name: 'url', message: 'Enter a full address, for example https://jack.example.com.' })
     }
   }
+  errors.push(...headerErrors.value)
   return errors
 }
+
+// A header row's error goes as soon as the row is complete or removed.
+const HEADER_ROW = /^headers\.\d+(?:\.name)?$/
+watch(headerErrors, (current) => {
+  const shown = form.value?.getErrors(HEADER_ROW) ?? []
+  if (shown.length)
+    form.value?.setErrors(current.filter(e => shown.some(s => s.name === e.name)), HEADER_ROW)
+})
 
 // A 400 that names one of this form's fields is shown on that field.
 const FORM_FIELDS = new Set(['instanceName', 'url'])
@@ -166,8 +179,8 @@ async function remove() {
     <template #aside>
       <p class="text-xs text-muted">
         Invite friends from the
-        <ULink to="/friends" class="underline">
-          Friends page
+        <ULink to="/friends">
+          <span class="underline">Friends page</span>
         </ULink>.
       </p>
     </template>
@@ -219,7 +232,7 @@ async function remove() {
         </UFormField>
 
         <UFormField label="Proxy headers (optional)">
-          <HeadersEditor :key="headersRevision" v-model="state.headers" />
+          <HeadersEditor :key="headersRevision" ref="headersEditor" v-model="state.headers" />
           <template #help>
             <span>Only if your reverse proxy needs extra headers (e.g. Cloudflare Access). Every invite link you create includes them.</span>
           </template>

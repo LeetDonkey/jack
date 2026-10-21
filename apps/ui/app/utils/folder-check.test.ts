@@ -65,6 +65,22 @@ describe('folderSummary', () => {
   test('nothing to check', () => {
     expect(folderSummary(report({ sources: [], completed: null })).tone).toBe('warning')
   })
+
+  test('with no Radarr/Sonarr, only says jack can write to the completed folder', () => {
+    expect(folderSummary(report({ sources: [], completed: completed({ destinations: [] }) }))).toEqual({
+      tone: 'warning',
+      text: 'jack can write to /data/jack. Connect a Radarr or Sonarr to check that it sees the same folder.',
+    })
+  })
+
+  test('with no Radarr/Sonarr, a completed folder jack can\'t write to is still an error', () => {
+    const r = report({ ok: false, sources: [], completed: completed({ status: 'error', writable: false, message: 'jack can\'t write to /data/jack.', destinations: [] }) })
+    expect(folderSummary(r)).toEqual({ tone: 'error', text: 'jack can\'t write to /data/jack.' })
+  })
+
+  test('a library that lines up is enough for the all-clear', () => {
+    expect(folderSummary(report({ completed: completed({ destinations: [] }) }))).toEqual({ tone: 'ok', text: 'All folders line up.' })
+  })
 })
 
 describe('serverFolderResult', () => {

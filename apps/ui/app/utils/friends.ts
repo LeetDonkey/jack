@@ -335,6 +335,15 @@ export function limitsSummary(limits: FriendsLimits): string {
   ].join(' · ')
 }
 
+/**
+ * What the limits under a friend's keys apply to. jack counts them per key, and
+ * Settings -> Bandwidth says "Each key counts as one friend", so a friend with
+ * several keys gets them for each.
+ */
+export function limitsLabel(keyCount: number): string {
+  return keyCount > 1 ? 'Limits for each of their keys' : 'Limits per key'
+}
+
 /** "jack 0.1.0 · build 4ca4a2a (17 Oct)", or null when the friend's jack reported neither. */
 export function buildSummary(version: string | null, build: BuildIdentity | null, now: Date = new Date()): string | null {
   const parts: string[] = []

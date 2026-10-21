@@ -1,6 +1,6 @@
 import type { Friend, FriendKey, FriendPeer } from '~/types/management'
 import { describe, expect, test } from 'bun:test'
-import { buildSummary, describePeerSaveError, friendBadge, friendKeyLabels, friendPrompt, friendSilence, keyToReplace, keyUsage, limitsSummary, peerProblem, revokeKeyWords, sameName, trafficSummary } from './friends'
+import { buildSummary, describePeerSaveError, friendBadge, friendKeyLabels, friendPrompt, friendSilence, keyToReplace, keyUsage, limitsLabel, limitsSummary, peerProblem, revokeKeyWords, sameName, trafficSummary } from './friends'
 
 // Local times, so the expectations hold in any time zone.
 const now = new Date(2026, 9, 18, 15, 0)
@@ -290,6 +290,12 @@ describe('summaries', () => {
     expect(trafficSummary({ today: 0, week: 1024, month: 1536 })).toBe('0 B today · 1.0 KB in 7 days · 1.5 KB in 30 days')
     expect(limitsSummary({ maxConcurrentUploadsPerPeer: 1, dailyUploadLimitGiBPerPeer: 50 })).toBe('1 upload at once · 50 GB a day')
     expect(limitsSummary({ maxConcurrentUploadsPerPeer: null, dailyUploadLimitGiBPerPeer: null })).toBe('no limit on uploads at once · no daily limit')
+  })
+
+  // jack applies the limits per key, so a friend who kept two keys gets them twice.
+  test('limits label', () => {
+    expect(limitsLabel(1)).toBe('Limits per key')
+    expect(limitsLabel(2)).toBe('Limits for each of their keys')
   })
 
   test('build', () => {

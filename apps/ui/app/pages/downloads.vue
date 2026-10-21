@@ -3,7 +3,7 @@ import type { BadgeProps, TableColumn } from '@nuxt/ui'
 import type { ActivityDownload, ActivityTransfer, ActivityTransfersSnapshot } from '~/types/activity'
 import type { DownloadAction, DownloadFilter, DownloadState } from '~/utils/download-actions'
 
-const { request, extractError } = useManagement()
+const { request, extractError, errorInfo } = useManagement()
 const toast = useToast()
 const route = useRoute()
 const router = useRouter()
@@ -59,6 +59,7 @@ const counts = computed(() => Object.fromEntries(DOWNLOAD_FILTERS.map(f =>
 const CHIPS: Array<{ key: DownloadFilter, label: string, color: BadgeProps['color'] }> = [
   { key: 'active', label: 'Active', color: 'primary' },
   { key: 'downloading', label: 'Downloading', color: 'primary' },
+  { key: 'waiting', label: 'Waiting', color: 'neutral' },
   { key: 'import_queued', label: 'Import queued', color: 'warning' },
   { key: 'failed', label: 'Failed', color: 'error' },
   { key: 'cancelled', label: 'Cancelled', color: 'neutral' },
@@ -71,6 +72,7 @@ const chips = computed(() => CHIPS.filter(chip => chip.key !== 'cancelled' || co
 const EMPTY_FILTER: Record<DownloadFilter, string> = {
   active: 'Nothing is downloading, waiting for import or failed.',
   downloading: 'Nothing is downloading.',
+  waiting: 'Nothing is waiting for a free slot or to retry.',
   import_queued: 'Nothing is waiting for Radarr/Sonarr to import it.',
   failed: 'No failed downloads.',
   cancelled: 'No cancelled downloads.',
@@ -101,18 +103,34 @@ watch(pageCount, (count) => {
 
 // ── Speed and time left ─────────────────────────────────────────────────────
 
-// Live traffic's snapshot carries speed and time left per transfer. Its stream sends
-// one every second while anything moves, so it is open only while this page shows a
-// running download.
+// Live traffic's snapshot carries speed and time left per transfer, and whether
+// downloads are paused. Its stream sends one every second while anything moves, so
+// it is open only while this page shows a running download.
 const transfers = ref<ActivityTransfersSnapshot | null>(null)
 const showsRunning = computed(() => paged.value.some(d => d.status === 'downloading'))
 let stopTransfers: (() => void) | undefined
+// Counts snapshots and closes, so a fetch that answers after either is dropped.
+let transfersRevision = 0
+async function loadTransfers() {
+  const revision = transfersRevision
+  try {
+    const snapshot = await request<ActivityTransfersSnapshot>('transfers')
+    if (revision === transfersRevision)
+      transfers.value = snapshot
+  }
+  catch {}
+}
 function followTransfers(on: boolean) {
   if (on && !stopTransfers) {
     stopTransfers = subscribeManagementStream<ActivityTransfersSnapshot>('transfers/stream', {
       onSnapshot: (snapshot) => {
+        transfersRevision++
         transfers.value = snapshot
       },
+      // A connection another page opened (Dashboard, Live traffic) is reused and
+      // sends no first snapshot. jack sends the next one only when something
+      // changes, which may not happen while downloads are paused, so fetch it.
+      onOpen: () => void loadTransfers(),
     }, async () => {
       await request('ping')
     })
@@ -120,6 +138,7 @@ function followTransfers(on: boolean) {
   else if (!on && stopTransfers) {
     stopTransfers()
     stopTransfers = undefined
+    transfersRevision++
     transfers.value = null
   }
 }
@@ -226,6 +245,50 @@ function confirmAction() {
     void runAction(target.download, target.action)
 }
 
+// Retry now ends the wait of a row waiting to retry. The attempt still waits for
+// a free slot, ahead of new downloads.
+const retryingNow = ref<Record<number, boolean>>({})
+// Set when jack turns out to be older than Retry now. The button stays away until
+// jack restarts, which an update does.
+const retryNowMissing = ref(false)
+onJackBack(() => {
+  retryNowMissing.value = false
+})
+function showsRetryNow(download: ActivityDownload): boolean {
+  return !retryNowMissing.value && canRetryNow(download, { downloadsPaused: downloadsPaused.value })
+}
+async function retryNow(download: ActivityDownload) {
+  if (retryingNow.value[download.id] || pendingActions.value[download.id])
+    return
+  retryingNow.value[download.id] = true
+  try {
+    await request<{ download: ActivityDownload }>(`downloads/${download.id}/retry-now`, { method: 'POST' })
+    toast.add({ title: 'Retrying the download', description: 'It starts as soon as a download slot is free.', color: 'success' })
+    await refresh()
+  }
+  catch (retryError) {
+    switch (retryNowFailure(errorInfo(retryError))) {
+      case 'stale':
+        toast.add({ title: 'This download isn\'t waiting to retry any more', color: 'neutral' })
+        await refresh()
+        break
+      case 'unsupported':
+        retryNowMissing.value = true
+        toast.add({
+          title: 'Retry now needs a newer jack',
+          description: 'Update the jack container in Unraid\'s Docker tab. Until then, the download retries by itself at the time shown.',
+          color: 'neutral',
+        })
+        break
+      default:
+        toast.add({ title: 'Could not retry the download now', description: extractError(retryError), color: 'error' })
+    }
+  }
+  finally {
+    delete retryingNow.value[download.id]
+  }
+}
+
 // "Retry all failed" goes through the failures Retry can start, one at a time.
 const retryable = computed(() => retryableFailures(downloads.value))
 const showRetryAll = computed(() => (filter.value === 'failed' || filter.value === 'active') && retryable.value.length > 0)
@@ -326,7 +389,7 @@ const columns: TableColumn<ActivityDownload>[] = [
           <p class="max-w-md text-sm text-muted">
             Nothing downloaded yet. Add a friend to download from their library.
           </p>
-          <UButton label="Add a friend" icon="i-ph-plus" to="/friends?action=add" />
+          <UButton label="Add a friend" icon="i-ph-user-plus" to="/friends?action=add" />
         </div>
         <div v-else class="flex flex-col items-center gap-3 py-6 text-center">
           <UIcon name="i-ph-download-simple" class="size-8 text-dimmed" />
@@ -345,6 +408,9 @@ const columns: TableColumn<ActivityDownload>[] = [
       </UCard>
 
       <div v-else-if="data" class="space-y-4">
+        <!-- While downloads are paused, waiting rows don't start: until when, and Resume. -->
+        <PauseControls v-if="downloadsPaused" what="downloads" />
+
         <!-- Status filter / breakdown. Wraps on a phone. -->
         <div class="flex flex-wrap items-center gap-2">
           <UButton
@@ -432,11 +498,25 @@ const columns: TableColumn<ActivityDownload>[] = [
             </template>
 
             <template #actions-cell="{ row }">
-              <DownloadActions
-                :download="row.original"
-                :pending="pendingActions[row.original.id]"
-                @action="onAction(row.original, $event)"
-              />
+              <div class="flex items-center justify-end gap-1">
+                <UTooltip v-if="showsRetryNow(row.original)" text="Retry now">
+                  <UButton
+                    :aria-label="`Retry ${row.original.filename} now`"
+                    icon="i-ph-arrow-clockwise"
+                    color="primary"
+                    variant="ghost"
+                    size="sm"
+                    :loading="retryingNow[row.original.id]"
+                    :disabled="retryingNow[row.original.id] || pendingActions[row.original.id] !== undefined"
+                    @click="retryNow(row.original)"
+                  />
+                </UTooltip>
+                <DownloadActions
+                  :download="row.original"
+                  :pending="pendingActions[row.original.id]"
+                  @action="onAction(row.original, $event)"
+                />
+              </div>
             </template>
 
             <template #empty>
@@ -460,9 +540,16 @@ const columns: TableColumn<ActivityDownload>[] = [
                   <UBadge :color="stateOf(d).color" :label="stateOf(d).label" variant="subtle" />
                   <span class="min-w-0 truncate">from {{ d.peerName }}</span>
                 </div>
-                <p v-if="stateOf(d).note" class="text-xs break-words" :class="NOTE_CLASS[stateOf(d).noteTone]">
-                  {{ stateOf(d).note }}
-                </p>
+                <template v-if="stateOf(d).note">
+                  <p class="text-xs break-words" :class="NOTE_CLASS[stateOf(d).noteTone]" :title="d.error ?? undefined">
+                    {{ stateOf(d).note }}
+                  </p>
+                  <!-- jack's own error text, which the note puts in plain words. Phones
+                       have no hover for the tooltip, so it shows here. -->
+                  <p v-if="stateOf(d).detail" class="font-mono text-xs break-words text-dimmed">
+                    {{ stateOf(d).detail }}
+                  </p>
+                </template>
                 <p v-else-if="d.expectedBytesMismatch" class="text-xs text-warning">
                   size mismatch
                 </p>
@@ -472,13 +559,25 @@ const columns: TableColumn<ActivityDownload>[] = [
                 <span class="min-w-0 text-xs tabular-nums text-muted">
                   {{ formatBytes(d.totalBytes) }} · {{ speedLine(d) ?? `${formatAgo(d.updatedAt)} ago` }}
                 </span>
-                <DownloadActions
-                  class="ml-auto"
-                  :download="d"
-                  :pending="pendingActions[d.id]"
-                  labelled
-                  @action="onAction(d, $event)"
-                />
+                <div class="ml-auto flex flex-wrap items-center justify-end gap-1">
+                  <UButton
+                    v-if="showsRetryNow(d)"
+                    label="Retry now"
+                    icon="i-ph-arrow-clockwise"
+                    color="primary"
+                    variant="soft"
+                    size="sm"
+                    :loading="retryingNow[d.id]"
+                    :disabled="retryingNow[d.id] || pendingActions[d.id] !== undefined"
+                    @click="retryNow(d)"
+                  />
+                  <DownloadActions
+                    :download="d"
+                    :pending="pendingActions[d.id]"
+                    labelled
+                    @action="onAction(d, $event)"
+                  />
+                </div>
               </div>
             </div>
           </UCard>

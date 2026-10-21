@@ -12,6 +12,17 @@ export interface JackDownTracker {
   reset: () => void
 }
 
+export interface JackDownOptions {
+  delayMs?: number
+  /**
+   * Hears every change of "away": the stream connected since sign-in and is
+   * closed now, in a visible tab. That is the count running, or run out. A load
+   * that fails then most likely failed because jack is gone, so it waits for jack
+   * rather than show its error.
+   */
+  onAway?: (away: boolean) => void
+}
+
 /**
  * Decides when jack counts as down: the overview stream connected at some point
  * since sign-in, and has been closed for `delayMs` of visible time since.
@@ -25,7 +36,7 @@ export interface JackDownTracker {
  * only a change starts or stops the count. `onChange` hears every change of
  * "down".
  */
-export function createJackDownTracker(onChange: (down: boolean) => void, delayMs = JACK_DOWN_AFTER_MS): JackDownTracker {
+export function createJackDownTracker(onChange: (down: boolean) => void, { delayMs = JACK_DOWN_AFTER_MS, onAway }: JackDownOptions = {}): JackDownTracker {
   let seenConnected = false
   // Connected once, closed now and visible: the count runs, or has run out.
   let counting = false
@@ -39,6 +50,11 @@ export function createJackDownTracker(onChange: (down: boolean) => void, delayMs
     onChange(next)
   }
 
+  function setCounting(next: boolean) {
+    counting = next
+    onAway?.(next)
+  }
+
   function stopTimer() {
     clearTimeout(timer)
     timer = undefined
@@ -50,7 +66,7 @@ export function createJackDownTracker(onChange: (down: boolean) => void, delayMs
     const closed = seenConnected && !connected && visible
     if (closed === counting)
       return
-    counting = closed
+    setCounting(closed)
     stopTimer()
     if (!closed) {
       setDown(false)
@@ -64,7 +80,8 @@ export function createJackDownTracker(onChange: (down: boolean) => void, delayMs
 
   function reset() {
     seenConnected = false
-    counting = false
+    if (counting)
+      setCounting(false)
     stopTimer()
     setDown(false)
   }

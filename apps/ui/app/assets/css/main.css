@@ -21,9 +21,20 @@
    at 4.8:1 (WCAG AA asks 4.5:1). Dimmed text takes the muted shade in both modes:
    neutral-500 in light (4.8:1 on white), neutral-400 in dark (5.6:1 on elevated
    backgrounds). Same layer as Nuxt UI's color variables, where these selectors
-   outrank their `:root, .light` and `.dark`. */
+   outrank their `:root, .light` and `.dark`.
+   The other colors fall short the same way in light mode. Their 500 shades are
+   2.2:1 (success), 3.8:1 (info and error) and 4.6:1 (primary) as text on white,
+   and 2.0, 3.3, 3.3 and 4.0:1 on their own tint (badges, soft buttons). The
+   shades below pass on that tint, also as a soft alert's faded description:
+   success 800 (5.0:1), info 700 (4.9:1), error 700 (4.9:1) and primary 600
+   (4.7:1). White text on solid buttons gains from the darker shades too. Dark
+   mode keeps Nuxt UI's 400 shades. */
 @layer theme {
   :root:not(.dark) {
+    --ui-primary: var(--ui-color-primary-600);
+    --ui-success: var(--ui-color-success-800);
+    --ui-info: var(--ui-color-info-700);
+    --ui-error: var(--ui-color-error-700);
     --ui-warning: var(--ui-color-warning-800);
     --ui-text-dimmed: var(--ui-color-neutral-500);
   }

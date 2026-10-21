@@ -117,14 +117,9 @@ const logflixUrl = computed(() => props.title.tmdbId == null || meta.value == nu
       <img :src="heroImage" :alt="name" class="size-full object-cover" @error="onHeroError">
     </div>
 
-    <div class="flex items-baseline gap-2">
-      <h3 class="text-lg font-semibold text-highlighted">
-        {{ name }}
-      </h3>
-      <span v-if="meta?.year" class="text-sm text-muted">{{ meta.year }}</span>
-    </div>
-
+    <!-- The panel's header has the name. -->
     <div class="flex flex-wrap items-center gap-2">
+      <span v-if="meta?.year" class="text-sm text-muted">{{ meta.year }}</span>
       <UBadge :label="title.mediaType === 'tv' ? 'TV' : 'Movie'" color="neutral" variant="subtle" />
       <UBadge v-if="meta?.rating" :label="meta.rating.toFixed(1)" icon="i-ph-star-fill" color="warning" variant="subtle" />
       <UBadge v-for="g in meta?.genres ?? []" :key="g" :label="g" color="neutral" variant="soft" size="sm" />
@@ -136,28 +131,6 @@ const logflixUrl = computed(() => props.title.tmdbId == null || meta.value == nu
     <p v-else class="text-sm text-muted">
       No description available.
     </p>
-
-    <UTooltip :disabled="!!logflixUrl" text="No TMDB metadata found for this title." :delay-duration="0">
-      <!-- Wrap in a span so the tooltip still fires while the button is disabled:
-           a native disabled button swallows hover events, so pointer-events-none on it
-           lets them fall through to this trigger. -->
-      <span class="block">
-        <UButton
-          :to="logflixUrl ?? undefined"
-          :target="logflixUrl ? '_blank' : undefined"
-          :disabled="!logflixUrl"
-          :class="logflixUrl ? undefined : 'pointer-events-none'"
-          label="View in Logflix"
-          color="neutral"
-          variant="subtle"
-          block
-        >
-          <template #leading>
-            <img src="/logflix.svg" alt="" class="size-4">
-          </template>
-        </UButton>
-      </span>
-    </UTooltip>
 
     <USeparator />
 
@@ -182,8 +155,9 @@ const logflixUrl = computed(() => props.title.tmdbId == null || meta.value == nu
         {{ peerWarnings[singlePeer.id] }}
       </p>
       <UTooltip :disabled="!downloadHint" :text="downloadHint ?? ''" :delay-duration="0">
-        <!-- Wrap in a span so the tooltip still fires while the button is disabled (see
-             the Logflix button above for why). -->
+        <!-- Wrap in a span so the tooltip still fires while the button is disabled:
+             a native disabled button swallows hover events, so pointer-events-none on it
+             lets them fall through to this trigger. -->
         <span class="block">
           <UButton
             label="Download"
@@ -241,5 +215,23 @@ const logflixUrl = computed(() => props.title.tmdbId == null || meta.value == nu
         </div>
       </div>
     </template>
+
+    <!-- Another site's page about the title, after Download: not needed to get it.
+         Hidden when TMDB doesn't know the title, as Logflix wouldn't either. -->
+    <UButton
+      v-if="logflixUrl"
+      :to="logflixUrl"
+      target="_blank"
+      label="More info (Logflix)"
+      trailing-icon="i-ph-arrow-square-out"
+      color="neutral"
+      variant="link"
+      size="sm"
+      class="px-0"
+    >
+      <template #leading>
+        <img src="/logflix.svg" alt="" class="size-4">
+      </template>
+    </UButton>
   </div>
 </template>

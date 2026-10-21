@@ -166,3 +166,32 @@ describe('useOverview jackDown', () => {
     expect(next.jackDown.value).toBe(false)
   })
 })
+
+describe('useOverview jackAway', () => {
+  test('turns on when the stream closes, stays on while down, and goes when it reopens', () => {
+    const layout = mount()
+    mounted.push(layout.unmount)
+    // The first stream opening: not away before it ever connected.
+    expect(layout.jackAway.value).toBe(false)
+    stream().handlers.onConnection?.(true, true)
+
+    stream().handlers.onConnection?.(false, true)
+    expect(layout.jackAway.value).toBe(true)
+    expect(layout.jackDown.value).toBe(false)
+    jest.advanceTimersByTime(JACK_DOWN_AFTER_MS)
+    expect(layout.jackAway.value).toBe(true)
+    expect(layout.jackDown.value).toBe(true)
+
+    stream().handlers.onConnection?.(true, true)
+    expect(layout.jackAway.value).toBe(false)
+  })
+
+  test('signing out clears it', () => {
+    const layout = mount()
+    stream().handlers.onConnection?.(true, true)
+    stream().handlers.onConnection?.(false, true)
+    expect(layout.jackAway.value).toBe(true)
+    layout.unmount()
+    expect(layout.jackAway.value).toBe(false)
+  })
+})

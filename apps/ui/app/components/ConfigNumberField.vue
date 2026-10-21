@@ -7,7 +7,7 @@ import type { DurationUnit } from '~/utils/duration-units'
  * the value actually in effect (durations read back as "30 min", not "1800000").
  *
  * With `displayUnit`, the key holds milliseconds but the field is edited in
- * seconds, minutes or hours. `defaultValue` and `min` stay in milliseconds.
+ * seconds, minutes or hours. `defaultValue`, `min` and `max` stay in milliseconds.
  */
 const props = withDefaults(defineProps<{
   /** The config file key, used for the field's name and error mapping. */
@@ -23,6 +23,8 @@ const props = withDefaults(defineProps<{
   /** Shown in the hint instead of the value when the value is 0, e.g. "Off". */
   zeroLabel?: string
   min?: number
+  /** The largest value jack accepts for this key, where it has one. */
+  max?: number
   disabled?: boolean
 }>(), { unit: 'count', min: 0 })
 
@@ -64,11 +66,17 @@ const inputValue = computed<number | null>({
     // an untouched form look edited.
     if (model.value != null && value === msToUnit(model.value, props.displayUnit))
       return
-    model.value = Math.max(props.min, unitToMs(value, props.displayUnit))
+    model.value = Math.min(props.max ?? Infinity, Math.max(props.min, unitToMs(value, props.displayUnit)))
   },
 })
 
 const inputMin = computed(() => (props.displayUnit ? minInUnit(props.min, props.displayUnit) : props.min))
+// Rounded down, so the largest allowed entry never converts back to more than the maximum.
+const inputMax = computed(() => {
+  if (props.max == null || !props.displayUnit)
+    return props.max
+  return Math.floor((props.max / DURATION_UNIT_MS[props.displayUnit]) * 1000) / 1000
+})
 
 const placeholder = computed(() =>
   String(props.displayUnit ? msToUnit(props.defaultValue, props.displayUnit) : props.defaultValue),
@@ -89,6 +97,7 @@ const placeholder = computed(() =>
       <UInputNumber
         v-model="inputValue"
         :min="inputMin"
+        :max="inputMax"
         :step-snapping="!displayUnit"
         :disabled="disabled"
         :increment="false"

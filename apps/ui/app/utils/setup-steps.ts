@@ -135,6 +135,19 @@ export function setupDownloadsStep(downloadsOn: boolean, shareOnly: boolean): Se
   return shareOnly ? 'skipped' : 'open'
 }
 
+// The restarts setup itself leads to: turning on downloads, or a new completed
+// folder. Other settings that wait for a restart are tweaks the banner on every
+// page names; they don't turn a finished setup back into an open one.
+const SETUP_RESTART_REASONS: readonly string[] = ['downloads', 'downloads.completedPath']
+
+/**
+ * Step 4, restart the jack container: shown only while a setup setting waits for
+ * the restart, so it is never done. Null hides the step.
+ */
+export function setupRestartStep(reasons: readonly string[]): SetupStepState | null {
+  return reasons.some(reason => SETUP_RESTART_REASONS.includes(reason)) ? 'open' : null
+}
+
 /**
  * The one step that offers "I only share": the first open step it answers, so the
  * card never shows the same choice twice. Steps 2 (downloads off) and 3 (nothing

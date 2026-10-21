@@ -25,7 +25,14 @@ const items: NavigationMenuItem[][] = [
 ]
 
 const helpUrl = docsUrl('unraid')
-const ENV_SIGN_IN = 'Signed in automatically (key from the jack-ui template)'
+const ENV_SIGN_IN = 'Signed in automatically'
+const ENV_KEY_FROM = 'key from the jack-ui template'
+
+// The browser tab names the page with its label here, as in "Logs · jack".
+const route = useRoute()
+const pageLabel = computed(() => items.flat().find(({ to, exact }) => typeof to === 'string'
+  && (route.path === to || (!exact && route.path.startsWith(`${to}/`))))?.label)
+useHead({ title: computed(() => pageLabel.value ? `${pageLabel.value} · jack` : 'jack') })
 
 const loggingOut = ref(false)
 async function onLogout() {
@@ -41,6 +48,12 @@ async function onLogout() {
 
 <template>
   <UDashboardGroup unit="rem" storage-key="jack-dashboard">
+    <!-- A page loads its data before it shows, so a click in the sidebar can take
+         a while when jack is slow or away. This bar shows that it's on its way.
+         It sits here and not in app.vue because only a mounted page ends it: on
+         the sign-in screen a Back or Forward would start it and leave it there.
+         When this layout goes away (sign-out, a 401), the bar goes with it. -->
+    <NuxtLoadingIndicator color="var(--ui-primary)" />
     <UDashboardSidebar collapsible :default-size="13">
       <template #header="{ collapsed }">
         <NuxtLink v-if="!collapsed" to="/" class="flex min-w-0 items-center gap-2.5">
@@ -79,15 +92,17 @@ async function onLogout() {
               :class="!collapsed && 'flex-1 justify-start'"
               @click="onLogout"
             />
-            <!-- Env mode: the BFF injects the key, so there is nothing to sign out of. -->
-            <UTooltip v-else :text="ENV_SIGN_IN" :content="{ side: 'top' }">
+            <!-- Env mode: the BFF injects the key, so there is nothing to sign out of.
+                 The open sidebar says so next to the padlock, since a phone shows no
+                 tooltip; the tooltip adds where the key comes from. -->
+            <UTooltip v-else :text="`${ENV_SIGN_IN} (${ENV_KEY_FROM})`" :content="{ side: 'top' }">
               <span
                 tabindex="0"
-                class="flex items-center rounded-md px-2.5 py-1.5 text-muted focus-visible:outline-2 focus-visible:outline-primary"
-                :class="!collapsed && 'mr-auto'"
+                class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-muted focus-visible:outline-2 focus-visible:outline-primary"
+                :class="!collapsed && 'min-w-0 flex-1'"
               >
-                <UIcon name="i-ph-lock-key" class="size-5" />
-                <span class="sr-only">{{ ENV_SIGN_IN }}</span>
+                <UIcon name="i-ph-lock-key" class="size-5 shrink-0" />
+                <span :class="collapsed ? 'sr-only' : 'text-xs leading-tight'">{{ ENV_SIGN_IN }}<span class="sr-only"> ({{ ENV_KEY_FROM }})</span></span>
               </span>
             </UTooltip>
             <UColorModeButton />

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { GroupedRow } from '~/components/LogRow.vue'
 import type { LogRecord } from '~/types/management'
-import { extractHttp, groupKey, levelName, logDayBreaks, logDayKey, logRuns, logSegmentBreaks } from '~/utils/logFormat'
+import { groupKey, logDayBreaks, logDayKey, logFilterText, logRuns, logSegmentBreaks } from '~/utils/logFormat'
 import { LogTail } from '~/utils/logTail'
 
 type Row = LogRecord & { _id: number }
@@ -29,6 +29,9 @@ const gaps = ref(new Set<number>())
 const pending = ref(false)
 const error = ref<unknown>()
 const live = ref(true)
+// Clear view empties the list; the lines stay in jack's log, and a reload of the
+// page or another level brings them back.
+const cleared = ref(false)
 
 // View controls.
 const query = ref('')
@@ -140,6 +143,7 @@ watch(level, () => {
   tail.reset()
   rows.value = []
   gaps.value = new Set()
+  cleared.value = false
   error.value = undefined
   void sync()
 })
@@ -152,6 +156,7 @@ function toggleLive() {
 function clear() {
   rows.value = []
   gaps.value = new Set()
+  cleared.value = true
 }
 
 // --- Auto-scroll: stick to the bottom unless the user has scrolled up. ---
@@ -174,24 +179,12 @@ function scheduleScroll(force: boolean) {
   })
 }
 
-// --- Text filter over the raw stream (path, message, method, status, level). ---
-function haystack(row: Row): string {
-  const http = extractHttp(row)
-  return [
-    row.message,
-    levelName(row),
-    typeof row.severity === 'string' ? row.severity : undefined,
-    http?.method,
-    http?.path,
-    http?.status,
-  ].filter(v => v != null).join(' ').toLowerCase()
-}
-
+// --- Text filter (see logFilterText). ---
 const filtered = computed(() => {
   const q = query.value.trim().toLowerCase()
   if (!q)
     return rows.value
-  return rows.value.filter(row => haystack(row).includes(q))
+  return rows.value.filter(row => logFilterText(row).includes(q))
 })
 
 // --- Fold consecutive identical lines into one row with a ×N counter. ---
@@ -299,7 +292,7 @@ const summary = computed(() => {
                 size="sm"
                 @click="toggleLive"
               />
-              <UButton icon="i-ph-trash" label="Clear" color="neutral" variant="ghost" size="sm" @click="clear" />
+              <UButton icon="i-ph-trash" label="Clear view" color="neutral" variant="ghost" size="sm" @click="clear" />
               <!-- Icon only until md, so the navbar fits from sm up. -->
               <SupportInfoButton
                 variant="ghost"
@@ -318,10 +311,10 @@ const summary = computed(() => {
       <div class="flex h-full flex-col gap-3">
         <!-- Filter bar -->
         <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <div class="flex w-full flex-wrap items-center gap-2 sm:hidden">
-            <USelect v-model="level" :items="levelItems" size="sm" class="w-36" aria-label="Minimum log level" />
+          <!-- One group on the right; a button that doesn't fit wraps under the others. -->
+          <div class="flex w-full flex-wrap items-center justify-end gap-2 sm:hidden">
+            <USelect v-model="level" :items="levelItems" size="sm" class="me-auto w-36" aria-label="Minimum log level" />
             <UButton
-              class="ms-auto"
               :icon="live ? 'i-ph-pause' : 'i-ph-play'"
               :label="live ? 'Pause' : 'Resume'"
               color="neutral"
@@ -329,14 +322,13 @@ const summary = computed(() => {
               size="sm"
               @click="toggleLive"
             />
-            <UButton icon="i-ph-trash" label="Clear" color="neutral" variant="ghost" size="sm" @click="clear" />
-            <!-- Wraps to a line of its own when the row is full. -->
+            <UButton icon="i-ph-trash" label="Clear view" color="neutral" variant="ghost" size="sm" @click="clear" />
             <SupportInfoButton variant="ghost" size="sm" />
           </div>
           <UInput
             v-model="query"
             icon="i-ph-magnifying-glass"
-            placeholder="Filter by path, method, status or message"
+            placeholder="Filter messages"
             size="sm"
             class="min-w-56 flex-1"
             :ui="{ trailing: 'pe-1' }"
@@ -366,8 +358,12 @@ const summary = computed(() => {
         <UCard v-else-if="rows.length === 0" variant="subtle">
           <div class="flex flex-col items-center gap-3 py-6 text-center">
             <UIcon name="i-ph-scroll" class="size-8 text-dimmed" />
-            <p class="text-sm text-muted">
-              No log lines yet. New entries stream in here as jack logs them.
+            <!-- While paused no stream is open, so new lines wait for Resume. -->
+            <p v-if="cleared" class="text-sm text-muted">
+              View cleared. New lines show up here {{ live ? 'as jack logs them' : 'when you resume' }}. Reload the page to see the earlier ones.
+            </p>
+            <p v-else class="text-sm text-muted">
+              No log lines yet. New entries show up here {{ live ? 'as jack logs them' : 'when you resume' }}.
             </p>
           </div>
         </UCard>

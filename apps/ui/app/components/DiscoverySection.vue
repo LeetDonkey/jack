@@ -1,7 +1,10 @@
 <script setup lang="ts">
+import type { Form, FormSchema } from '@nuxt/ui'
 import type { DiscoveryConfig, DiscoveryConfigPatch } from '~/types/management'
 
-const { request, extractError } = useManagement()
+const { request, extractError, extractFieldError } = useManagement()
+const form = useTemplateRef<Form<FormSchema>>('form')
+const { onError, showFixHint } = useFormErrorFocus(form)
 
 const { data: discovery, pending, error: loadError, refresh } = useLazyAsyncData(
   'discovery-config',
@@ -58,6 +61,7 @@ async function openOverride() {
 function closeOverride() {
   state.publicName = ''
   showOverride.value = false
+  form.value?.clear('publicName')
 }
 
 async function save() {
@@ -75,7 +79,20 @@ async function save() {
     saved.value = true
   }
   catch (err) {
-    saveFailed(err, extractError(err, 'Could not save the friends-of-friends settings.'))
+    // jack's verdict on the name goes on that field, without its config name.
+    const field = extractFieldError(err)
+    if (field?.name === 'publicName') {
+      // The form only keeps errors for a field it has shown.
+      if (!showOverride.value) {
+        showOverride.value = true
+        await nextTick()
+      }
+      form.value?.setErrors([field], field.name)
+      void onError()
+    }
+    else {
+      saveFailed(err, extractError(err, 'Could not save the friends-of-friends settings.'))
+    }
   }
   finally {
     saving.value = false
@@ -84,6 +101,7 @@ async function save() {
 
 function revert() {
   seed(discovery.value ?? null)
+  form.value?.clear()
   saveError.value = null
   saved.value = false
 }
@@ -102,7 +120,7 @@ function revert() {
       Loading…
     </p>
 
-    <UForm v-else :state="state" class="space-y-3" @submit="save">
+    <UForm v-else ref="form" :state="state" class="space-y-3" @submit="save">
       <UCard variant="subtle" :ui="{ body: 'space-y-4' }">
         <div v-if="!showOverride" class="space-y-1">
           <p class="text-sm font-medium text-default">
@@ -114,8 +132,8 @@ function revert() {
             </template>
             <template v-else>
               The name friends see, once you set it under
-              <ULink :to="settingsLink('public-address')" class="underline">
-                Your public address
+              <ULink :to="settingsLink('public-address')">
+                <span class="underline">Your public address</span>
               </ULink>.
             </template>
           </p>
@@ -125,7 +143,7 @@ function revert() {
             variant="link"
             size="sm"
             class="px-0"
-            :ui="{ label: 'whitespace-normal text-left' }"
+            :ui="{ label: 'whitespace-normal text-left underline' }"
             :disabled="saving"
             @click="openOverride"
           />
@@ -152,6 +170,7 @@ function revert() {
               variant="link"
               size="xs"
               class="px-0"
+              :ui="{ label: 'underline' }"
               :disabled="saving"
               @click="closeOverride"
             />
@@ -190,6 +209,9 @@ function revert() {
         <ULink to="/friends" class="mr-auto text-xs text-muted underline">
           See friends of friends
         </ULink>
+        <p v-if="showFixHint" class="text-xs text-error">
+          Fix the highlighted fields to save.
+        </p>
         <UButton v-if="dirty" label="Revert" color="neutral" variant="ghost" :disabled="saving" @click="revert" />
         <UButton type="submit" :disabled="!dirty" :loading="saving" :label="saving ? 'Saving…' : 'Save changes'" />
       </div>

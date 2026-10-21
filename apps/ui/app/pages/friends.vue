@@ -98,6 +98,9 @@ async function checkNow() {
 const friends = computed(() => data.value?.friends ?? [])
 const unlinked = computed(() => data.value?.unlinked ?? { peers: [], keys: [] })
 const unlinkedCount = computed(() => unlinked.value.peers.length + unlinked.value.keys.length)
+// Nobody to check or count yet: no card and no key outside one (an address outside a
+// card belongs to one). The page then leads with Invite and Add alone.
+const noFriends = computed(() => friends.value.length === 0 && unlinked.value.keys.length === 0)
 const looseKeyNames = computed<Record<number, string | null>>(() => Object.fromEntries(unlinked.value.keys.map(key => [key.id, key.name])))
 const peerNames = computed<Record<string, string>>(() => Object.fromEntries((data.value?.peers ?? []).map(peer => [peer.id, peer.name])))
 const cardNames = computed<Record<string, string>>(() => Object.fromEntries(friends.value.map(friend => [friend.key, friend.name])))
@@ -322,7 +325,9 @@ const unlinkedOpen = ref(false)
       <UDashboardNavbar title="Friends">
         <template #right>
           <UButton
+            v-if="!noFriends"
             icon="i-ph-arrows-clockwise"
+            size="sm"
             color="neutral"
             variant="ghost"
             :loading="checking"
@@ -331,10 +336,12 @@ const unlinkedOpen = ref(false)
           >
             <span class="hidden sm:inline">Check now</span>
           </UButton>
-          <UButton icon="i-ph-clipboard-text" color="neutral" variant="outline" aria-label="Add a friend" @click="openAdd()">
+          <!-- On a phone "Add" keeps a label next to Invite a friend. -->
+          <UButton icon="i-ph-user-plus" size="sm" color="neutral" variant="outline" aria-label="Add a friend" @click="openAdd()">
+            <span class="sm:hidden">Add</span>
             <span class="hidden sm:inline">Add a friend</span>
           </UButton>
-          <UButton icon="i-ph-link" label="Invite a friend" @click="openInvite()" />
+          <UButton icon="i-ph-link" size="sm" label="Invite a friend" @click="openInvite()" />
         </template>
       </UDashboardNavbar>
     </template>
@@ -368,7 +375,7 @@ const unlinkedOpen = ref(false)
               </div>
               <div class="flex flex-wrap justify-center gap-2">
                 <UButton label="Invite a friend" icon="i-ph-link" @click="openInvite()" />
-                <UButton label="Add a friend" icon="i-ph-clipboard-text" color="neutral" variant="outline" @click="openAdd()" />
+                <UButton label="Add a friend" icon="i-ph-user-plus" color="neutral" variant="outline" @click="openAdd()" />
               </div>
             </div>
           </UCard>
@@ -395,7 +402,8 @@ const unlinkedOpen = ref(false)
           />
         </section>
 
-        <IntroductionsPanel />
+        <!-- With no friends yet, only for conversations from before. -->
+        <IntroductionsPanel :only-with-threads="noFriends" />
 
         <section v-if="unlinkedCount" class="space-y-2">
           <UCollapsible v-model:open="unlinkedOpen">
@@ -473,7 +481,7 @@ const unlinkedOpen = ref(false)
           </UCollapsible>
         </section>
 
-        <p class="text-xs text-muted">
+        <p v-if="!noFriends" class="text-xs text-muted">
           Each friend's jack is checked every 5 minutes. Daily totals reset at midnight in jack's time zone and count from when jack started tracking traffic.
         </p>
       </div>

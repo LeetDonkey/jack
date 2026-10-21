@@ -2,7 +2,7 @@
 import type { Form, FormError, FormSchema } from '@nuxt/ui'
 import type { NotificationsConfig, NotificationWebhook, SecretRef } from '~/types/management'
 
-const { request, extractError } = useManagement()
+const { request, extractError, extractFieldError } = useManagement()
 const form = useTemplateRef<Form<FormSchema>>('form')
 const { onError, showFixHint } = useFormErrorFocus(form)
 
@@ -27,6 +27,8 @@ const WEBHOOK_FIELD: Record<NotificationWebhook['type'], { label: string, prompt
 }
 
 const WEBHOOK_ERROR = /^webhooks\./
+// A field jack names in a refused save, such as webhooks.1.url.
+const WEBHOOK_ISSUE = /^webhooks\.(\d+)/
 
 function isHttpUrl(value: string) {
   try {
@@ -124,6 +126,17 @@ function validate(s: State): FormError[] {
   return errors
 }
 
+// The form field for a field jack names in a refused save, or null when it isn't
+// on screen. A webhook's url or type shows on its row.
+function formField(field: string): string | null {
+  const webhook = WEBHOOK_ISSUE.exec(field)
+  if (webhook)
+    return `webhooks.${webhook[1]}`
+  if (field === 'peerOfflineMinutes')
+    return state.peerOffline ? field : null
+  return field === 'dailySummaryAt' ? field : null
+}
+
 async function save() {
   saving.value = true
   saveError.value = null
@@ -145,7 +158,16 @@ async function save() {
     saved.value = true
   }
   catch (err) {
-    saveFailed(err, extractError(err, 'Could not save the notification settings.'))
+    // jack's verdict on one field goes on that field, without its config name.
+    const field = extractFieldError(err)
+    const name = field && formField(field.name)
+    if (field && name) {
+      form.value?.setErrors([{ name, message: field.message }], name)
+      void onError()
+    }
+    else {
+      saveFailed(err, extractError(err, 'Could not save the notification settings.'))
+    }
   }
   finally {
     saving.value = false
@@ -234,8 +256,12 @@ async function sendTest() {
           <UFormField name="peerOffline" label="Friends going offline" description="A friend unreachable for the time below, and again when they are back.">
             <USwitch v-model="state.peerOffline" :disabled="saving" :class="controlClass" />
           </UFormField>
-          <UFormField v-if="state.peerOffline" name="peerOfflineMinutes" label="Offline for at least" hint="minutes" :ui="{ hint: 'font-mono text-xs text-dimmed' }">
-            <UInputNumber :model-value="state.peerOfflineMinutes" :disabled="saving" :min="5" :increment="false" :decrement="false" placeholder="60" class="w-28" :class="controlClass" @update:model-value="v => (state.peerOfflineMinutes = v ?? null)" />
+          <UFormField v-if="state.peerOffline" name="peerOfflineMinutes" label="Offline for at least">
+            <!-- The unit sits next to the narrow input, not at the far end of the row. -->
+            <div class="flex items-center gap-2" :class="controlClass">
+              <UInputNumber :model-value="state.peerOfflineMinutes" :disabled="saving" :min="5" :increment="false" :decrement="false" placeholder="60" class="w-28" @update:model-value="v => (state.peerOfflineMinutes = v ?? null)" />
+              <span class="text-sm text-muted">minutes</span>
+            </div>
           </UFormField>
           <UFormField name="ipBanned" label="Banned addresses">
             <template #description>
@@ -257,7 +283,13 @@ async function sendTest() {
       <UAlert v-if="testResult" color="neutral" variant="soft" icon="i-ph-paper-plane-tilt" :title="testResult" />
 
       <div class="flex flex-wrap items-center justify-end gap-2 pt-1">
-        <UButton class="mr-auto" label="Send test" icon="i-ph-paper-plane-tilt" color="neutral" variant="soft" :loading="testing" :disabled="dirty || saving || !hasWebhooks" @click="sendTest" />
+        <!-- The test goes to the saved webhooks, so it waits for a save. -->
+        <div class="mr-auto flex flex-wrap items-center gap-x-2 gap-y-1">
+          <UButton label="Send test" icon="i-ph-paper-plane-tilt" color="neutral" variant="soft" :loading="testing" :disabled="dirty || saving || !hasWebhooks" @click="sendTest" />
+          <p v-if="dirty && hasWebhooks" class="text-xs text-muted">
+            Save first to send a test.
+          </p>
+        </div>
         <p v-if="showFixHint" class="text-xs text-error">
           Fix the highlighted fields to save.
         </p>

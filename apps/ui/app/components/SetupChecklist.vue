@@ -162,7 +162,7 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
               <template v-else-if="status.internalUrlStep.reason === 'default'">
                 <p class="text-sm text-muted">
                   Is Radarr/Sonarr on the jack Docker network? If not, use
-                  <span class="font-mono text-xs text-toned">{{ suggestedUrl }}</span>.
+                  <span class="inline-block max-w-full font-mono text-xs break-all text-toned">{{ suggestedUrl }}</span>.
                 </p>
                 <div class="flex flex-wrap gap-2 pt-1">
                   <UButton :to="settingsLink('internal-url')" label="Change the address" size="sm" variant="soft" />
@@ -174,7 +174,7 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
                 <p class="text-sm text-muted">
                   jack doesn't add itself to {{ listNames(status.internalUrlStep.manual) }}, so it can't test this address.
                   {{ listNames(status.internalUrlStep.manual) }} must reach jack at
-                  <span class="font-mono text-xs break-all text-toned">{{ status.internalUrl }}</span>.
+                  <span class="inline-block max-w-full font-mono text-xs break-all text-toned">{{ status.internalUrl }}</span>.
                 </p>
                 <div class="flex flex-wrap gap-2 pt-1">
                   <UButton :to="settingsLink('internal-url')" label="Change the address" size="sm" variant="soft" />
@@ -183,11 +183,11 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
               </template>
               <p v-else-if="status.internalUrlStep.reason === 'reached'" class="text-sm text-muted">
                 {{ listNames(status.internalUrlStep.reachedBy) }} reached jack at
-                <span class="font-mono text-xs break-all text-toned">{{ status.internalUrl }}</span>.
+                <span class="inline-block max-w-full font-mono text-xs break-all text-toned">{{ status.internalUrl }}</span>.
               </p>
               <p v-else-if="status.internalUrlStep.reason === 'confirmed'" class="text-sm text-muted">
                 You confirmed that Radarr/Sonarr reach jack at
-                <span class="font-mono text-xs break-all text-toned">{{ status.internalUrl }}</span>.
+                <span class="inline-block max-w-full font-mono text-xs break-all text-toned">{{ status.internalUrl }}</span>.
               </p>
               <p v-else-if="status.internalUrlStep.reason === 'share-only'" class="text-sm text-muted">
                 Skipped, because you only share.
@@ -197,7 +197,7 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
                    Radarr/Sonarr. When jack tried and failed, step 3 says why. -->
               <p v-else class="text-sm text-muted">
                 jack gives Radarr/Sonarr the address
-                <span class="font-mono text-xs break-all text-toned">{{ status.internalUrl }}</span>.
+                <span class="inline-block max-w-full font-mono text-xs break-all text-toned">{{ status.internalUrl }}</span>.
                 <template v-if="status.serversStep.reason === 'not-added'">
                   Nothing has tested it, because jack isn't in {{ listNames(status.serversStep.names) }} yet (step 3).
                 </template>
@@ -223,7 +223,7 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
                 Skipped, because you only share.
               </p>
               <p v-else-if="status.completedPath" class="text-sm text-muted">
-                Finished downloads go to <span class="font-mono text-xs break-all text-toned">{{ status.completedPath }}</span>.
+                Finished downloads go to <span class="inline-block max-w-full font-mono text-xs break-all text-toned">{{ status.completedPath }}</span>.
               </p>
             </template>
 
@@ -283,7 +283,7 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
               </template>
             </template>
 
-            <!-- 4. Restart, only while jack reports saved settings it hasn't loaded. -->
+            <!-- 4. Restart, only while turning on downloads or a new completed folder waits for it. -->
             <p v-else class="text-sm text-muted">
               <template v-if="status.restartReasons.includes('downloads')">
                 Radarr/Sonarr can't use jack's download client until jack restarts.
@@ -356,7 +356,7 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
             <template v-if="!isDone(step.state)">
               <template v-if="step.id === 'address'">
                 <p class="text-sm text-muted">
-                  Fill in Name friends see and Address friends use, so the links you send carry your name and address.
+                  Set your name and the address friends use, so your invite links carry them.
                 </p>
                 <div class="pt-1">
                   <UButton :to="settingsLink('public-address')" label="Set the address" size="sm" color="neutral" variant="outline" />
@@ -368,7 +368,7 @@ const suggestedUrl = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost) && !requestHo
                 </p>
                 <div class="flex flex-wrap gap-2 pt-1">
                   <UButton to="/friends?action=invite" label="Invite a friend" icon="i-ph-link" size="sm" color="neutral" variant="outline" />
-                  <UButton to="/friends?action=add" label="Add a friend" icon="i-ph-plus" size="sm" color="neutral" variant="outline" />
+                  <UButton to="/friends?action=add" label="Add a friend" icon="i-ph-user-plus" size="sm" color="neutral" variant="outline" />
                 </div>
               </template>
             </template>

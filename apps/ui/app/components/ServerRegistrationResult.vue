@@ -38,8 +38,9 @@ const alert = computed(() => {
   const registration = props.registration
   if (!registration)
     return null
-  const { tone, title, description } = registrationResultHeadline(registration, { name: props.name, type: props.type }, friends.value, props.now)
-  return { ...TONES[tone], title, description }
+  const { tone, title, description, hint } = registrationResultHeadline(registration, { name: props.name, type: props.type }, friends.value, props.now)
+  // This dialog has no Register again button, so it says where the button is.
+  return { ...TONES[tone], title: hint ? `${title} ${hint}` : title, description }
 })
 
 const rows = computed(() => {
@@ -54,9 +55,10 @@ const rows = computed(() => {
     { kind: 'indexer', label: 'Indexer', step: registration.indexer, test: registration.indexerTest, testError: registration.testErrors.indexer },
     { kind: 'downloadClient', label: 'Download client', step: registration.downloadClient, test: registration.clientTest, testError: registration.testErrors.downloadClient },
   ] as const
+  const headline = `${alert.value?.title ?? ''} ${alert.value?.description ?? ''}`
   return steps.map(({ kind, label, step, test, testError }) => ({
     label,
-    detail: kind === 'indexer' && emptyFeed.value ? emptyFeed.value.indexerDetail : registrationStepDetail(kind, step, test, props.name, pausedFor),
+    detail: kind === 'indexer' && emptyFeed.value ? emptyFeed.value.indexerDetail : registrationStepDetail(kind, stepUnderHeadline(step, headline), test, props.name, pausedFor),
     tone: TONES[registrationStepTone(kind, step, test, pause !== null)],
     // The *arr's own words, under the plain-language summary above.
     raw: test === 'failed' ? testError : null,

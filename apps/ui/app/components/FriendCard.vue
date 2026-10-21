@@ -201,7 +201,7 @@ const menu = computed<DropdownMenuItem[][]>(() => {
         />
       </div>
       <ULink :to="settingsLink('bandwidth')" class="inline-block text-xs text-muted underline">
-        Limits per friend: {{ limitsText }}
+        {{ limitsLabel(friend.keys.length) }}: {{ limitsText }}
       </ULink>
     </div>
 

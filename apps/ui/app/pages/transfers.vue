@@ -66,13 +66,13 @@ const scheduleLabel = computed(() => {
 })
 
 const directionMeta = {
-  download: { label: 'Download', icon: 'i-ph-arrow-down', color: 'text-primary' },
-  upload: { label: 'Upload', icon: 'i-ph-arrow-up', color: 'text-success' },
+  download: { label: 'Downloading', icon: 'i-ph-arrow-down', color: 'text-primary' },
+  upload: { label: 'Sharing', icon: 'i-ph-arrow-up', color: 'text-success' },
 } as const
 
 function summaryHint(summary: TransferDirectionSummary): string {
   const limit = summary.limitBytesPerSecond == null ? 'no limit' : `limit ${formatRate(summary.limitBytesPerSecond)}`
-  const slots = summary.maxConcurrent == null ? `${summary.active} active` : `${summary.active} of ${summary.maxConcurrent} slots`
+  const slots = summary.maxConcurrent == null ? `${summary.active} active` : `${summary.active} of ${summary.maxConcurrent} at once`
   return `${slots} · ${limit}`
 }
 
@@ -133,18 +133,20 @@ const columns: TableColumn<TransferInfo>[] = [
             icon="i-ph-arrow-down"
           />
           <StatCard
-            label="Uploading to friends"
+            label="Sharing with friends"
             :value="formatRate(data.upload.bytesPerSecond)"
             :hint="summaryHint(data.upload)"
             icon="i-ph-arrow-up"
           />
         </div>
 
-        <p v-if="scheduleLabel" class="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted">
-          <UIcon name="i-ph-calendar-check" class="size-4 shrink-0" />
-          <span>Bandwidth schedule in force: {{ scheduleLabel }}.</span>
+        <!-- The limits in the cards come from Bandwidth, so the way there is always
+             shown, with the schedule period while one applies. -->
+        <p class="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted">
+          <UIcon :name="scheduleLabel ? 'i-ph-calendar-check' : 'i-ph-sliders-horizontal'" class="size-4 shrink-0" />
+          <span v-if="scheduleLabel">Bandwidth schedule in force: {{ scheduleLabel }}.</span>
           <ULink :to="settingsLink('bandwidth')" class="underline">
-            Edit schedule
+            {{ scheduleLabel ? 'Edit schedule' : 'Bandwidth settings' }}
           </ULink>
         </p>
 
@@ -152,7 +154,7 @@ const columns: TableColumn<TransferInfo>[] = [
           <div class="flex flex-col items-center gap-3 py-6 text-center">
             <UIcon name="i-ph-arrows-down-up" class="size-8 text-dimmed" />
             <p class="text-sm text-muted">
-              Nothing is moving right now. Downloads from friends and uploads to them show up here while they run.
+              Nothing is moving right now. What you download from friends and share with them shows up here while it runs.
             </p>
           </div>
         </UCard>

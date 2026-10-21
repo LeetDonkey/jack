@@ -35,10 +35,6 @@ watch(() => Boolean(overview.value) && setup.settled, (shown) => {
     shownOnce.value = true
 }, { immediate: true })
 
-// Peer colors from the shared settings store (single source, consistent across views).
-const { settings } = useSettings()
-const peerTextClass = (id: string) => settings.value?.peerColors.get(id)?.text ?? peerColorTextClass(id)
-
 // "seen 2 min ago" and "Checked 5 min ago" have to move on while nothing else
 // changes, so they read a clock that ticks instead of the time of the last
 // snapshot. Browsers slow timers down in background tabs, so coming back to the
@@ -86,8 +82,8 @@ const upLine = computed(() => {
   if (!t)
     return null
   const who = uploadFriends.value === 0
-    ? 'nobody downloading from you'
-    : `${uploadFriends.value} ${uploadFriends.value === 1 ? 'friend' : 'friends'} downloading from you`
+    ? 'no friend is downloading from you'
+    : `sharing with ${uploadFriends.value} ${uploadFriends.value === 1 ? 'friend' : 'friends'}`
   return `${formatRate(t.upload.bytesPerSecond)} · ${who}`
 })
 const pausedNote = computed(() => {
@@ -116,6 +112,13 @@ const RUNNING_PREVIEW = 5
 const running = computed(() => sortRunningDownloads(overview.value?.downloads.active ?? []))
 const runningShown = computed(() => running.value.slice(0, RUNNING_PREVIEW))
 
+// With nothing to count, "Nothing downloading right now." says it all, without a
+// row of zeros above it.
+const showCounts = computed(() => {
+  const c = counts.value
+  return Boolean(c && (c.downloading || c.waiting || c.importQueued || c.failed || running.value.length))
+})
+
 function rowDetail(download: ActivityDownload): { text: string, tone: 'muted' | 'warning' } {
   const transfer = transferByDownload.value.get(download.id)
   if (transfer) {
@@ -129,6 +132,9 @@ function rowDetail(download: ActivityDownload): { text: string, tone: 'muted' | 
 }
 
 // ── Friends ─────────────────────────────────────────────────────────────────
+
+// While the sharing card asks for a friend, it has the "Add a friend" button.
+const setupAsksForFriend = computed(() => setup.showSharingCard && setup.friendStep === 'open')
 
 function friendRow(peer: OverviewPeer) {
   // A jack without health checks (older backend) falls back to the connector state.
@@ -223,7 +229,7 @@ const lifetime = computed(() => {
               </span>
               <span v-if="upLine" class="flex items-center gap-1.5 tabular-nums text-default">
                 <UIcon name="i-ph-arrow-up" class="size-4 shrink-0 text-success" />
-                <span class="sr-only">Uploading:</span>
+                <span class="sr-only">Sharing:</span>
                 {{ upLine }}
               </span>
               <span v-if="pausedNote" class="flex items-center gap-1.5 text-warning">
@@ -234,12 +240,12 @@ const lifetime = computed(() => {
             </NuxtLink>
 
             <!-- Counts, each to its filter on Downloads. -->
-            <div class="flex flex-wrap items-baseline gap-x-6 gap-y-2 border-b border-default px-5 py-3.5">
+            <div v-if="showCounts" class="flex flex-wrap items-baseline gap-x-6 gap-y-2 border-b border-default px-5 py-3.5">
               <NuxtLink to="/downloads?status=downloading" class="flex items-baseline gap-2 hover:underline">
                 <span class="text-xl font-semibold tabular-nums text-primary">{{ counts.downloading }}</span>
                 <span class="text-sm text-muted">Downloading</span>
               </NuxtLink>
-              <NuxtLink to="/downloads?status=downloading" class="flex items-baseline gap-2 hover:underline">
+              <NuxtLink to="/downloads?status=waiting" class="flex items-baseline gap-2 hover:underline">
                 <span class="text-xl font-semibold tabular-nums text-toned">{{ counts.waiting }}</span>
                 <span class="text-sm text-muted">Waiting</span>
               </NuxtLink>
@@ -278,9 +284,10 @@ const lifetime = computed(() => {
                   </span>
                 </div>
               </div>
+              <!-- The rest of the running ones, waiting or not: all of them are under Active. -->
               <NuxtLink
                 v-if="running.length > RUNNING_PREVIEW"
-                to="/downloads?status=downloading"
+                to="/downloads?status=active"
                 class="block px-5 py-3 text-xs text-muted hover:text-default"
               >
                 and {{ running.length - RUNNING_PREVIEW }} more
@@ -310,15 +317,13 @@ const lifetime = computed(() => {
                 <p class="text-sm text-muted">
                   No friends yet.
                 </p>
-                <UButton to="/friends?action=add" label="Add a friend" icon="i-ph-plus" size="sm" variant="soft" />
+                <!-- The sharing card above has this button while it asks for a friend. -->
+                <UButton v-if="!setupAsksForFriend" to="/friends?action=add" label="Add a friend" icon="i-ph-user-plus" size="sm" variant="soft" />
               </div>
               <div v-else class="divide-y divide-default">
                 <div v-for="peer in overview.peers.items" :key="peer.id" class="flex items-center gap-3 px-4 py-2.5">
-                  <ConnDot
-                    :initialized="friendRow(peer).online === true"
-                    :error="friendRow(peer).error"
-                    :accent-class="peerTextClass(peer.id)"
-                  />
+                  <!-- Status colours, as on Friends. A friend's own colour marks their releases. -->
+                  <ConnDot :initialized="friendRow(peer).online === true" :error="friendRow(peer).error" />
                   <span class="min-w-0 flex-1 truncate text-sm text-default" :title="peer.name">{{ peer.name }}</span>
                   <span
                     v-if="friendRow(peer).seen"
@@ -351,26 +356,32 @@ const lifetime = computed(() => {
                 <p class="text-sm text-muted">
                   No Radarr or Sonarr yet.
                 </p>
-                <UButton :to="settingsLink('servers')" label="Connect Radarr or Sonarr" icon="i-ph-plus" size="sm" variant="soft" />
+                <!-- The setup card above has this button as a step while it shows. -->
+                <UButton v-if="!setup.showSetupCard" :to="settingsLink('servers')" label="Connect Radarr or Sonarr" icon="i-ph-plus" size="sm" variant="soft" />
               </div>
-              <div v-else class="divide-y divide-default">
+              <!-- The card's own width decides where the role goes: under the name while
+                   the card is narrow (a phone, or two cards side by side), so the lines
+                   below the name keep the whole width, and on the right once it's wide. -->
+              <div v-else class="@container divide-y divide-default">
                 <div v-for="server in overview.servers.items" :key="server.id" class="flex items-center gap-3 px-4 py-2.5">
                   <ConnDot :initialized="server.initialized" :error="server.initializationError" />
                   <span class="min-w-0 flex-1">
                     <span class="block truncate text-sm text-default" :title="server.name">{{ server.name }}</span>
-                    <!-- Set when this *arr last used the key jack gave it (Torznab or its download client). -->
+                    <span v-if="server.initialized" class="block text-xs text-muted @lg:hidden">{{ serverRoleLabel(server) }}</span>
+                    <!-- Set when this *arr last used the key jack gave it (Torznab or its download client).
+                         These lines wrap rather than cut, so the time always shows. -->
                     <span
                       v-if="server.lastContactAt"
-                      class="block truncate text-xs text-muted"
+                      class="block text-xs text-muted"
                       :title="formatDate(server.lastContactAt)"
                     >last reached jack {{ formatTimeAgo(server.lastContactAt, now) }}</span>
                     <!-- The attention card above says what it means. -->
                     <span
                       v-if="server.initialized && indexerPause(server.registration, now)"
-                      class="block truncate text-xs text-warning"
+                      class="block text-xs text-warning"
                     >skips jack's indexer for now</span>
                   </span>
-                  <span v-if="server.initialized" class="text-right text-xs text-muted">{{ serverRoleLabel(server) }}</span>
+                  <span v-if="server.initialized" class="hidden shrink-0 text-right text-xs text-muted @lg:block">{{ serverRoleLabel(server) }}</span>
                   <span v-else-if="server.initializationError" class="text-xs text-error">unreachable</span>
                   <span v-else class="text-xs text-muted">connecting…</span>
                 </div>

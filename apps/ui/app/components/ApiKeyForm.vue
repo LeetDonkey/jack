@@ -100,7 +100,7 @@ function onSubmit() {
       hint="Optional"
       description="Who or what uses this key, so you can recognize it later. The key itself is shown only once."
     >
-      <UInput v-model="state.name" :maxlength="100" placeholder="e.g. Alice" class="w-full" />
+      <UInput v-model="state.name" :maxlength="100" placeholder="e.g. Monitoring script" class="w-full" />
     </UFormField>
 
     <UFormField name="description" label="Description" hint="Optional">

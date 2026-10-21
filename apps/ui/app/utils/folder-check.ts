@@ -50,6 +50,11 @@ export function folderSummary(report: FolderReport): FolderSummary {
   const unknown = problems.find(p => p.status === 'unknown')
   if (unknown)
     return { tone: 'warning', text: `Some checks couldn't run. ${unknown.message}` }
+  // Only jack's own write access was checked. Never `error`: it would hold setup
+  // open, and nothing is wrong.
+  const completed = report.completed
+  if (report.sources.length === 0 && completed && completed.destinations.length === 0)
+    return { tone: 'warning', text: `jack can write to ${completed.path}. Connect a Radarr or Sonarr to check that it sees the same folder.` }
   return { tone: 'ok', text: 'All folders line up.' }
 }
 

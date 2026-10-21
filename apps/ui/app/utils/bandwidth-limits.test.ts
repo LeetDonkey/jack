@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { kibFromMb, kibToSave, limitError, mbFromKib } from './bandwidth-limits'
+import { bandwidthFormField, kibFromMb, kibToSave, limitError, mbFromKib } from './bandwidth-limits'
 
 describe('kibFromMb', () => {
   test('keeps empty as empty (unlimited)', () => {
@@ -80,5 +80,26 @@ describe('limitError', () => {
   test('refuses 0 in a schedule period', () => {
     expect(limitError(0, 'upload', true)).toBe('Must be more than 0. Empty uses the limit above. To stop uploads, use Pause sharing.')
     expect(limitError(0, 'download', true)).toBe('Must be more than 0. Empty uses the limit above. To stop downloads, use Pause downloads.')
+  })
+})
+
+describe('bandwidthFormField', () => {
+  test('names the MB/s field for a limit jack holds in KiB/s', () => {
+    expect(bandwidthFormField('uploadLimitKiBps')).toBe('uploadMb')
+    expect(bandwidthFormField('downloadLimitKiBps')).toBe('downloadMb')
+    expect(bandwidthFormField('maxConcurrentUploads')).toBe('maxConcurrentUploads')
+  })
+
+  test('puts a period\'s start and end on its time field, and a bad day on its days', () => {
+    expect(bandwidthFormField('schedule.2.start')).toBe('schedule.2.time')
+    expect(bandwidthFormField('schedule.0.end')).toBe('schedule.0.time')
+    expect(bandwidthFormField('schedule.1.days.3')).toBe('schedule.1.days')
+    expect(bandwidthFormField('schedule.1.uploadLimitKiBps')).toBe('schedule.1.uploadMb')
+  })
+
+  test('is null for a field the form doesn\'t have', () => {
+    expect(bandwidthFormField('pausedUntil')).toBeNull()
+    expect(bandwidthFormField('schedule')).toBeNull()
+    expect(bandwidthFormField('schedule.0.colour')).toBeNull()
   })
 })

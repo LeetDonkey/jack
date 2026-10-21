@@ -269,7 +269,8 @@ const destinations = computed(() => servers.value.filter(s => s.destination).len
     title="Radarr & Sonarr"
     description="Each Radarr or Sonarr can share its library with friends, receive downloads from them, or both."
   >
-    <template #aside>
+    <!-- An empty list has the button in its own card. -->
+    <template v-if="!(settings && settings.servers.length === 0)" #aside>
       <UButton label="Connect Radarr or Sonarr" icon="i-ph-plus" @click="openForm(null)" />
     </template>
 

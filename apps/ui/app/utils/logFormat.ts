@@ -1,6 +1,6 @@
 import type { LogRecord } from '~/types/management'
 import { docsUrl } from './docs'
-import { settingsLink } from './settings-links'
+import { securityLink } from './security-form'
 
 // Keys that carry structural meaning and are rendered in dedicated columns, so
 // they're excluded from the "extra fields" detail dump.
@@ -81,6 +81,28 @@ export function extractHttp(record: LogRecord): HttpInfo | null {
     path: typeof http.request?.path === 'string' ? http.request.path : '',
     status: typeof http.response?.status === 'number' ? http.response.status : undefined,
   }
+}
+
+/**
+ * The text the Logs filter searches in a line, lower case: the message and level,
+ * who the line is about (the Radarr/Sonarr in `connector`, `server` or
+ * `destination`, the friend in `peer`), any status, and a request's method and path.
+ */
+export function logFilterText(record: LogRecord): string {
+  const http = extractHttp(record)
+  return [
+    record.message,
+    levelName(record),
+    record.severity,
+    record.connector,
+    record.server,
+    record.destination,
+    record.peer,
+    record.status,
+    http?.method,
+    http?.path,
+    http?.status,
+  ].filter(v => typeof v === 'string' || typeof v === 'number').join(' ').toLowerCase()
 }
 
 // HTTP verbs coloured like a network inspector: read=blue, create=green,
@@ -373,7 +395,8 @@ const LOG_HELP: Array<{ pattern: RegExp, help: LogHelp }> = [
   { pattern: /^Turned off the Jack indexer\b/, help: TROUBLESHOOTING },
   { pattern: /^Failed to register\b|^Registration failed\b/, help: TROUBLESHOOTING },
   { pattern: / can't use jack: /, help: TROUBLESHOOTING },
-  { pattern: /^Refused the Radarr\/Sonarr API\b/, help: { label: 'Open Security settings', to: settingsLink('security'), external: false } },
+  // Opens Reverse proxy and exceptions at the field that lets such an address in.
+  { pattern: /^Refused the Radarr\/Sonarr API\b/, help: { label: 'Open Security settings', to: securityLink('arrOutsideLan'), external: false } },
 ]
 
 export function logHelp(record: LogRecord): LogHelp | null {
