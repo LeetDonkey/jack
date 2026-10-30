@@ -7,7 +7,7 @@ import { NotFoundError } from '../../lib/errors/NotFoundError'
 import { PermanentManualImportError } from '../../lib/servers/arr/base'
 import { logger } from '../../logger'
 import { deriveHash } from '../qbittorrent/qbittorrent.mapper'
-import { unlinkDownloadArtifact } from './artifact-cleanup'
+import { unlinkDownloadArtifact, unlinkSubtitleSiblings } from './artifact-cleanup'
 import { coordinatorFor } from './download-operation-coordinator'
 
 /**
@@ -79,8 +79,11 @@ export class ImportWatcher {
       return
     try {
       const unlinked = await unlinkDownloadArtifact(this.repository, row.id, row.destPath, this.importedFileCleanup.completedPath)
-      if (unlinked)
-        logger.info({ id: row.id, filename: row.filename, path: row.destPath }, 'Unlinked imported file')
+      if (unlinked) {
+        // The subtitle files jack put next to it were imported with it.
+        const subtitles = await unlinkSubtitleSiblings(row.destPath, this.importedFileCleanup.completedPath)
+        logger.info({ id: row.id, filename: row.filename, path: row.destPath, subtitles }, 'Unlinked imported file')
+      }
     }
     catch (err) {
       const message = err instanceof Error ? err.message : String(err)

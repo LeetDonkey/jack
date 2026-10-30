@@ -76,6 +76,59 @@ export function getPeerRouter(
     },
   )
 
+  app.get('/items/:itemId/subtitles', describeRoute({
+    tags: ['Peer'],
+    summary: 'Subtitle files of the release',
+    description: 'The subtitle files the local Radarr/Sonarr lists as extra files of the release\'s video file (`.srt`, `.ass`, `.ssa`, `.sub`, `.idx`, `.sup`, `.vtt`, `.smi`, at most 64 MiB each). `suffix` is what follows the video\'s name without its extension, e.g. `.da.srt`; the downloader appends it to its own copy\'s name so Radarr/Sonarr import the file with the video.',
+    security: [{ 'X-Api-Key': [] }],
+    responses: {
+      200: { description: '`{ items: [{ index, suffix, size }] }`, empty when the release has no subtitle files' },
+      404: { description: 'No item with this id' },
+    },
+  }), async (c) => {
+    const entries = await controller.subtitles(c.req.param('itemId'))
+    if (!entries)
+      return c.json({ error: 'Not found' }, 404)
+    return c.json({ items: entries.map(({ index, suffix, size }) => ({ index, suffix, size })) })
+  })
+
+  app.get('/items/:itemId/subtitles/:index', describeRoute({
+    tags: ['Peer'],
+    summary: 'Download one subtitle file',
+    description: 'The subtitle file with this `index` from the subtitles list. Subtitle files don\'t take an upload slot, but a pause of sharing and the friend\'s daily limit apply.',
+    security: [{ 'X-Api-Key': [] }],
+    responses: {
+      200: { description: 'The file', content: { 'application/octet-stream': {} } },
+      404: { description: 'No item with this id, or no subtitle file with this index' },
+      429: { description: 'This friend\'s daily upload limit is reached' },
+      503: { description: 'Sharing is paused' },
+    },
+  }), async (c) => {
+    const apiKeyId = c.get('apiKeyId')
+    const party = apiKeyId != null ? `key:${apiKeyId}` : undefined
+    const refusal = transfers?.uploadRefusal(party, undefined, { ignoreSlots: true })
+    if (refusal)
+      return c.json({ error: refusal.message }, refusal.status, { 'Retry-After': String(refusal.retryAfterSeconds) })
+    const index = Number(c.req.param('index'))
+    const entries = Number.isSafeInteger(index) ? await controller.subtitles(c.req.param('itemId')) : null
+    const entry = entries?.find(e => e.index === index)
+    if (!entry)
+      return c.json({ error: 'Not found' }, 404)
+    const file = Bun.file(entry.path)
+    if (!await file.exists())
+      return c.json({ error: 'Not found' }, 404)
+    // Small enough to send from memory, which works the same under node:http.
+    const body = new Uint8Array(await file.arrayBuffer())
+    transfers?.ledger?.add('out', party ?? 'master', c.get('apiKeyName') ?? 'unknown peer', body.byteLength)
+    return new Response(body, {
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': String(body.byteLength),
+        'Content-Disposition': `attachment; filename="${safeFilename(entry.path.split('/').pop() ?? 'subtitle')}"`,
+      },
+    })
+  })
+
   app.get('/items/:itemId', describeRoute({
     tags: ['Peer'],
     summary: 'Get release metadata',

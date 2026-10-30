@@ -2,8 +2,10 @@ import type { AppConfig } from '../../lib/config'
 import type { ConnectorManager } from '../../lib/servers'
 import type { ManualImportTarget } from '../../lib/servers/arr/base'
 import type { PeerDownloadProgressEvent } from '../../lib/servers/peer'
+import type { SubtitleEntry } from '../../lib/subtitles'
 import type { TransfersService } from '../transfers/transfers.service'
 import type { DownloadOperationCoordinator } from './download-operation-coordinator'
+import type { DownloadSource } from './download-sources'
 import type { DownloadPhase, DownloadPhaseState } from './download-state'
 import type { DownloadRecord, DownloadsRepository } from './downloads.repository'
 import { basename, join, resolve } from 'node:path'
@@ -11,8 +13,9 @@ import { ConflictError } from '../../lib/errors/ConflictError'
 import { NotFoundError } from '../../lib/errors/NotFoundError'
 import { retry } from '../../lib/retry'
 import { Semaphore } from '../../lib/semaphore'
+import { isInside, isSafeSubtitleSuffix, MAX_SUBTITLE_BYTES, MAX_SUBTITLES, subtitlePathFor } from '../../lib/subtitles'
 import { logger } from '../../logger'
-import { unlinkDownloadArtifact } from './artifact-cleanup'
+import { unlinkDownloadArtifact, unlinkSubtitleSiblings } from './artifact-cleanup'
 import { coordinatorFor } from './download-operation-coordinator'
 import { DownloadSources } from './download-sources'
 import { DOWNLOAD_CANCELLED_MESSAGE, isCancelledByUser } from './download-state'
@@ -480,6 +483,9 @@ export class DownloadsService {
       // shared file.
       for (const artifact of [record.partPath, record.destPath])
         await unlinkDownloadArtifact(repo, id, artifact, this.config.completedPath)
+      // Its subtitle files go with the file, unless another row still keeps the file.
+      if (!await Bun.file(record.destPath).exists())
+        await unlinkSubtitleSiblings(record.destPath, this.config.completedPath)
       repo.delete(id)
     }
     if (this.coordinator)
@@ -503,6 +509,46 @@ export class DownloadsService {
       this.active.delete(record.destPath)
       this.setPhase(record.id, null)
     }
+  }
+
+  /**
+   * Fetch the subtitle files the peer has for the release and put them next to the
+   * finished file, named after it (`Film.mkv` + `.da.srt`). Best effort: a peer
+   * without subtitles (or an older jack that doesn't list them) and any failure
+   * leave the download as it is.
+   */
+  private async fetchSubtitles(record: DownloadRecord, source: DownloadSource, signal: AbortSignal): Promise<void> {
+    let entries: SubtitleEntry[] | null
+    try {
+      entries = await source.peer.getSubtitles(source.itemId)
+    }
+    catch (err) {
+      logger.warn({ filename: record.filename, error: err instanceof Error ? err.message : String(err) }, 'Could not list the release\'s subtitle files')
+      return
+    }
+    if (!entries?.length)
+      return
+    const sourceName = source.peer.name ?? source.peer.url
+    let fetched = 0
+    for (const entry of entries.slice(0, MAX_SUBTITLES)) {
+      if (signal.aborted)
+        return
+      if (!isSafeSubtitleSuffix(entry.suffix) || entry.size > MAX_SUBTITLE_BYTES)
+        continue
+      const destPath = subtitlePathFor(record.destPath, entry.suffix)
+      if (!isInside(this.config.completedPath, destPath))
+        continue
+      try {
+        const bytes = await source.peer.downloadSubtitle(source.itemId, entry.index, destPath, signal)
+        this.transfersService?.ledger?.add('in', `peer:${source.peer.id}`, sourceName, bytes)
+        fetched++
+      }
+      catch (err) {
+        logger.warn({ filename: record.filename, subtitle: entry.suffix, error: err instanceof Error ? err.message : String(err) }, 'Could not download a subtitle file')
+      }
+    }
+    if (fetched > 0)
+      logger.info({ filename: record.filename, subtitles: fetched }, `Downloaded ${fetched} subtitle file${fetched === 1 ? '' : 's'} with the release`)
   }
 
   /**
@@ -650,6 +696,10 @@ export class DownloadsService {
         signal,
       })
 
+      signal.throwIfAborted()
+      // Subtitle files go next to the video before Radarr/Sonarr see it as done, so
+      // their import picks them up with it.
+      await this.fetchSubtitles(record, sources.current, signal)
       signal.throwIfAborted()
       repo?.markImportQueued(record.id)
       logger.info({ torrentFilename: record.torrentFilename, filename: record.filename }, 'Download complete')

@@ -1,6 +1,7 @@
 import type { PieceList } from '../../modules/peer/piece-hasher'
 import type { ConnectorHeadersConfig } from '../config'
 import type { IntroMailRequest } from '../introductions/wire'
+import type { SubtitleEntry } from '../subtitles'
 import { Buffer } from 'node:buffer'
 import { open, rename, unlink } from 'node:fs/promises'
 import z from 'zod'
@@ -15,6 +16,7 @@ import { UnknownSizeError } from '../errors/UnknownSizeError'
 import { IntroDirectory, IntroMailResponse, IntroProfile } from '../introductions/wire'
 import { normalizeImdbId, Release } from '../release'
 import { setSpanAttribute, setSpanAttributes } from '../span-attributes'
+import { MAX_SUBTITLE_BYTES } from '../subtitles'
 import { withSpan } from '../tracing'
 import { isPeerVersionCompatible, MIN_PEER_PROTOCOL_VERSION } from '../version'
 import { ServerConnector } from './base'
@@ -64,6 +66,10 @@ export interface PeerDownloadOptions {
    */
   beforeFinalize?: () => Promise<void>
 }
+
+const SubtitlesResponse = z.object({
+  items: z.array(z.object({ index: z.number().int().nonnegative(), suffix: z.string(), size: z.number().int().nonnegative() })),
+})
 
 const PiecesResponse = z.union([
   z.object({ size: z.number().int(), pieceBytes: z.number().int().positive(), algorithm: z.literal('sha256'), hashes: z.string() }),
@@ -307,6 +313,46 @@ export class PeerConnector extends ServerConnector {
         return null
       throw err
     }
+  }
+
+  /**
+   * The subtitle files the peer has for an item, or null when it doesn't list
+   * subtitles (an older jack) or doesn't know the item.
+   */
+  @requiresInitialization
+  async getSubtitles(id: string): Promise<SubtitleEntry[] | null> {
+    try {
+      const { items } = await this.fetch(`/peer/items/${encodeURIComponent(id)}/subtitles`, { method: 'GET', schema: SubtitlesResponse, expectedFailure: isNotFound })
+      return items
+    }
+    catch (err) {
+      if (err instanceof FetchError && err.response.status === 404)
+        return null
+      throw err
+    }
+  }
+
+  /** Download one subtitle file to `destPath` (written next to it first, then renamed). */
+  @requiresInitialization
+  async downloadSubtitle(id: string, index: number, destPath: string, signal?: AbortSignal): Promise<number> {
+    const url = new URL(`/peer/items/${encodeURIComponent(id)}/subtitles/${index}`, this.url)
+    const response = await fetch(url, { headers: { ...this.headers, 'X-Api-Key': this.apiKey }, signal })
+    if (response.status !== 200) {
+      void response.body?.cancel().catch(() => {})
+      throw new FetchError(`Failed to fetch subtitle ${index} from peer: ${response.status} ${response.statusText}`, response)
+    }
+    const length = Number(response.headers.get('Content-Length'))
+    if (Number.isFinite(length) && length > MAX_SUBTITLE_BYTES) {
+      void response.body?.cancel().catch(() => {})
+      throw new Error(`Subtitle ${index} is larger than ${MAX_SUBTITLE_BYTES} bytes`)
+    }
+    const body = new Uint8Array(await response.arrayBuffer())
+    if (body.byteLength > MAX_SUBTITLE_BYTES)
+      throw new Error(`Subtitle ${index} is larger than ${MAX_SUBTITLE_BYTES} bytes`)
+    const tmp = `${destPath}.part`
+    await Bun.write(tmp, body)
+    await rename(tmp, destPath)
+    return body.byteLength
   }
 
   /** Bytes `start..end` (inclusive) of an item's file, for repairing one piece. */

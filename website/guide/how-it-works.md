@@ -86,6 +86,23 @@ sequenceDiagram
    its own copy from the completed folder if you've turned that on. See
    [After the import](#after-the-import) below.
 
+### Subtitle files
+
+Subtitles inside the video file come along with it. Separate subtitle files
+next to the friend's copy (`.srt`, `.ass`, `.ssa`, `.sub`, `.idx`, `.sup`,
+`.vtt`, `.smi`) come along too, when the friend's Radarr/Sonarr lists them as
+extra files of the video file:
+
+- Once the file is in place, and before jack reports the download complete,
+  jack fetches those files from the same friend and names them after its own
+  copy, for example `Film (2020).da.srt` next to `Film (2020).mkv`.
+- Your Radarr/Sonarr import them with the video only when
+  ***Settings -> Media Management -> Import Extra Files*** is on and lists
+  their extensions, for example `srt,ass,ssa,sub,idx,sup,vtt`.
+- A friend on an older jack sends no subtitle files, and the download completes
+  as before.
+- Each file can be at most 64 MiB, and a release brings at most 20.
+
 ### After the import
 
 Importing doesn't consume the file in `completedPath`. Radarr and Sonarr read
@@ -115,7 +132,8 @@ The unlink is deliberately narrow. It runs only on an import jack has
 confirmed, meaning the destination *arr reports the download in its history or
 the manual import jack pushed reports `completed`. A queued, in-progress, or
 failed import keeps its file, and so does a file another download still needs.
-jack removes that one file and nothing else; it never touches your library.
+jack removes that one file and the subtitle files it fetched with it, and
+nothing else; it never touches your library.
 
 Turn on ***Remove jack's copy after Radarr/Sonarr import it*** under
 ***Settings -> Radarr & Sonarr -> Downloads*** in the
@@ -130,6 +148,9 @@ authenticated with the peer API key you issued them:
 - `/peer/search`: search your Radarr/Sonarr library.
 - `/peer/items/:id`: release metadata.
 - `/peer/items/:id/file`: stream the actual file.
+- `/peer/items/:id/subtitles` and `/peer/items/:id/subtitles/:index`: list
+  and send the subtitle files next to it. They don't take an upload slot, but a
+  pause of sharing and a friend's daily limit apply.
 
 jack streams files straight from disk using the paths your Radarr/Sonarr
 report, so **the jack process must be able to read your media files at those

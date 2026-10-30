@@ -1,7 +1,10 @@
 import type { BunFile } from 'bun'
 import type { Release } from '../../lib/release'
 import type { ArrServerConnector } from '../../lib/servers/arr/base'
+import type { SubtitleEntry } from '../../lib/subtitles'
+import { stat } from 'node:fs/promises'
 import { setSpanAttribute, setSpanAttributes } from '../../lib/span-attributes'
+import { MAX_SUBTITLE_BYTES, subtitleSuffix } from '../../lib/subtitles'
 import { withSpan } from '../../lib/tracing'
 import { logger } from '../../logger'
 
@@ -138,6 +141,34 @@ export class PeerController {
   async filePathFor(id: string): Promise<string | null> {
     const source = this.findSource(id)
     return source ? source.getFilePath(id) : null
+  }
+
+  /**
+   * The subtitle files next to an item's video, with the name suffix the receiver
+   * should use and their size. Files that are missing, too large or not subtitles
+   * are left out. Null when the item is unknown.
+   */
+  async subtitles(id: string): Promise<Array<SubtitleEntry & { path: string }> | null> {
+    const source = this.findSource(id)
+    if (!source)
+      return null
+    const found = await source.getSubtitleFiles(id).catch((err) => {
+      logger.warn({ id, err }, 'Could not list subtitle files')
+      return null
+    })
+    if (!found)
+      return []
+    const entries: Array<SubtitleEntry & { path: string }> = []
+    for (const [index, file] of found.files.entries()) {
+      const suffix = subtitleSuffix(found.videoPath, file, index)
+      if (!suffix)
+        continue
+      const size = await stat(file.path).then(s => (s.isFile() ? s.size : -1), () => -1)
+      if (size < 0 || size > MAX_SUBTITLE_BYTES)
+        continue
+      entries.push({ index, suffix, size, path: file.path })
+    }
+    return entries
   }
 
   async getItem(id: string): Promise<Release | null> {

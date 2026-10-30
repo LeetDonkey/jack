@@ -1,14 +1,27 @@
 import type { AutoRegisterConfig, ConnectorHeadersConfig, ServerConfig, UpgradePolicyConfig } from '../../config'
 import type { Release } from '../../release'
+import type { SubtitleFile } from '../../subtitles'
 import type { ArrValidationFailure } from './validation'
+import { join } from 'node:path'
 import z from 'zod'
 import { logger } from '../../../logger'
 import { requiresDestination, requiresSource } from '../../decorators/requires-capability'
 import { requiresInitialization } from '../../decorators/requires-initialization'
 import { BadRequestError } from '../../errors/BadRequestError'
 import { FetchError } from '../../errors/FetchError'
+import { isInside, isSubtitlePath, MAX_SUBTITLES } from '../../subtitles'
 import { ServerConnector } from '../base'
 import { isOnlyNoResultsAnswer, isOnlyNoResultsRejection, parseArrValidationFailures } from './validation'
+
+/** The fields jack reads from an *arr `/api/v3/extrafile` entry (Radarr and Sonarr share them). */
+export interface ExtraFileLike {
+  type?: string | null
+  relativePath?: string | null
+  movieFileId?: number | null
+  episodeFileId?: number | null
+  languageTags?: string[] | null
+  title?: string | null
+}
 
 const BASENAME_SEPARATOR_REGEX = /[/\\]/
 const TRAILING_SLASH_REGEX = /\/$/
@@ -275,6 +288,17 @@ export abstract class ArrServerConnector extends ServerConnector {
     return this.doGetFilePath(id)
   }
 
+  /**
+   * The subtitle files Radarr/Sonarr list as extra files of the release's video
+   * file, each inside the movie's or series' folder. Empty when there are none or
+   * the list can't be read; null when the release has no file.
+   */
+  @requiresSource
+  @requiresInitialization
+  async getSubtitleFiles(id: string): Promise<{ videoPath: string, files: SubtitleFile[] } | null> {
+    return this.doGetSubtitleFiles(id)
+  }
+
   protected abstract doSearchItems(term: string): Promise<Release[]>
   protected abstract doSearchByImdbId(imdbId: string): Promise<Release[]>
   protected abstract doSearchByTmdbId(tmdbId: string): Promise<Release[]>
@@ -282,6 +306,20 @@ export abstract class ArrServerConnector extends ServerConnector {
   protected abstract doListReleases(): Promise<Release[]>
   protected abstract doGetRelease(id: string): Promise<Release | null>
   protected abstract doGetFilePath(id: string): Promise<string | null>
+  protected abstract doGetSubtitleFiles(id: string): Promise<{ videoPath: string, files: SubtitleFile[] } | null>
+
+  /**
+   * Subtitle extra files of one video file, from `/api/v3/extrafile`. Only files
+   * inside `folder` with a subtitle extension count; a failing request means none.
+   */
+  protected async subtitleExtraFiles(query: Record<string, string>, folder: string, belongsToFile: (extra: ExtraFileLike) => boolean): Promise<SubtitleFile[]> {
+    const extras = await this.arrGet<ExtraFileLike[]>('/api/v3/extrafile', query).catch(() => [] as ExtraFileLike[])
+    return (Array.isArray(extras) ? extras : [])
+      .filter(e => e.type === 'subtitle' && e.relativePath && belongsToFile(e))
+      .map(e => ({ path: join(folder, e.relativePath!), languageTags: e.languageTags ?? null, title: e.title ?? null }))
+      .filter(f => isSubtitlePath(f.path) && isInside(folder, f.path))
+      .slice(0, MAX_SUBTITLES)
+  }
 
   // ---- Destination role ----
 

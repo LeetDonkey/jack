@@ -217,8 +217,10 @@ export class TransfersService {
    * fetches large files in 64 MiB windows, one request each; the next window
    * of an upload that was running when sharing was paused is let through the
    * pause, so running uploads finish.
+   *
+   * `ignoreSlots` leaves the slot limits out, for files as small as subtitles.
    */
-  uploadRefusal(party?: string, resumeKey?: string): UploadRefusal | null {
+  uploadRefusal(party?: string, resumeKey?: string, { ignoreSlots = false }: { ignoreSlots?: boolean } = {}): UploadRefusal | null {
     const paused = this.pauseState('uploads')
     if (paused.paused && !(resumeKey && this.monitor.isContinuing(resumeKey))) {
       const resumeIn = secondsUntilResume(paused, this.now())
@@ -228,6 +230,8 @@ export class TransfersService {
     const dailyGiB = bandwidth?.dailyUploadLimitGiBPerPeer
     if (party && dailyGiB != null && this.ledger && this.ledger.bytesToday('out', party) >= dailyGiB * 1024 ** 3)
       return { status: 429, retryAfterSeconds: this.secondsUntilMidnight(), message: `Daily limit of ${dailyGiB} GiB reached` }
+    if (ignoreSlots)
+      return null
     const perPeer = bandwidth?.maxConcurrentUploadsPerPeer
     if (party && perPeer != null && this.monitor.activeCount('upload', party) >= perPeer)
       return { status: 503, retryAfterSeconds: UPLOAD_BUSY_RETRY_AFTER_S, message: 'Too many concurrent uploads to you' }

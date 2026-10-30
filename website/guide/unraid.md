@@ -236,6 +236,11 @@ with the steps below. A step that needs you has a button to the right place in
    on it, in this browser, until a check passes. After changing a template,
    click ***Check again*** on the setup card, or ***Check folders*** under
    ***Settings -> Radarr & Sonarr -> Downloads***.
+
+   jack also fetches a friend's separate subtitle files (`.srt` and the like)
+   with the video. For Radarr and Sonarr to import them, turn on
+   ***Settings -> Media Management -> Import Extra Files*** in each and list
+   the extensions, for example `srt,ass,ssa,sub,idx,sup,vtt`.
 4. ***Restart the jack container.*** The card shows this step only when
    turning on downloads or a new ***Completed folder*** waits for a restart.
    A bar at the top of every page names every saved setting that waits for

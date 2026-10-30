@@ -1,6 +1,7 @@
 import type { MovieFileResource, MovieResource } from '@jack/schemas/radarr/types'
 import type { AutoRegisterConfig, ConnectorHeadersConfig } from '../../config'
 import type { Release } from '../../release'
+import type { SubtitleFile } from '../../subtitles'
 import type { AddParams, ManualImportParams } from './base'
 import { z } from 'zod'
 import { BadRequestError } from '../../errors/BadRequestError'
@@ -164,6 +165,17 @@ export class RadarrServerConnector extends ArrServerConnector {
   protected override async doGetFilePath(id: string): Promise<string | null> {
     const movie = await this.getMovie(id)
     return (movie?.movieFile as MovieFileResource | undefined)?.path ?? null
+  }
+
+  protected override async doGetSubtitleFiles(id: string): Promise<{ videoPath: string, files: SubtitleFile[] } | null> {
+    const movie = await this.getMovie(id)
+    const file = movie?.movieFile as MovieFileResource | undefined
+    if (!movie?.id || !movie.path || !file?.path)
+      return null
+    // Radarr records subtitles it finds on a disk scan with movieFileId 0 when the
+    // scan also picked up the video, so 0 counts as the movie's (only) file.
+    const files = await this.subtitleExtraFiles({ movieId: String(movie.id) }, movie.path, e => !e.movieFileId || e.movieFileId === file.id)
+    return { videoPath: file.path, files }
   }
 
   protected override async doSampleFilePaths(limit: number, timeoutMs?: number): Promise<string[]> {

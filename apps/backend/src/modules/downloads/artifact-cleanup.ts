@@ -1,6 +1,7 @@
 import type { DownloadsRepository } from './downloads.repository'
-import { unlink } from 'node:fs/promises'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { readdir, unlink } from 'node:fs/promises'
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
+import { isSubtitlePath } from '../../lib/subtitles'
 
 type ArtifactRepository = Pick<DownloadsRepository, 'get' | 'list'>
 type ArtifactRecord = ReturnType<DownloadsRepository['list']>[number]
@@ -66,4 +67,34 @@ export async function unlinkDownloadArtifact(
       return false
     throw err
   }
+}
+
+/**
+ * Drop the subtitle files jack put next to a download's file (`Film.mkv` →
+ * `Film.da.srt`), once the file itself is gone. Only subtitle files named after it,
+ * inside `completedPath`. Returns how many were removed.
+ */
+export async function unlinkSubtitleSiblings(destPath: string, completedPath: string): Promise<number> {
+  const resolved = resolve(destPath)
+  const fromRoot = relative(resolve(completedPath), resolved)
+  if (fromRoot === '' || fromRoot.startsWith('..') || isAbsolute(fromRoot))
+    return 0
+  const folder = dirname(resolved)
+  const prefix = `${basename(resolved, extname(resolved))}.`
+  const names = await readdir(folder).catch(() => [] as string[])
+  let removed = 0
+  for (const name of names) {
+    const path = join(folder, name)
+    if (!name.startsWith(prefix) || path === resolved || !isSubtitlePath(name))
+      continue
+    try {
+      await unlink(path)
+      removed++
+    }
+    catch (err) {
+      if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT'))
+        throw err
+    }
+  }
+  return removed
 }

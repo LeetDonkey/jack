@@ -1,12 +1,14 @@
 import type { EpisodeFileResource, EpisodeResource, SeriesResource } from '@jack/schemas/sonarr/types'
 import type { AutoRegisterConfig, ConnectorHeadersConfig } from '../../config'
 import type { Release } from '../../release'
+import type { SubtitleFile } from '../../subtitles'
 import type { AddParams, ManualImportParams } from './base'
 import { z } from 'zod'
 import { BadRequestError } from '../../errors/BadRequestError'
 import { ReleaseCategory } from '../../release'
 import { Semaphore } from '../../semaphore'
 import { setSpanAttributes } from '../../span-attributes'
+import { namedAfter } from '../../subtitles'
 import { withSpan } from '../../tracing'
 import { ArrServerConnector, basename, PermanentManualImportError, pickSamples, stripExtension } from './base'
 import { releaseMedia } from './media'
@@ -206,6 +208,22 @@ export class SonarrServerConnector extends ArrServerConnector {
   protected override async doGetFilePath(id: string): Promise<string | null> {
     const bundle = await this.fetchEpisodeBundle(id)
     return bundle?.file?.path ?? null
+  }
+
+  protected override async doGetSubtitleFiles(id: string): Promise<{ videoPath: string, files: SubtitleFile[] } | null> {
+    const bundle = await this.fetchEpisodeBundle(id)
+    const file = bundle?.file
+    const series = bundle?.series
+    const videoPath = file?.path
+    const fileId = file?.id
+    if (!videoPath || fileId == null || series?.id == null || !series.path)
+      return null
+    // Sonarr lists a series' extra files; keep the ones that belong to this episode's file.
+    // An entry without a file id (0 after some disk scans) counts when it's named after the video.
+    const files = await this.subtitleExtraFiles({ seriesId: String(series.id) }, series.path, e => e.episodeFileId
+      ? e.episodeFileId === fileId
+      : namedAfter(videoPath, e.relativePath ?? ''))
+    return { videoPath, files }
   }
 
   protected override async doSampleFilePaths(limit: number, timeoutMs?: number): Promise<string[]> {
